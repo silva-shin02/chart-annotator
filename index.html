@@ -860,7 +860,7 @@ function ImageAnnotator(props){
       var origBoxW=origStrokes[tIdx].boxW||400;
       var origTX=origStrokes[tIdx].x;
       var rect0=canvasRef.current.getBoundingClientRect();
-      var sw0=canvasRef.current.width/rect0.width;
+      var sw0=canvasRef.current.width/rect0.width/(dprRef.current||1);
       function onMovT(ev){
         ev.preventDefault&&ev.preventDefault();
         var cx0=ev.clientX||(ev.touches&&ev.touches[0].clientX)||0;
@@ -894,7 +894,7 @@ function ImageAnnotator(props){
       var cx=ev.clientX||(ev.touches&&ev.touches[0].clientX)||0;
       var cy=ev.clientY||(ev.touches&&ev.touches[0].clientY)||0;
       var rect=canvasRef.current.getBoundingClientRect();
-      var sw=canvasRef.current.width/rect.width, sh=canvasRef.current.height/rect.height;
+      var sw=canvasRef.current.width/rect.width/(dprRef.current||1), sh=canvasRef.current.height/rect.height/(dprRef.current||1);
       var sdx=(cx-resizeRef.current.startX)*sw, sdy=(cy-resizeRef.current.startY)*sh;
       var rb=resizeRef.current, nb=Object.assign({},rb.ob), hid=rb.handleId;
       if(hid.includes("l")){nb.x=rb.ob.x+sdx;nb.w=Math.max(10,rb.ob.w-sdx);}
@@ -1376,7 +1376,7 @@ function ImageAnnotator(props){
     try{
       var rect2=canvasRef.current.getBoundingClientRect();
       if(rect2&&rect2.width){
-        var sw2=rect2.width/canvasRef.current.width, sh2=rect2.height/canvasRef.current.height;
+        var sw2=rect2.width/(canvasRef.current.width/dprRef.current), sh2=rect2.height/(canvasRef.current.height/dprRef.current);
         function ts2(cx,cy){return{x:rect2.left+cx*sw2,y:rect2.top+cy*sh2};}
         var tl=ts2(selBounds.x,selBounds.y), tr=ts2(selBounds.x+selBounds.w,selBounds.y);
         var bl=ts2(selBounds.x,selBounds.y+selBounds.h), br=ts2(selBounds.x+selBounds.w,selBounds.y+selBounds.h);
@@ -1474,14 +1474,8 @@ function ImageAnnotator(props){
         ce("button",{onClick:function(){setShowLocalSave(true);},
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#14532d",color:"#86efac"})
         },"💾 下書き保存"),
-        /* ☁ クラウド保存（現在の書き込みをFirebaseに保存） */
-        ce("button",{onClick:fbSave,disabled:fbStatus==='saving',
-          style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",
-            background:props.fbCfg&&props.fbCfg.url?'#2a2a2a':'#1a1a1a',
-            color:props.fbCfg&&props.fbCfg.url?'#a78bfa':'#444'})
-        },"☁ クラウド保存"),
         /* Cancel / DL / Save */
-        ce("button",{onClick:function(){setCancelConfirm(true);},style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#333",color:"#ccc"})},"キャンセル"),
+        ce("button",{onClick:function(){setCancelConfirm(true);},style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#333",color:"#ccc"})},"ホーム画面に戻る"),
         ce("button",{onClick:jsonLoad,style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#2a2a2a",color:"#aaa"})},"📂 JSON読込"),
         ce("button",{onClick:jsonSave,style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#2a2a2a",color:"#aaa"})},"💾 JSON保存"),
         ce("button",{onClick:downloadPng,style:Object.assign({},TS,{fontSize:12,padding:"6px 12px",background:"#2563eb",color:"#fff",fontWeight:700})},"⬇ 全保存")
