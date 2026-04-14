@@ -1321,7 +1321,8 @@ function ImageAnnotator(props){
         cctx.drawImage(c4,rw,mainY);
         var lnk2=document.createElement("a");
         lnk2.href=combined.toDataURL("image/png");
-        lnk2.download="combined_"+(img.name||"image")+".png";
+        var now=new Date();var ds=now.getFullYear()+('0'+(now.getMonth()+1)).slice(-2)+('0'+now.getDate()).slice(-2);
+        lnk2.download=ds+"_combined.png";
         lnk2.click();
       };
       refImg.src=refPanel.url;
