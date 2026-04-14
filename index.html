@@ -581,7 +581,7 @@ function ImageAnnotator(props){
 
 
 
-  // ESC
+  // ESC & スワイプ戻る
   useEffect(function(){
     function handler(e){
       if(e.key==="Escape"){
@@ -589,8 +589,17 @@ function ImageAnnotator(props){
         else if(onClose)onClose();
       }
     }
+    function onBack(){
+      // テキスト入力中なら確定、そうでなければ確認モーダル
+      if(textInputState){setTextInputState(null);}
+      else{setCancelConfirm(true);}
+    }
     window.addEventListener("keydown",handler);
-    return function(){window.removeEventListener("keydown",handler);};
+    window.addEventListener("ca_back",onBack);
+    return function(){
+      window.removeEventListener("keydown",handler);
+      window.removeEventListener("ca_back",onBack);
+    };
   },[textInputState,onClose]);
 
   // prevent pinch on body
@@ -1505,7 +1514,7 @@ function ImageAnnotator(props){
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#14532d",color:"#86efac"})
         },"💾 下書き保存"),
         /* Cancel / DL / Save */
-        ce("button",{onClick:function(){setCancelConfirm(true);},style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#333",color:"#ccc"})},"ホーム画面に戻る"),
+        ce("button",{onClick:function(){setCancelConfirm(true);},style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#333",color:"#ccc"})},"分析を終了する"),
         ce("button",{onClick:downloadPng,style:Object.assign({},TS,{fontSize:12,padding:"6px 12px",background:"#2563eb",color:"#fff",fontWeight:700})},"⬇ 全保存")
       ),
       /* Row 2: color + lineW + opacity + zoom */
@@ -2034,6 +2043,7 @@ function ImageAnnotator(props){
 var CA_TICKERS_KEY='ca_tickers_v1';
 var CA_META_KEY='ca_meta_v1';
 var CA_DATA_PFX='ca_data_';
+var CA_TRASH_KEY='ca_trash_v1';
 var CA_DEF_TICKERS=['INPEX','JX金属','フジクラ','川崎重工業','IHI','ソフトバンク'];
 function caLoadTickers(){try{var s=localStorage.getItem(CA_TICKERS_KEY);return s?JSON.parse(s):CA_DEF_TICKERS.slice();}catch(e){return CA_DEF_TICKERS.slice();}}
 function caSaveTickers(t){try{localStorage.setItem(CA_TICKERS_KEY,JSON.stringify(t));}catch(e){}}
@@ -2042,6 +2052,8 @@ function caSaveMeta(m){try{localStorage.setItem(CA_META_KEY,JSON.stringify(m));}
 function caLoadData(id){try{var s=localStorage.getItem(CA_DATA_PFX+id);return s?JSON.parse(s):null;}catch(e){return null;}}
 function caSaveData(id,d){try{localStorage.setItem(CA_DATA_PFX+id,JSON.stringify(d));}catch(e){}}
 function caDeleteData(id){try{localStorage.removeItem(CA_DATA_PFX+id);}catch(e){}}
+function caLoadTrash(){try{var s=localStorage.getItem(CA_TRASH_KEY);return s?JSON.parse(s):[];}catch(e){return[];}}
+function caSaveTrash(t){try{localStorage.setItem(CA_TRASH_KEY,JSON.stringify(t));}catch(e){}}
 function caGenId(){return Date.now().toString(36)+Math.random().toString(36).slice(2,6);}
 function caGenThumb(canvasEl){
   var W=600,ratio=W/canvasEl.width,H=Math.round(canvasEl.height*ratio);
@@ -2050,7 +2062,6 @@ function caGenThumb(canvasEl){
   return tc.toDataURL('image/png');
 }
 
-/* ─── DraftLibrary ──────────────────────────────────────────── */
 function DraftLibrary(props){
   var onOpen=props.onOpen, onClose=props.onClose, fbCfg=props.fbCfg||{};
   var s0=useState(caLoadTickers);   var tickers=s0[0],setTickers=s0[1];
@@ -2060,108 +2071,175 @@ function DraftLibrary(props){
   var s4=useState('');              var newName=s4[0],setNewName=s4[1];
   var s5=useState(null);            var syncStatus=s5[0],setSyncStatus=s5[1];
   var s6=useState(null);            var dragOver=s6[0],setDragOver=s6[1];
+  var s7=useState(false);           var showTrash=s7[0],setShowTrash=s7[1];
+  var s8=useState(caLoadTrash);     var trash=s8[0],setTrash=s8[1];
   var inputRef=useRef(null);
   var dragSrcRef=useRef(null);
 
-  // ── Firebase ヘルパー ──
-  function makeDraftsBase(){
-    if(!fbCfg.url)return null;
-    return fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts';
-  }
-  function makeFbTickersUrl(){
-    if(!fbCfg.url)return null;
-    return fbCfg.url.replace(/\/$/,'')+'/chart-annotator-tickers.json'+(fbCfg.secret?'?auth='+fbCfg.secret:'');
-  }
+  var auth=fbCfg.secret?'?auth='+fbCfg.secret:'';
+  function makeDraftsBase(){return fbCfg.url?fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts':null;}
+  function makeTrashBase(){return fbCfg.url?fbCfg.url.replace(/\/$/,'')+'/chart-annotator-trash':null;}
+  function makeFbTickersUrl(){return fbCfg.url?fbCfg.url.replace(/\/$/,'')+'/chart-annotator-tickers.json'+auth:null;}
 
-  // Firebase からドラフト一覧を取得してlocalStorageとマージ
+  // ── Firebase 全同期（削除も含む）──
   function fetchFromFirebase(){
     if(!fbCfg.url)return;
-    var base=makeDraftsBase();
-    // ティッカーリストを同期
+    var base=makeDraftsBase(), trashBase=makeTrashBase();
+    var now=Date.now();
+
+    // ティッカー同期（Firebase が正源泉）
     fetch(makeFbTickersUrl())
       .then(function(r){return r.ok?r.json():null;})
       .then(function(fbTickers){
-        if(fbTickers&&Array.isArray(fbTickers)){
-          var merged=fbTickers.slice();
-          caLoadTickers().forEach(function(t){if(!merged.includes(t))merged.push(t);});
-          setTickers(merged); caSaveTickers(merged);
-        }
+        if(fbTickers&&Array.isArray(fbTickers)){setTickers(fbTickers);caSaveTickers(fbTickers);}
       }).catch(function(){});
-    // メタデータを同期
-    fetch(base+'.json'+(fbCfg.secret?'?auth='+fbCfg.secret:''))
+
+    // ドラフトメタ同期（削除も反映）
+    fetch(base+'.json'+auth)
       .then(function(r){return r.ok?r.json():null;})
       .then(function(fbData){
         setSyncStatus(null);
-        if(!fbData)return;
+        if(fbData===null)return; // ネットワークエラー時は何もしない
+        var fbIds=Object.keys(fbData||{});
         var localMeta=caLoadMeta();
-        var merged=localMeta.slice();
-        Object.keys(fbData).forEach(function(id){
-          var d=fbData[id];
-          if(!d)return;
-          var exists=merged.find(function(m){return m.id===id;});
-          if(!exists){
-            merged.push({id:id,ticker:d.ticker||'未分類',name:d.name||id,
-              savedAt:d.savedAt||0,thumb:d.thumb||''});
-            if(d.data)caSaveData(id,d.data);
-          }
+        // Firebase にあるアイテムを正として組み立て
+        var merged=[];
+        fbIds.forEach(function(id){
+          var d=fbData[id]; if(!d)return;
+          var local=localMeta.find(function(m){return m.id===id;});
+          // サムネイル・名前は Firebase を優先
+          merged.push({id:id,ticker:d.ticker||'未分類',name:d.name||id,
+            savedAt:d.savedAt||0,thumb:d.thumb||''});
+          // データは Firebase の方が新しければ更新
+          if(d.data&&(!local||(d.savedAt||0)>(local.savedAt||0)))caSaveData(id,d.data);
         });
-        setMeta(merged); caSaveMeta(merged);
+        // ローカルのみの新規アイテム（90秒以内）は同期待ちとして保持
+        localMeta.forEach(function(m){
+          if(!fbIds.includes(m.id)&&(now-(m.savedAt||0)<90000))merged.push(m);
+        });
+        setMeta(merged);caSaveMeta(merged);
       })
       .catch(function(){setSyncStatus(null);});
+
+    // ゴミ箱同期
+    fetch(trashBase+'.json'+auth)
+      .then(function(r){return r.ok?r.json():null;})
+      .then(function(fbTrash){
+        if(!fbTrash)return;
+        var localTrash=caLoadTrash();
+        var fbIds=Object.keys(fbTrash);
+        var merged=localTrash.slice();
+        fbIds.forEach(function(id){
+          var d=fbTrash[id]; if(!d)return;
+          if(!merged.find(function(m){return m.id===id;}))
+            merged.push({id:id,ticker:d.ticker||'',name:d.name||id,savedAt:d.savedAt||0,thumb:d.thumb||''});
+        });
+        setTrash(merged);caSaveTrash(merged);
+      }).catch(function(){});
   }
 
   useEffect(function(){
     if(!fbCfg.url)return;
     setSyncStatus('loading');
     fetchFromFirebase();
-    var timer=setInterval(function(){
-      setSyncStatus('loading');
-      fetchFromFirebase();
-    },15000);
+    var timer=setInterval(function(){setSyncStatus('loading');fetchFromFirebase();},15000);
     return function(){clearInterval(timer);};
   },[]);
 
-  function fbSaveDraft(id, metaItem, data){
-    if(!fbCfg.url)return;
-    var base=makeDraftsBase();
-    var url=base+'/'+id+'.json'+(fbCfg.secret?'?auth='+fbCfg.secret:'');
-    fetch(url,{method:'PUT',headers:{'Content-Type':'application/json'},
+  // ── Firebase ヘルパー ──
+  function fbSaveDraft(id,metaItem,data){
+    var base=makeDraftsBase(); if(!base)return;
+    fetch(base+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({ticker:metaItem.ticker,name:metaItem.name,
         savedAt:metaItem.savedAt,thumb:metaItem.thumb,data:data})})
       .catch(function(e){console.error('fbSaveDraft:',e);});
   }
   function fbDeleteDraft(id){
-    if(!fbCfg.url)return;
-    var base=makeDraftsBase();
-    var url=base+'/'+id+'.json'+(fbCfg.secret?'?auth='+fbCfg.secret:'');
-    fetch(url,{method:'DELETE'}).catch(function(){});
+    var base=makeDraftsBase(); if(!base)return;
+    fetch(base+'/'+id+'.json'+auth,{method:'DELETE'}).catch(function(){});
+  }
+  function fbMoveToTrash(id,item){
+    var base=makeTrashBase(); if(!base)return;
+    fetch(base+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(item)}).catch(function(){});
+  }
+  function fbRestoreFromTrash(id){
+    // ゴミ箱から削除（ドラフトへの復元は別途）
+    var base=makeTrashBase(); if(!base)return;
+    fetch(base+'/'+id+'.json'+auth,{method:'DELETE'}).catch(function(){});
   }
   function fbSyncTickers(t){
-    if(!fbCfg.url)return;
-    fetch(makeFbTickersUrl(),{method:'PUT',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify(t)}).catch(function(){});
+    var u=makeFbTickersUrl(); if(!u)return;
+    fetch(u,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(t)}).catch(function(){});
   }
 
+  // ── 銘柄操作 ──
   function addTicker(){
     var n=newName.trim(); if(!n||tickers.includes(n))return;
-    var nt=tickers.concat([n]); setTickers(nt); caSaveTickers(nt); fbSyncTickers(nt);
-    setNewName(''); setAdding(false); setSelTicker(n);
+    var nt=tickers.concat([n]);setTickers(nt);caSaveTickers(nt);fbSyncTickers(nt);
+    setNewName('');setAdding(false);setSelTicker(n);
   }
   function deleteTicker(t){
-    if(!window.confirm('"'+t+'"を削除しますか？（チャートも削除されます）'))return;
+    if(!window.confirm('"'+t+'"を削除しますか？（チャートはゴミ箱に移動されます）'))return;
     var toDelete=meta.filter(function(m){return m.ticker===t;});
+    toDelete.forEach(function(m){
+      var data=caLoadData(m.id);
+      var trashItem={id:m.id,ticker:m.ticker,name:m.name,savedAt:m.savedAt,thumb:m.thumb,
+        deletedAt:Date.now(),data:data};
+      var nt2=caLoadTrash().filter(function(x){return x.id!==m.id;});
+      nt2.push(trashItem);caSaveTrash(nt2);setTrash(nt2);
+      caDeleteData(m.id);fbDeleteDraft(m.id);fbMoveToTrash(m.id,trashItem);
+    });
     var nm=meta.filter(function(m){return m.ticker!==t;});
-    toDelete.forEach(function(m){caDeleteData(m.id);fbDeleteDraft(m.id);});
-    setMeta(nm); caSaveMeta(nm);
+    setMeta(nm);caSaveMeta(nm);
     var nt=tickers.filter(function(x){return x!==t;});
-    setTickers(nt); caSaveTickers(nt); fbSyncTickers(nt);
+    setTickers(nt);caSaveTickers(nt);fbSyncTickers(nt);
     if(selTicker===t)setSelTicker(null);
   }
+
+  // ── チャート操作 ──
   function deleteChart(id){
-    if(!window.confirm('このチャートを削除しますか？'))return;
-    caDeleteData(id); fbDeleteDraft(id);
+    var mi=meta.find(function(m){return m.id===id;});
+    if(!mi)return;
+    var data=caLoadData(id);
+    var trashItem={id:id,ticker:mi.ticker,name:mi.name,savedAt:mi.savedAt,thumb:mi.thumb,
+      deletedAt:Date.now(),data:data};
+    var nt=caLoadTrash().filter(function(x){return x.id!==id;});
+    nt.push(trashItem);caSaveTrash(nt);setTrash(nt);
+    caDeleteData(id);fbDeleteDraft(id);fbMoveToTrash(id,trashItem);
     var nm=meta.filter(function(m){return m.id!==id;});
-    setMeta(nm); caSaveMeta(nm);
+    setMeta(nm);caSaveMeta(nm);
+  }
+  function restoreChart(id){
+    var ti=trash.find(function(m){return m.id===id;}); if(!ti)return;
+    // ゴミ箱から取り出してドラフトへ
+    var mi={id:id,ticker:ti.ticker,name:ti.name,savedAt:Date.now(),thumb:ti.thumb};
+    var nm=caLoadMeta().filter(function(m){return m.id!==id;});
+    nm.push(mi);caSaveMeta(nm);setMeta(nm);
+    if(ti.data)caSaveData(id,ti.data);
+    fbSaveDraft(id,mi,ti.data||{});fbRestoreFromTrash(id);
+    // Firebaseのゴミ箱からも削除
+    var tb=makeTrashBase();
+    if(tb)fetch(tb+'/'+id+'.json'+auth,{method:'DELETE'}).catch(function(){});
+    var nt=caLoadTrash().filter(function(m){return m.id!==id;});
+    caSaveTrash(nt);setTrash(nt);
+  }
+  function permanentDelete(id){
+    if(!window.confirm('完全に削除しますか？この操作は元に戻せません'))return;
+    caDeleteData(id);
+    var tb=makeTrashBase();
+    if(tb)fetch(tb+'/'+id+'.json'+auth,{method:'DELETE'}).catch(function(){});
+    var nt=caLoadTrash().filter(function(m){return m.id!==id;});
+    caSaveTrash(nt);setTrash(nt);
+  }
+  function emptyTrash(){
+    if(!window.confirm('ゴミ箱を空にしますか？この操作は元に戻せません'))return;
+    trash.forEach(function(m){
+      caDeleteData(m.id);
+      var tb=makeTrashBase();
+      if(tb)fetch(tb+'/'+m.id+'.json'+auth,{method:'DELETE'}).catch(function(){});
+    });
+    caSaveTrash([]);setTrash([]);
   }
   function openChart(id){
     var mi=meta.find(function(m){return m.id===id;});
@@ -2170,9 +2248,8 @@ function DraftLibrary(props){
     if(d){onOpen(Object.assign({},d,extra));return;}
     if(!fbCfg.url){alert('データが見つかりません');return;}
     var base=makeDraftsBase();
-    var url=base+'/'+id+'.json'+(fbCfg.secret?'?auth='+fbCfg.secret:'');
     setSyncStatus('loading');
-    fetch(url).then(function(r){return r.json();})
+    fetch(base+'/'+id+'.json'+auth).then(function(r){return r.json();})
       .then(function(fbItem){
         setSyncStatus(null);
         if(!fbItem||!fbItem.data){alert('データが見つかりません');return;}
@@ -2187,17 +2264,14 @@ function DraftLibrary(props){
   function onDragOver2(e,idx){e.preventDefault();e.dataTransfer.dropEffect='move';setDragOver(idx);}
   function onDrop2(e,idx){
     e.preventDefault();setDragOver(null);
-    var src=dragSrcRef.current; dragSrcRef.current=null;
+    var src=dragSrcRef.current;dragSrcRef.current=null;
     if(src===null||src===idx)return;
-    var nt=tickers.slice();
-    var item=nt.splice(src,1)[0];nt.splice(idx,0,item);
+    var nt=tickers.slice();var item=nt.splice(src,1)[0];nt.splice(idx,0,item);
     setTickers(nt);caSaveTickers(nt);fbSyncTickers(nt);
   }
   function onDragEnd2(){dragSrcRef.current=null;setDragOver(null);}
-  // タッチ並び替え: ↑↓ボタン
   function moveTicker(idx,dir){
-    var ni=idx+dir;
-    if(ni<0||ni>=tickers.length)return;
+    var ni=idx+dir;if(ni<0||ni>=tickers.length)return;
     var nt=tickers.slice();var tmp=nt[idx];nt[idx]=nt[ni];nt[ni]=tmp;
     setTickers(nt);caSaveTickers(nt);fbSyncTickers(nt);
   }
@@ -2206,23 +2280,35 @@ function DraftLibrary(props){
   var BT={border:"none",cursor:"pointer",fontFamily:"inherit"};
 
   return ce("div",{style:{position:"fixed",inset:0,background:"#111",zIndex:9000,
-    display:"flex",flexDirection:"column",overflowY:"auto"}},
+    display:"flex",flexDirection:"column"}},
     /* header */
     ce("div",{style:{background:"#161616",borderBottom:"1px solid #2a2a2a",
-      padding:"14px 16px",display:"flex",alignItems:"center",gap:12,flexShrink:0}},
+      padding:"14px 16px",display:"flex",alignItems:"center",gap:10,flexShrink:0}},
       ce("button",{onClick:onClose,style:Object.assign({},BT,{
         fontSize:22,color:"#888",background:"none",padding:"0 4px",lineHeight:1})},"←"),
-      ce("span",{style:{fontSize:16,fontWeight:700,color:"#fff",flex:1}},"📋 編集中のチャート"),
+      ce("span",{style:{fontSize:16,fontWeight:700,color:"#fff",flex:1}},
+        showTrash?"🗑 ゴミ箱":"📋 編集中のチャート"),
       fbCfg.url&&ce("span",{style:{fontSize:10,padding:"3px 7px",borderRadius:5,
         background:"#431407",color:"#fb923c",fontWeight:700,flexShrink:0}},
         syncStatus==='loading'?'⏳ 同期中':'🔥 同期有効'),
-      ce("button",{onClick:function(){setAdding(true);setTimeout(function(){inputRef.current&&inputRef.current.focus();},50);},
+      ce("button",{onClick:function(){setShowTrash(function(v){return !v;});},
+        style:Object.assign({},BT,{fontSize:13,fontWeight:700,
+          background:showTrash?"#431407":"#2a2a2a",
+          color:showTrash?"#fb923c":"#888",
+          padding:"7px 12px",borderRadius:8,position:"relative"})},
+        "🗑",trash.length>0&&ce("span",{style:{
+          position:"absolute",top:-4,right:-4,background:"#ef4444",color:"#fff",
+          borderRadius:"50%",width:16,height:16,fontSize:10,fontWeight:700,
+          display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}},
+          trash.length)
+      ),
+      !showTrash&&ce("button",{onClick:function(){setAdding(true);setTimeout(function(){inputRef.current&&inputRef.current.focus();},50);},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,background:"#2563eb",
           color:"#fff",padding:"7px 14px",borderRadius:8})},
         "+ 銘柄を追加")
     ),
     /* add ticker input */
-    adding&&ce("div",{style:{padding:"12px 16px",background:"#1a1a1a",borderBottom:"1px solid #222",
+    !showTrash&&adding&&ce("div",{style:{padding:"12px 16px",background:"#1a1a1a",borderBottom:"1px solid #222",
       display:"flex",gap:8,flexShrink:0}},
       ce("input",{ref:inputRef,value:newName,onChange:function(e){setNewName(e.target.value);},
         onKeyDown:function(e){if(e.key==="Enter")addTicker();if(e.key==="Escape"){setAdding(false);setNewName('');}},
@@ -2234,8 +2320,48 @@ function DraftLibrary(props){
       ce("button",{onClick:function(){setAdding(false);setNewName('');},
         style:Object.assign({},BT,{background:"#333",color:"#aaa",padding:"9px 12px",borderRadius:8,fontSize:13})},"✕")
     ),
-    /* body */
-    ce("div",{style:{display:"flex",flex:1,overflow:"hidden"}},
+
+    /* ── ゴミ箱ビュー ── */
+    showTrash&&ce("div",{style:{flex:1,overflowY:"auto",padding:12}},
+      trash.length===0
+        ?ce("div",{style:{textAlign:"center",color:"#555",fontSize:14,paddingTop:60}},"ゴミ箱は空です")
+        :ce(Fragment,null,
+            ce("div",{style:{display:"flex",justifyContent:"flex-end",marginBottom:10}},
+              ce("button",{onClick:emptyTrash,style:Object.assign({},BT,{
+                fontSize:12,fontWeight:700,padding:"6px 14px",background:"#7f1d1d",
+                color:"#fca5a5",borderRadius:8})
+              },"ゴミ箱を空にする")
+            ),
+            ce("div",{style:{display:"flex",flexWrap:"wrap",gap:10,alignContent:"flex-start"}},
+              trash.map(function(m){
+                var dateStr=new Date(m.deletedAt||m.savedAt).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+                return ce("div",{key:m.id,
+                  style:{width:IS_TOUCH?450:510,background:"#1a1a1a",borderRadius:10,
+                    border:"1px solid #3a1a1a",overflow:"hidden",flexShrink:0}},
+                  m.thumb&&ce("img",{src:m.thumb,style:{width:"100%",display:"block",height:"auto"},draggable:false}),
+                  ce("div",{style:{padding:"8px 10px"}},
+                    ce("div",{style:{fontSize:12,fontWeight:700,color:"#ddd",
+                      overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},m.name),
+                    ce("div",{style:{fontSize:10,color:"#666",marginTop:2}},m.ticker+' · '+dateStr),
+                    ce("div",{style:{display:"flex",gap:8,marginTop:8}},
+                      ce("button",{onClick:function(){restoreChart(m.id);},
+                        style:Object.assign({},BT,{flex:1,padding:"7px 0",fontSize:12,fontWeight:700,
+                          background:"#14532d",color:"#86efac",borderRadius:8})
+                      },"↩ 復元"),
+                      ce("button",{onClick:function(){permanentDelete(m.id);},
+                        style:Object.assign({},BT,{flex:1,padding:"7px 0",fontSize:12,fontWeight:700,
+                          background:"#2a2a2a",color:"#ef4444",borderRadius:8})
+                      },"完全削除")
+                    )
+                  )
+                );
+              })
+            )
+          )
+    ),
+
+    /* ── 通常ビュー ── */
+    !showTrash&&ce("div",{style:{display:"flex",flex:1,overflow:"hidden"}},
       /* ticker list */
       ce("div",{style:{width:IS_TOUCH?130:155,background:"#161616",borderRight:"1px solid #2a2a2a",
         overflowY:"auto",flexShrink:0}},
@@ -2243,10 +2369,8 @@ function DraftLibrary(props){
           ?ce("div",{style:{color:"#555",fontSize:12,textAlign:"center",padding:20}},"銘柄なし")
           :tickers.map(function(t,idx){
             var cnt=meta.filter(function(m){return m.ticker===t;}).length;
-            var isS=selTicker===t;
-            var isDO=dragOver===idx;
-            return ce("div",{key:t,
-              draggable:true,
+            var isS=selTicker===t;var isDO=dragOver===idx;
+            return ce("div",{key:t,draggable:true,
               onDragStart:function(e){onDragStart(e,idx);},
               onDragOver:function(e){onDragOver2(e,idx);},
               onDrop:function(e){onDrop2(e,idx);},
@@ -2255,23 +2379,18 @@ function DraftLibrary(props){
                 background:isS?"#1e2a3a":isDO?"#1a1a3a":"transparent",
                 borderLeft:isS?"3px solid #6366F1":isDO?"3px solid #6366F1":"3px solid transparent",
                 transition:"background .1s",opacity:dragSrcRef.current===idx?0.4:1}},
-              /* ドラッグハンドル */
-              ce("span",{style:{padding:"0 4px 0 6px",color:"#444",fontSize:14,cursor:"grab",flexShrink:0,
-                userSelect:"none",lineHeight:1}},"⠿"),
-              ce("div",{onClick:function(){setSelTicker(t);},
-                style:{flex:1,padding:"11px 6px 11px 4px",minWidth:0}},
+              ce("span",{style:{padding:"0 4px 0 6px",color:"#444",fontSize:14,cursor:"grab",
+                flexShrink:0,userSelect:"none",lineHeight:1}},"⠿"),
+              ce("div",{onClick:function(){setSelTicker(t);},style:{flex:1,padding:"11px 6px 11px 4px",minWidth:0}},
                 ce("div",{style:{fontSize:12,fontWeight:isS?700:400,color:isS?"#a5b4fc":"#ccc",
                   overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},t),
                 ce("div",{style:{fontSize:10,color:"#555",marginTop:1}},cnt+"件")
               ),
-              /* ↑↓ ボタン（タッチ用） */
               ce("div",{style:{display:"flex",flexDirection:"column",flexShrink:0,gap:1,padding:"0 3px"}},
                 ce("button",{onClick:function(e){e.stopPropagation();moveTicker(idx,-1);},
-                  style:Object.assign({},BT,{fontSize:9,color:"#555",background:"none",
-                    padding:"1px 3px",lineHeight:1})},IS_TOUCH?"↑":""),
+                  style:Object.assign({},BT,{fontSize:9,color:"#555",background:"none",padding:"1px 3px",lineHeight:1})},IS_TOUCH?"↑":""),
                 ce("button",{onClick:function(e){e.stopPropagation();moveTicker(idx,1);},
-                  style:Object.assign({},BT,{fontSize:9,color:"#555",background:"none",
-                    padding:"1px 3px",lineHeight:1})},IS_TOUCH?"↓":"")
+                  style:Object.assign({},BT,{fontSize:9,color:"#555",background:"none",padding:"1px 3px",lineHeight:1})},IS_TOUCH?"↓":"")
               ),
               ce("button",{onClick:function(e){e.stopPropagation();deleteTicker(t);},
                 style:Object.assign({},BT,{fontSize:11,color:"#555",padding:"4px 5px",
@@ -2294,14 +2413,14 @@ function DraftLibrary(props){
                 onClick:function(){openChart(m.id);}},
                 ce("div",{style:{position:"relative"}},
                   m.thumb?ce("img",{src:m.thumb,style:{width:"100%",display:"block",height:"auto"},draggable:false})
-                    :ce("div",{style:{width:"100%",height:80,background:"#222",display:"flex",alignItems:"center",
-                      justifyContent:"center",color:"#555",fontSize:11}},"no preview"),
-                  ce("button",{
-                    onClick:function(e){e.stopPropagation();deleteChart(m.id);},
-                    style:Object.assign({},BT,{position:"absolute",top:4,right:4,
-                      width:22,height:22,borderRadius:"50%",background:"rgba(0,0,0,.7)",
-                      color:"#fff",fontSize:11,fontWeight:700,
-                      display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1})},"✕")
+                    :ce("div",{style:{width:"100%",height:80,background:"#222",display:"flex",
+                      alignItems:"center",justifyContent:"center",color:"#555",fontSize:11}},"no preview"),
+                  ce("button",{onClick:function(e){e.stopPropagation();deleteChart(m.id);},
+                    style:Object.assign({},BT,{position:"absolute",top:6,right:6,
+                      width:28,height:28,borderRadius:"50%",background:"rgba(0,0,0,.75)",
+                      color:"#f87171",fontSize:14,display:"flex",alignItems:"center",
+                      justifyContent:"center",lineHeight:1,fontWeight:700})
+                  },"🗑")
                 ),
                 ce("div",{style:{padding:"7px 9px"}},
                   ce("div",{style:{fontSize:12,fontWeight:700,color:"#ddd",
@@ -2314,7 +2433,6 @@ function DraftLibrary(props){
     )
   );
 }
-
 /* ─── LocalSaveModal ────────────────────────────────────────── */
 function LocalSaveModal(props){
   var tickers=props.tickers, onSave=props.onSave, onClose=props.onClose, defaultName=props.defaultName;
@@ -2507,6 +2625,18 @@ function App(){
     return function(){window.removeEventListener("paste",pasteHandler);};
   },[]);
 
+  // ── スワイプ戻る/進むを横取り ──
+  useEffect(function(){
+    function onPopState(){
+      // 常にガードエントリを再積みしてブラウザから離れるのを防ぐ
+      window.history.pushState({caApp:true},'');
+      // アプリ内の「戻る」処理をトリガー
+      window.dispatchEvent(new CustomEvent('ca_back'));
+    }
+    window.addEventListener('popstate',onPopState);
+    return function(){window.removeEventListener('popstate',onPopState);};
+  },[]);
+
   if(img){
     return ce(ImageAnnotator,{
       img:img,
@@ -2514,7 +2644,9 @@ function App(){
       onSave:function(saved){setImg(function(prev){return Object.assign({},prev,saved);});},
       onClose:function(){
         try{sessionStorage.removeItem('ca_session');}catch(e){}
+        var fromDraft=!!(img&&img._draftId);
         setImg(null);
+        if(fromDraft)setShowDrafts(true);
       }
     });
   }
@@ -2603,6 +2735,21 @@ function App(){
     })
   );
 }
+
+// ── スワイプ戻る/進む ガード ──
+// ブラウザ履歴にダミーエントリを積み、popstate を横取りしてアプリ内処理に転換する
+if(window.history&&window.history.pushState){
+  window.history.replaceState({caApp:true},'');
+  window.history.pushState({caApp:true},'');
+}
+
+// ── 画面端スワイプ（iOS戻る/Android戻る）を防止 ──
+document.addEventListener('touchstart',function(e){
+  if(e.touches&&e.touches.length===1){
+    var x=e.touches[0].clientX;
+    if(x<22||x>window.innerWidth-22)e.preventDefault();
+  }
+},{passive:false,capture:true});
 
 ReactDOM.createRoot(document.getElementById('root')).render(ce(App,null));
 })();
