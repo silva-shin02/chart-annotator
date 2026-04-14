@@ -2073,6 +2073,16 @@ function DraftLibrary(props){
   var s6=useState(null);            var dragOver=s6[0],setDragOver=s6[1];
   var s7=useState(false);           var showTrash=s7[0],setShowTrash=s7[1];
   var s8=useState(caLoadTrash);     var trash=s8[0],setTrash=s8[1];
+  var CA_SORT_KEY='ca_sort_mode_v1';
+  var SORT_MODES=[
+    {id:'name_desc', label:'名前 ↓'},
+    {id:'name_asc',  label:'名前 ↑'},
+    {id:'date_desc', label:'日時 ↓'},
+    {id:'date_asc',  label:'日時 ↑'}
+  ];
+  var s9=useState(function(){try{var v=localStorage.getItem(CA_SORT_KEY);if(v&&SORT_MODES.find(function(m){return m.id===v;}))return v;}catch(e){}return 'name_desc';});
+  var sortMode=s9[0],setSortMode=s9[1];
+  function changeSortMode(v){setSortMode(v);try{localStorage.setItem(CA_SORT_KEY,v);}catch(e){}}
   var inputRef=useRef(null);
   var dragSrcRef=useRef(null);
 
@@ -2276,7 +2286,15 @@ function DraftLibrary(props){
     setTickers(nt);caSaveTickers(nt);fbSyncTickers(nt);
   }
 
-  var charts=selTicker?meta.filter(function(m){return m.ticker===selTicker;}).sort(function(a,b){return b.savedAt-a.savedAt;}):[];
+  var chartsUnsorted=selTicker?meta.filter(function(m){return m.ticker===selTicker;}):[];
+  var charts=chartsUnsorted.slice().sort(function(a,b){
+    switch(sortMode){
+      case 'name_desc': return (b.name||'').localeCompare(a.name||'','ja');
+      case 'name_asc':  return (a.name||'').localeCompare(b.name||'','ja');
+      case 'date_asc':  return (a.savedAt||0)-(b.savedAt||0);
+      default:          return (b.savedAt||0)-(a.savedAt||0); // date_desc
+    }
+  });
   var BT={border:"none",cursor:"pointer",fontFamily:"inherit"};
 
   return ce("div",{style:{position:"fixed",inset:0,background:"#111",zIndex:9000,
@@ -2399,8 +2417,19 @@ function DraftLibrary(props){
           })
       ),
       /* chart grid */
-      ce("div",{style:{flex:1,overflowY:"auto",padding:12,
-        display:"flex",flexWrap:"wrap",gap:10,alignContent:"flex-start"}},
+      ce("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}},
+        /* sort bar */
+        selTicker!==null&&charts.length>0&&ce("div",{style:{padding:"8px 12px 4px",display:"flex",alignItems:"center",gap:6,flexShrink:0}},
+          ce("span",{style:{fontSize:10,color:"#555",flexShrink:0}},"並び替え"),
+          SORT_MODES.map(function(sm){
+            var isA=sortMode===sm.id;
+            return ce("button",{key:sm.id,onClick:function(){changeSortMode(sm.id);},
+              style:Object.assign({},BT,{fontSize:10,fontWeight:isA?700:400,padding:"4px 8px",borderRadius:6,
+                background:isA?"#2563eb":"#222",color:isA?"#fff":"#888"})},sm.label);
+          })
+        ),
+        ce("div",{style:{flex:1,overflowY:"auto",padding:12,
+          display:"flex",flexWrap:"wrap",gap:10,alignContent:"flex-start"}},
         selTicker===null
           ?ce("div",{style:{width:"100%",textAlign:"center",color:"#555",fontSize:14,paddingTop:60}},"← 銘柄を選択")
           :charts.length===0
@@ -2429,6 +2458,7 @@ function DraftLibrary(props){
                 )
               );
             })
+      )
       )
     )
   );
