@@ -2798,7 +2798,7 @@ function DraftLibrary(props){
     var timer=setInterval(function(){
       if(_fbForcePaused){clearInterval(timer);setSyncStatus(null);return;}
       setSyncStatus('loading');pollFb();
-    },60000);
+    },15000);
     return function(){clearInterval(timer);};
   },[]);
 
@@ -2806,15 +2806,25 @@ function DraftLibrary(props){
   function fbSaveDraft(id,metaItem,data){
     var base=makeDraftsBase(), dataBase=makeDraftsDataBase();
     if(!base||_fbIsPaused(fbCfg))return;
+    // ① サムネイルアップロード → メタ書き込み（thumbUrl含む）→ TS/V書き込み の順序保証
     var thumbP=metaItem.thumb?uploadThumbToStorage(fbCfg,id,metaItem.thumb):Promise.resolve(null);
     thumbP.then(function(thumbUrl){
       if(_fbForcePaused)return;
       var metaDb={ticker:metaItem.ticker,name:metaItem.name,savedAt:metaItem.savedAt};
       if(thumbUrl)metaDb.thumbUrl=thumbUrl;
       var body=JSON.stringify(metaDb); _fbTrack('db_ul',body.length);
-      fetch(base+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:body})
-        .catch(function(e){console.error('fbSaveDraft meta:',e);});
-    });
+      return fetch(base+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:body});
+    }).then(function(){
+      // メタ書き込み完了後にTS + バージョン更新（他端末がfetchFullMetaした時にthumbUrlが確実に存在する）
+      if(_fbForcePaused)return;
+      var tsBase=fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-ts';
+      var tsBody=JSON.stringify({t:metaItem.savedAt||Date.now()});
+      _fbTrack('db_ul',tsBody.length);
+      fetch(tsBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:tsBody})
+        .catch(function(){});
+      fbWriteV();
+    }).catch(function(e){console.error('fbSaveDraft:',e);});
+    // ② データ書き込み（メタとは独立、並行でOK）
     if(data){
       var b64=data.orig_base64||data.base64;
       var mt=data.orig_mt||data.mt||'image/png';
@@ -2832,13 +2842,6 @@ function DraftLibrary(props){
           .catch(function(e){console.error('fbSaveDraft data:',e);});
       }
     }
-    // タイムスタンプ書き込み
-    var tsBase=fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-ts';
-    var tsBody=JSON.stringify({t:metaItem.savedAt||Date.now()});
-    _fbTrack('db_ul',tsBody.length);
-    fetch(tsBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:tsBody})
-      .catch(function(){});
-    fbWriteV();
   }
   function fbDeleteDraft(id){
     var base=makeDraftsBase(), dataBase=makeDraftsDataBase();
