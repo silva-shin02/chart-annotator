@@ -677,6 +677,13 @@ function ImageAnnotator(props){
       setDispW(Math.round(nw*sc));
       setDispH(Math.round(nh*sc));
       setZoom(1); setPan({x:0,y:0});
+      // セッション保存（リロード復元用）
+      try{sessionStorage.setItem('ca_session',JSON.stringify({
+        orig_base64:imgData.orig_base64||imgData.base64,
+        orig_mt:imgData.orig_mt||imgData.mt,
+        name:imgData.name||img.name||'chart',
+        strokes:saved
+      }));}catch(e){}
     };
     bImg.src="data:"+(imgData.orig_mt||imgData.mt)+";base64,"+(imgData.orig_base64||imgData.base64);
   }
@@ -772,6 +779,11 @@ function ImageAnnotator(props){
     histRef.current=histRef.current.slice(-19).concat([strokes]);
     futRef.current=[]; setCanUndo(true); setCanRedo(false);
     triggerAutoSave();
+    // セッションのストロークを更新
+    try{
+      var s=sessionStorage.getItem('ca_session');
+      if(s){var d=JSON.parse(s);d.strokes=strokes;sessionStorage.setItem('ca_session',JSON.stringify(d));}
+    }catch(e){}
   }
 
   // タイマークリーンアップ
@@ -1980,7 +1992,7 @@ function caSaveData(id,d){try{localStorage.setItem(CA_DATA_PFX+id,JSON.stringify
 function caDeleteData(id){try{localStorage.removeItem(CA_DATA_PFX+id);}catch(e){}}
 function caGenId(){return Date.now().toString(36)+Math.random().toString(36).slice(2,6);}
 function caGenThumb(canvasEl){
-  var W=200,ratio=W/canvasEl.width,H=Math.round(canvasEl.height*ratio);
+  var W=600,ratio=W/canvasEl.width,H=Math.round(canvasEl.height*ratio);
   var tc=document.createElement('canvas');tc.width=W;tc.height=H;
   tc.getContext('2d').drawImage(canvasEl,0,0,W,H);
   return tc.toDataURL('image/jpeg',0.5);
@@ -2223,7 +2235,7 @@ function DraftLibrary(props){
             :charts.map(function(m){
               var dateStr=new Date(m.savedAt).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
               return ce("div",{key:m.id,
-                style:{width:IS_TOUCH?150:170,background:"#1a1a1a",borderRadius:10,
+                style:{width:IS_TOUCH?450:510,background:"#1a1a1a",borderRadius:10,
                   border:"1px solid #2a2a2a",overflow:"hidden",cursor:"pointer",flexShrink:0},
                 onClick:function(){openChart(m.id);}},
                 ce("div",{style:{position:"relative"}},
@@ -2398,7 +2410,14 @@ function VirtualJoystick(props){
 
 /* ─── App (drop zone) ──────────────────────────────────────── */
 function App(){
-  var s0=useState(null);  var img=s0[0],setImg=s0[1];
+  var s0=useState(function(){
+    // リロード時にセッションから復元
+    try{
+      var s=sessionStorage.getItem('ca_session');
+      if(s){var d=JSON.parse(s);if(d.orig_base64||d.base64)return d;}
+    }catch(e){}
+    return null;
+  }); var img=s0[0],setImg=s0[1];
   var s1=useState(false); var drag=s1[0],setDrag=s1[1];
   var s2=useState(function(){try{var s=localStorage.getItem(FB_CFG_KEY);return s?JSON.parse(s):{url:'',secret:''};}catch(e){return{url:'',secret:''};}}); var fbCfg=s2[0],setFbCfg=s2[1];
   var s3=useState(false); var showFbSettings=s3[0],setShowFbSettings=s3[1];
@@ -2481,7 +2500,10 @@ function App(){
       img:img,
       fbCfg:fbCfg,
       onSave:function(saved){setImg(function(prev){return Object.assign({},prev,saved);});},
-      onClose:function(){setImg(null);}
+      onClose:function(){
+        try{sessionStorage.removeItem('ca_session');}catch(e){}
+        setImg(null);
+      }
     });
   }
 
