@@ -379,24 +379,20 @@ function CancelConfirmModal(props){
         display:"flex",alignItems:"center",justifyContent:"center",padding:20}
     },
       ce("div",{style:{background:"#1c1c1e",borderRadius:18,padding:"28px 24px 20px",
-        width:"100%",maxWidth:360,boxShadow:"0 24px 64px rgba(0,0,0,.7)",
+        width:"100%",maxWidth:320,boxShadow:"0 24px 64px rgba(0,0,0,.7)",
         border:"1px solid #2a2a2a"}},
-        ce("div",{style:{fontSize:18,fontWeight:700,color:"#fff",marginBottom:12,textAlign:"center"}},"キャンセルの確認"),
-        ce("div",{style:{fontSize:13,color:"#aaa",lineHeight:1.9,textAlign:"center",marginBottom:24}},
-          "このままキャンセルすると、",ce("br",null),
-          "保存されていない書き込みは消去されます。"
-        ),
-        ce("div",{style:{display:"flex",flexDirection:"column",gap:10}},
-          ce("button",{
-            onClick:onClose,
-            style:{padding:"13px 0",fontSize:14,fontWeight:700,background:"#7f1d1d",color:"#fca5a5",
-              border:"none",borderRadius:12,cursor:"pointer",width:"100%",fontFamily:"inherit"}
-          },"OK（何も保存せず終わる）"),
+        ce("div",{style:{fontSize:17,fontWeight:700,color:"#fff",marginBottom:24,textAlign:"center"}},"本当に終了しますか？"),
+        ce("div",{style:{display:"flex",gap:10}},
           ce("button",{
             onClick:onBack,
-            style:{padding:"13px 0",fontSize:14,fontWeight:600,background:"#2a2a2a",color:"#ccc",
+            style:{flex:1,padding:"13px 0",fontSize:14,fontWeight:600,background:"#2a2a2a",color:"#ccc",
               border:"1px solid #3a3a3a",borderRadius:12,cursor:"pointer",width:"100%",fontFamily:"inherit"}
-          },"← 戻る（キャンセルしない）")
+          },"いいえ"),
+          ce("button",{
+            onClick:onClose,
+            style:{flex:1,padding:"13px 0",fontSize:14,fontWeight:700,background:"#7f1d1d",color:"#fca5a5",
+              border:"none",borderRadius:12,cursor:"pointer",width:"100%",fontFamily:"inherit"}
+          },"はい")
         )
       )
     ),
@@ -475,6 +471,107 @@ var TOOLS=[
   {id:"eraser",label:"消しゴム"},
 ];
 
+/* ─── RefChartPicker（保管庫から参照画像を選択） ─────────── */
+function RefChartPicker(props){
+  var onSelect=props.onSelect, onClose=props.onClose, fbCfg=props.fbCfg||{};
+  var s0=useState(caLoadTickers); var tickers=s0[0];
+  var s1=useState(null);          var selTicker=s1[0],setSelTicker=s1[1];
+  var s2=useState(caLoadMeta);    var meta=s2[0];
+  var BT2={border:"none",cursor:"pointer",fontFamily:"inherit"};
+
+  var charts=selTicker?meta.filter(function(m){return m.ticker===selTicker;}).sort(function(a,b){return(b.savedAt||0)-(a.savedAt||0);}):[];
+
+  function pickChart(id){
+    var d=caLoadData(id);
+    if(d&&(d.orig_base64||d.base64)){
+      var b=d.orig_base64||d.base64;
+      var mt=d.orig_mt||d.mt||'image/png';
+      onSelect('data:'+mt+';base64,'+b);
+      return;
+    }
+    // localにデータがなければFirebaseから取得
+    if(fbCfg.url){
+      var base=fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts';
+      var auth=fbCfg.secret?'?auth='+fbCfg.secret:'';
+      fetch(base+'/'+id+'.json'+auth).then(function(r){return r.json();})
+        .then(function(fbItem){
+          if(fbItem&&fbItem.data&&(fbItem.data.orig_base64||fbItem.data.base64)){
+            var b2=fbItem.data.orig_base64||fbItem.data.base64;
+            var mt2=fbItem.data.orig_mt||fbItem.data.mt||'image/png';
+            caSaveData(id,fbItem.data);
+            onSelect('data:'+mt2+';base64,'+b2);
+          }else{alert('画像データが見つかりません');}
+        }).catch(function(){alert('読込失敗');});
+    }else{
+      alert('画像データが見つかりません');
+    }
+  }
+
+  return ReactDOM.createPortal(
+    ce("div",{onClick:function(e){if(e.target===e.currentTarget)onClose();},
+      style:{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",zIndex:22000,
+        display:"flex",alignItems:"center",justifyContent:"center",padding:16}},
+      ce("div",{onClick:function(e){e.stopPropagation();},
+        style:{background:"#1c1c1e",borderRadius:18,width:"100%",maxWidth:700,maxHeight:"80vh",
+          boxShadow:"0 24px 64px rgba(0,0,0,.8)",border:"1px solid #2a2a2a",
+          display:"flex",flexDirection:"column",overflow:"hidden"}},
+        /* header */
+        ce("div",{style:{padding:"16px 18px",borderBottom:"1px solid #2a2a2a",display:"flex",alignItems:"center",gap:10,flexShrink:0}},
+          ce("span",{style:{fontSize:16,fontWeight:700,color:"#fff",flex:1}},"📋 保管庫から参照画像を選択"),
+          ce("button",{onClick:onClose,style:Object.assign({},BT2,{fontSize:13,fontWeight:700,
+            background:"#2a2a2a",color:"#aaa",padding:"7px 14px",borderRadius:8})},"閉じる")
+        ),
+        /* body */
+        ce("div",{style:{display:"flex",flex:1,overflow:"hidden"}},
+          /* ticker list */
+          ce("div",{style:{width:IS_TOUCH?120:140,background:"#161616",borderRight:"1px solid #2a2a2a",
+            overflowY:"auto",flexShrink:0}},
+            tickers.length===0
+              ?ce("div",{style:{color:"#555",fontSize:12,textAlign:"center",padding:20}},"銘柄なし")
+              :tickers.map(function(t){
+                var cnt=meta.filter(function(m){return m.ticker===t;}).length;
+                var isS=selTicker===t;
+                return ce("div",{key:t,onClick:function(){setSelTicker(t);},
+                  style:{padding:"10px 10px",borderBottom:"1px solid #1e1e1e",cursor:"pointer",
+                    background:isS?"#1e2a3a":"transparent",
+                    borderLeft:isS?"3px solid #6366F1":"3px solid transparent"}},
+                  ce("div",{style:{fontSize:12,fontWeight:isS?700:400,color:isS?"#a5b4fc":"#ccc",
+                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},t),
+                  ce("div",{style:{fontSize:10,color:"#555",marginTop:1}},cnt+"件")
+                );
+              })
+          ),
+          /* chart grid */
+          ce("div",{style:{flex:1,overflowY:"auto",padding:10,
+            display:"flex",flexWrap:"wrap",gap:8,alignContent:"flex-start"}},
+            selTicker===null
+              ?ce("div",{style:{width:"100%",textAlign:"center",color:"#555",fontSize:13,paddingTop:40}},"← 銘柄を選択")
+              :charts.length===0
+                ?ce("div",{style:{width:"100%",textAlign:"center",color:"#555",fontSize:13,paddingTop:40}},"画像なし")
+                :charts.map(function(m){
+                  return ce("div",{key:m.id,onClick:function(){pickChart(m.id);},
+                    style:{width:IS_TOUCH?200:220,background:"#1a1a1a",borderRadius:8,
+                      border:"1px solid #2a2a2a",overflow:"hidden",cursor:"pointer",flexShrink:0,
+                      transition:"border-color .15s"},
+                    onMouseEnter:function(e){e.currentTarget.style.borderColor='#6366F1';},
+                    onMouseLeave:function(e){e.currentTarget.style.borderColor='#2a2a2a';}},
+                    m.thumb?ce("img",{src:m.thumb,style:{width:"100%",display:"block",height:"auto"},draggable:false})
+                      :ce("div",{style:{width:"100%",height:60,background:"#222",display:"flex",
+                        alignItems:"center",justifyContent:"center",color:"#555",fontSize:10}},"no preview"),
+                    ce("div",{style:{padding:"5px 7px"}},
+                      ce("div",{style:{fontSize:11,fontWeight:600,color:"#ddd",
+                        overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},m.name)
+                    )
+                  );
+                })
+          )
+        )
+      )
+    ),
+    document.body
+  );
+}
+
 function ImageAnnotator(props){
   var img=props.img, onSave=props.onSave, onClose=props.onClose;
 
@@ -515,6 +612,7 @@ function ImageAnnotator(props){
   var stLS=useState(false);   var showLocalSave=stLS[0],setShowLocalSave=stLS[1];
   var stAS=useState(null);    var autoSaveStatus=stAS[0],setAutoSaveStatus=stAS[1]; // null|'saving'|'ok'|'err'
   var stRU=useState(false);   var remoteUpdate=stRU[0],setRemoteUpdate=stRU[1];
+  var stRCP=useState(false);  var showRefPicker=stRCP[0],setShowRefPicker=stRCP[1];
 
   var dprRef=useRef(1);
   var autoSaveTimerRef=useRef(null);
@@ -545,7 +643,6 @@ function ImageAnnotator(props){
   var ctrlPanRef=useRef(false);   // Ctrl+ドラッグ中フラグ
   var textInputRef=useRef(null);  // textInputState のミラー(stale closure回避)
   var refDragRef=useRef(null);    // 参照パネルのドラッグ
-  var refFileRef=useRef(null);    // 参照画像ファイル入力
   var textDragRef=useRef(null);   // テキストツールで既存テキストをドラッグ移動
   var refSlideDragRef=useRef(null); // 参照画像の縦スライドドラッグ
   useEffect(function(){zoomRef.current=zoom;},[zoom]);
@@ -584,7 +681,7 @@ function ImageAnnotator(props){
     function handler(e){
       if(e.key==="Escape"){
         if(textInputState)setTextInputState(null);
-        else if(onClose)onClose();
+        else setCancelConfirm(true);
       }
     }
     function onBack(){
@@ -1077,15 +1174,21 @@ function ImageAnnotator(props){
       setPan({x:panRef.current.px+(src1.clientX-panRef.current.sx),y:panRef.current.py+(src1.clientY-panRef.current.sy)}); return;
     }
     var rawPos=getPos(e); lastPosRef.current=rawPos;
-    // テキストツール: 既存テキストのドラッグ移動
+    // テキストツール: 既存テキストのドラッグ移動（overlay canvas でプレビュー）
     if(tool==="text"&&textDragRef.current){
       var tdx=rawPos.x-textDragRef.current.sx, tdy=rawPos.y-textDragRef.current.sy;
-      if(!textDragRef.current.moved&&Math.hypot(tdx,tdy)>4) textDragRef.current.moved=true;
+      if(!textDragRef.current.moved&&Math.hypot(tdx,tdy)>4){
+        textDragRef.current.moved=true;
+        // ドラッグ開始時に対象以外をメインキャンバスに一回だけ描画
+        rebuild(strokesRef.current.filter(function(_,i){return i!==textDragRef.current.idx;}));
+      }
       if(textDragRef.current.moved){
         var tNx=textDragRef.current.origX+tdx, tNy=textDragRef.current.origY+tdy;
-        rebuild(strokesRef.current.map(function(s,i){
-          return i===textDragRef.current.idx?Object.assign({},s,{x:tNx,y:tNy}):s;
-        }));
+        var tOc=overlayCtx();
+        if(tOc){
+          clearOverlay();
+          drawStroke(tOc,Object.assign({},textDragRef.current.stroke,{x:tNx,y:tNy}));
+        }
       }
       return;
     }
@@ -1143,6 +1246,7 @@ function ImageAnnotator(props){
       var td=textDragRef.current; textDragRef.current=null;
       if(td.moved){
         // ドラッグ → 移動をコミット
+        clearOverlay();
         var rawPosT=lastPosRef.current;
         var nx=td.origX+(rawPosT.x-td.sx), ny=td.origY+(rawPosT.y-td.sy);
         var ns=strokesRef.current.map(function(s,i){return i===td.idx?Object.assign({},s,{x:nx,y:ny}):s;});
@@ -1479,17 +1583,7 @@ function ImageAnnotator(props){
         ce("button",{
           onClick:function(){
             if(refPanel){setRefPanel(null);setRefImgDim(null);setRefSlideMode(false);setRefOffsetY(0);}
-            else{
-              var inp=document.createElement("input");
-              inp.type="file"; inp.accept="image/*";
-              inp.onchange=function(){
-                var f=inp.files[0]; if(!f)return;
-                var rd=new FileReader();
-                rd.onload=function(ev){setRefPanel({url:ev.target.result});setRefSlideMode(false);setRefOffsetY(0);};
-                rd.readAsDataURL(f);
-              };
-              inp.click();
-            }
+            else{setShowRefPicker(true);}
           },
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",
             background:refPanel?"#16a34a":"#2a2a2a",
@@ -1519,10 +1613,6 @@ function ImageAnnotator(props){
           color:autoSaveStatus==='saving'?'#93c5fd':autoSaveStatus==='ok'?'#86efac':autoSaveStatus==='err'?'#fca5a5':'#fb923c'}},
           autoSaveStatus==='saving'?'⏳ 自動保存中':autoSaveStatus==='ok'?'✓ 自動保存済':autoSaveStatus==='err'?'✕ 自動保存失敗':'🔥 自動保存ON'
         ),
-        ce("button",{onClick:function(){setShowLocalSave(true);},
-          style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#14532d",color:"#86efac"})
-        },"💾 下書き保存"),
-        /* Cancel / DL / Save */
         ce("button",{onClick:function(){setCancelConfirm(true);},style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#333",color:"#ccc"})},"分析を終了する"),
         ce("button",{onClick:saveAndExport,style:Object.assign({},TS,{fontSize:12,padding:"6px 12px",background:"#2563eb",color:"#fff",fontWeight:700})},"💾 保存・出力")
       ),
@@ -2011,7 +2101,7 @@ function ImageAnnotator(props){
 
     /* ── キャンセル確認モーダル ── */
     cancelConfirm&&ce(CancelConfirmModal,{
-      onClose:onClose,
+      onClose:function(){onClose(savedTickerRef.current||img._ticker||null);},
       onBack:function(){setCancelConfirm(false);}
     }),
 
@@ -2047,6 +2137,16 @@ function ImageAnnotator(props){
         if(postSaveCallbackRef.current){postSaveCallbackRef.current();postSaveCallbackRef.current=null;}
       },
       onClose:function(){setShowLocalSave(false);postSaveCallbackRef.current=null;}
+    }),
+
+    /* ── 参照画像ピッカー ── */
+    showRefPicker&&ce(RefChartPicker,{
+      fbCfg:props.fbCfg,
+      onSelect:function(dataUrl){
+        setRefPanel({url:dataUrl});setRefSlideMode(false);setRefOffsetY(0);
+        setShowRefPicker(false);
+      },
+      onClose:function(){setShowRefPicker(false);}
     })
 
   ); /* end return */
@@ -2076,9 +2176,9 @@ function caGenThumb(canvasEl){
 }
 
 function DraftLibrary(props){
-  var onOpen=props.onOpen, onClose=props.onClose, fbCfg=props.fbCfg||{};
+  var onOpen=props.onOpen, onClose=props.onClose, fbCfg=props.fbCfg||{}, initialTicker=props.initialTicker||null;
   var s0=useState(caLoadTickers);   var tickers=s0[0],setTickers=s0[1];
-  var s1=useState(null);            var selTicker=s1[0],setSelTicker=s1[1];
+  var s1=useState(initialTicker);   var selTicker=s1[0],setSelTicker=s1[1];
   var s2=useState(caLoadMeta);      var meta=s2[0],setMeta=s2[1];
   var s3=useState(false);           var adding=s3[0],setAdding=s3[1];
   var s4=useState('');              var newName=s4[0],setNewName=s4[1];
@@ -2688,6 +2788,7 @@ function App(){
   var s2=useState(function(){try{var s=localStorage.getItem(FB_CFG_KEY);return s?JSON.parse(s):{url:'',secret:''};}catch(e){return{url:'',secret:''};}}); var fbCfg=s2[0],setFbCfg=s2[1];
   var s3=useState(false); var showFbSettings=s3[0],setShowFbSettings=s3[1];
   var s4=useState(false); var showDrafts=s4[0],setShowDrafts=s4[1];
+  var s5=useState(null);  var draftInitTicker=s5[0],setDraftInitTicker=s5[1];
   var fileRef=useRef(null);
 
   function loadFile(file){
@@ -2736,11 +2837,11 @@ function App(){
       img:img,
       fbCfg:fbCfg,
       onSave:function(saved){setImg(function(prev){return Object.assign({},prev,saved);});},
-      onClose:function(){
+      onClose:function(ticker){
         try{sessionStorage.removeItem('ca_session');}catch(e){}
-        var fromDraft=!!(img&&img._draftId);
         setImg(null);
-        if(fromDraft)setShowDrafts(true);
+        setDraftInitTicker(ticker||null);
+        setShowDrafts(true);
       }
     });
   }
@@ -2748,8 +2849,9 @@ function App(){
   if(showDrafts){
     return ce(DraftLibrary,{
       fbCfg:fbCfg,
-      onOpen:function(d){setImg(d);setShowDrafts(false);},
-      onClose:function(){setShowDrafts(false);}
+      initialTicker:draftInitTicker,
+      onOpen:function(d){setImg(d);setShowDrafts(false);setDraftInitTicker(null);},
+      onClose:function(){setShowDrafts(false);setDraftInitTicker(null);}
     });
   }
 
