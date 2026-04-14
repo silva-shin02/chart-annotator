@@ -20,6 +20,7 @@ input[type=range]{accent-color:#6366F1}
 .toolbar-row::-webkit-scrollbar{height:8px}
 .toolbar-row::-webkit-scrollbar-thumb{background:#555;border-radius:4px}
 .toolbar-row::-webkit-scrollbar-track{background:#1a1a1a}
+canvas{image-rendering:high-quality;-webkit-image-rendering:high-quality}
 </style>
 </head>
 <body>
@@ -726,12 +727,20 @@ function ImageAnnotator(props){
   function initCanvas(imgData){
     var c=canvasRef.current; if(!c)return;
     imgDataRef.current=imgData;
-    var DPR=Math.min(window.devicePixelRatio||1,2);
-    dprRef.current=DPR;
     var ctx=c.getContext("2d");
     var bImg=new Image();
     bImg.onload=function(){
       var nw=bImg.naturalWidth, nh=bImg.naturalHeight;
+      // iOS Safari のキャンバスメモリ制限を考慮した動的DPR
+      // メイン + overlay + getImageData で3面分消費するので安全圏を確保
+      var devDPR=window.devicePixelRatio||1;
+      var MAX_CANVAS_PX=16777216; // 16M pixels（iOS Safari安全上限）
+      var DPR=devDPR;
+      if(nw*DPR*nh*DPR>MAX_CANVAS_PX){
+        DPR=Math.sqrt(MAX_CANVAS_PX/(nw*nh));
+      }
+      DPR=Math.max(1,DPR);
+      dprRef.current=DPR;
       c.width=Math.round(nw*DPR); c.height=Math.round(nh*DPR);
       ctx.setTransform(DPR,0,0,DPR,0,0);
       if(overlayCanvasRef.current){
@@ -1401,29 +1410,40 @@ function ImageAnnotator(props){
     if(onSave)onSave(saved);
   }
   function downloadCombined(){
-    rebuild(strokesRef.current);
-    var c4=canvasRef.current;
     if(!(refPanel&&refPanel.url&&refImgDim))return;
-    var ch=c4.height, cw=c4.width;
-    var rw=Math.round(refImgDim.w*ch/refImgDim.h);
-    var offsetPx=Math.round(refOffsetY*(ch/(dispH||ch)));
-    var totalH, refY, mainY;
-    if(offsetPx>=0){refY=offsetPx; mainY=0; totalH=ch+offsetPx;}
-    else{refY=0; mainY=-offsetPx; totalH=ch+(-offsetPx);}
-    var combined=document.createElement("canvas");
-    combined.width=rw+cw; combined.height=totalH;
-    var cctx=combined.getContext("2d");
-    var refImg2=new Image();
-    refImg2.onload=function(){
-      cctx.drawImage(refImg2,0,refY,rw,ch);
-      cctx.drawImage(c4,rw,mainY);
-      var lnk2=document.createElement("a");
-      lnk2.href=combined.toDataURL("image/png");
-      var now=new Date();var ds=now.getFullYear()+('0'+(now.getMonth()+1)).slice(-2)+('0'+now.getDate()).slice(-2);
-      lnk2.download=ds+"_combined.png";
-      lnk2.click();
+    // 原画からフル解像度でメインチャートを描画（DPR非依存）
+    var d=imgDataRef.current;
+    var mainImg=new Image();
+    mainImg.onload=function(){
+      var nw=mainImg.naturalWidth, nh=mainImg.naturalHeight;
+      var tc=document.createElement("canvas");
+      tc.width=nw; tc.height=nh;
+      var tctx=tc.getContext("2d");
+      tctx.drawImage(mainImg,0,0,nw,nh);
+      strokesRef.current.forEach(function(s){drawStroke(tctx,s);});
+      // 参照画像と連結
+      var cw=tc.width, ch=tc.height;
+      var rw=Math.round(refImgDim.w*ch/refImgDim.h);
+      var offsetPx=Math.round(refOffsetY*(ch/(dispH||ch)));
+      var totalH, refY, mainY;
+      if(offsetPx>=0){refY=offsetPx; mainY=0; totalH=ch+offsetPx;}
+      else{refY=0; mainY=-offsetPx; totalH=ch+(-offsetPx);}
+      var combined=document.createElement("canvas");
+      combined.width=rw+cw; combined.height=totalH;
+      var cctx=combined.getContext("2d");
+      var refImg2=new Image();
+      refImg2.onload=function(){
+        cctx.drawImage(refImg2,0,refY,rw,ch);
+        cctx.drawImage(tc,rw,mainY);
+        var lnk2=document.createElement("a");
+        lnk2.href=combined.toDataURL("image/png");
+        var now=new Date();var ds=now.getFullYear()+('0'+(now.getMonth()+1)).slice(-2)+('0'+now.getDate()).slice(-2);
+        lnk2.download=ds+"_combined.png";
+        lnk2.click();
+      };
+      refImg2.src=refPanel.url;
     };
-    refImg2.src=refPanel.url;
+    mainImg.src="data:"+(d.orig_mt||d.mt)+";base64,"+(d.orig_base64||d.base64);
   }
   function saveDraftSilent(){
     rebuild(strokesRef.current);
@@ -1729,6 +1749,7 @@ function ImageAnnotator(props){
             width:Math.round(refImgDim.w*dispH/refImgDim.h),
             height:dispH,display:"block",
             objectFit:"fill",flexShrink:0,
+            imageRendering:"high-quality",WebkitImageRendering:"high-quality",
             pointerEvents:refSlideMode?"auto":"none",
             userSelect:"none",
             transform:refOffsetY?"translateY("+refOffsetY+"px)":"none",
@@ -1742,6 +1763,7 @@ function ImageAnnotator(props){
           ce("canvas",{
             ref:canvasRef,
             style:{position:"absolute",inset:0,width:dispW,height:dispH,
+              imageRendering:"high-quality",WebkitImageRendering:"high-quality",
               cursor:tool==="pan"?"grab":tool==="eraser"?"cell":tool==="lasso"?(lassoModeRef.current==="panning"?"grabbing":"default"):"crosshair",
               touchAction:"none",display:"block",
               borderRadius:refPanel&&refPanel.url?0:4},
@@ -1750,6 +1772,7 @@ function ImageAnnotator(props){
           ce("canvas",{
             ref:overlayCanvasRef,
             style:{position:"absolute",inset:0,width:dispW,height:dispH,
+              imageRendering:"high-quality",WebkitImageRendering:"high-quality",
               pointerEvents:"none",display:"block"}
           })
         )
