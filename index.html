@@ -1696,19 +1696,23 @@ function ImageAnnotator(props){
       var tctx=tc.getContext("2d");
       tctx.drawImage(mainImg,0,0,nw,nh);
       strokesRef.current.forEach(function(s){drawStroke(tctx,s);});
-      // 参照画像と連結
+      // 参照画像と連結（参照画像は元のサイズを維持）
       var cw=tc.width, ch=tc.height;
-      var rw=Math.round(refImgDim.w*ch/refImgDim.h);
-      var offsetPx=Math.round(refOffsetY*(ch/(dispH||ch)));
-      var totalH, refY, mainY;
-      if(offsetPx>=0){refY=offsetPx; mainY=0; totalH=ch+offsetPx;}
-      else{refY=0; mainY=-offsetPx; totalH=ch+(-offsetPx);}
+      var rw=refImgDim.w, rh=refImgDim.h;
+      // refOffsetYは表示座標系なので、メインキャンバスの自然ピクセル座標に変換
+      var mNatH2=canvasDimRef.current&&canvasDimRef.current.h||ch;
+      var offsetPx=Math.round(refOffsetY*(mNatH2/(dispH||mNatH2)));
+      var refY, mainY;
+      if(offsetPx>=0){refY=offsetPx; mainY=0;}
+      else{refY=0; mainY=-offsetPx;}
+      // 全体の高さは両画像を包含するサイズ
+      var totalH=Math.max(refY+rh, mainY+ch);
       var combined=document.createElement("canvas");
       combined.width=rw+cw; combined.height=totalH;
       var cctx=combined.getContext("2d");
       var refImg2=new Image();
       refImg2.onload=function(){
-        cctx.drawImage(refImg2,0,refY,rw,ch);
+        cctx.drawImage(refImg2,0,refY,rw,rh);
         cctx.drawImage(tc,rw,mainY);
         var lnk2=document.createElement("a");
         lnk2.href=combined.toDataURL("image/png");
@@ -2039,7 +2043,7 @@ function ImageAnnotator(props){
     },
       /* ── 参照画像 + メインキャンバスの連結ラッパー ── */
       ce("div",{style:{
-        display:"flex",flexDirection:"row",alignItems:"center",flexShrink:0,
+        display:"flex",flexDirection:"row",alignItems:"flex-start",flexShrink:0,
         transform:"translate("+pan.x+"px,"+pan.y+"px) scale("+zoom+")",
         transformOrigin:"center center"
       }},
@@ -2048,9 +2052,15 @@ function ImageAnnotator(props){
           src:refPanel.url,draggable:false,
           onMouseDown:onRefSlideStart,
           onTouchStart:onRefSlideStart,
-          style:{
-            width:Math.round(refImgDim.w*dispH/refImgDim.h),
-            height:dispH,display:"block",
+          style:(function(){
+            // メインキャンバスと同じスケール比を適用（参照画像の元サイズを維持）
+            var mNatH=canvasDimRef.current&&canvasDimRef.current.h||1;
+            var sc=dispH/mNatH;
+            var rDispW=Math.round(refImgDim.w*sc);
+            var rDispH=Math.round(refImgDim.h*sc);
+            return{
+            width:rDispW,
+            height:rDispH,display:"block",
             objectFit:"fill",flexShrink:0,
             imageRendering:"high-quality",WebkitImageRendering:"high-quality",
             pointerEvents:refSlideMode?"auto":"none",
@@ -2059,7 +2069,7 @@ function ImageAnnotator(props){
             cursor:refSlideMode?"ns-resize":"default",
             outline:refSlideMode?"2px dashed #a78bfa":"none",
             outlineOffset:"0px"
-          }
+          };})()
         }),
         /* メインキャンバス + オーバーレイキャンバス */
         ce("div",{style:{position:"relative",width:dispW,height:dispH,flexShrink:0}},
