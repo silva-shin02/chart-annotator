@@ -337,7 +337,15 @@ function drawStroke(ctx,s){
     case"freehand":
       if(s.pts&&s.pts.length>0){
         ctx.beginPath(); ctx.moveTo(s.pts[0].x,s.pts[0].y);
-        s.pts.slice(1).forEach(function(p){ctx.lineTo(p.x,p.y);});
+        if(s.pts.length===1){ctx.lineTo(s.pts[0].x,s.pts[0].y);}
+        else if(s.pts.length===2){ctx.lineTo(s.pts[1].x,s.pts[1].y);}
+        else{
+          for(var fi=1;fi<s.pts.length-1;fi++){
+            var mx2=(s.pts[fi].x+s.pts[fi+1].x)/2, my2=(s.pts[fi].y+s.pts[fi+1].y)/2;
+            ctx.quadraticCurveTo(s.pts[fi].x,s.pts[fi].y,mx2,my2);
+          }
+          ctx.lineTo(s.pts[s.pts.length-1].x,s.pts[s.pts.length-1].y);
+        }
         ctx.stroke();
       } break;
     case"text":{
@@ -373,19 +381,23 @@ function CancelConfirmModal(props){
         ce("div",{style:{fontSize:18,fontWeight:700,color:"#fff",marginBottom:12,textAlign:"center"}},"キャンセルの確認"),
         ce("div",{style:{fontSize:13,color:"#aaa",lineHeight:1.9,textAlign:"center",marginBottom:24}},
           "このままキャンセルすると、",ce("br",null),
-          "保存されていない書き込みは消去されます。",ce("br",null),
-          "本当によろしいですか？"
+          "保存されていない書き込みは消去されます。"
         ),
         ce("div",{style:{display:"flex",flexDirection:"column",gap:10}},
           ce("button",{
             onClick:function(){onJsonSave();onClose();},
             style:{padding:"13px 0",fontSize:14,fontWeight:700,background:"#2563eb",color:"#fff",
-              border:"none",borderRadius:12,cursor:"pointer",width:"100%"}
+              border:"none",borderRadius:12,cursor:"pointer",width:"100%",fontFamily:"inherit"}
           },"💾 JSONのみ保存して終わる"),
+          ce("button",{
+            onClick:onClose,
+            style:{padding:"13px 0",fontSize:14,fontWeight:700,background:"#7f1d1d",color:"#fca5a5",
+              border:"none",borderRadius:12,cursor:"pointer",width:"100%",fontFamily:"inherit"}
+          },"OK（何も保存せず終わる）"),
           ce("button",{
             onClick:onBack,
             style:{padding:"13px 0",fontSize:14,fontWeight:600,background:"#2a2a2a",color:"#ccc",
-              border:"1px solid #3a3a3a",borderRadius:12,cursor:"pointer",width:"100%"}
+              border:"1px solid #3a3a3a",borderRadius:12,cursor:"pointer",width:"100%",fontFamily:"inherit"}
           },"← 戻る（キャンセルしない）")
         )
       )
@@ -514,7 +526,7 @@ function ImageAnnotator(props){
   }
   var st4=useState(3);       var lineW=st4[0],setLineW=st4[1];
   var st5=useState(1);       var opacity=st5[0],setOpacity=st5[1];
-  var st6=useState(true);    var horiz=st6[0],setHoriz=st6[1];
+  var st6=useState(false);    var horiz=st6[0],setHoriz=st6[1];
   var st7=useState(24);      var fontSize=st7[0],setFontSize=st7[1];
   var st8=useState("24");    var fontSizeStr=st8[0],setFontSizeStr=st8[1];
   var st9=useState(false);   var fontBold=st9[0],setFontBold=st9[1];
@@ -536,6 +548,7 @@ function ImageAnnotator(props){
   var stFST=useState(null);   var fbStatus=stFST[0],setFbStatus=stFST[1];
   var stLS=useState(false);   var showLocalSave=stLS[0],setShowLocalSave=stLS[1];
 
+  var dprRef=useRef(1);
   var baseRef=useRef(null);
   var overlayCanvasRef=useRef(null);
   var strokesRef=useRef([]);
@@ -633,12 +646,20 @@ function ImageAnnotator(props){
   function initCanvas(imgData){
     var c=canvasRef.current; if(!c)return;
     imgDataRef.current=imgData;
+    var DPR=Math.min(window.devicePixelRatio||1,2);
+    dprRef.current=DPR;
     var ctx=c.getContext("2d");
     var bImg=new Image();
     bImg.onload=function(){
-      c.width=bImg.naturalWidth; c.height=bImg.naturalHeight;
-      if(overlayCanvasRef.current){overlayCanvasRef.current.width=c.width;overlayCanvasRef.current.height=c.height;}
-      ctx.drawImage(bImg,0,0);
+      var nw=bImg.naturalWidth, nh=bImg.naturalHeight;
+      c.width=Math.round(nw*DPR); c.height=Math.round(nh*DPR);
+      ctx.setTransform(DPR,0,0,DPR,0,0);
+      if(overlayCanvasRef.current){
+        overlayCanvasRef.current.width=c.width;
+        overlayCanvasRef.current.height=c.height;
+        overlayCanvasRef.current.getContext("2d").setTransform(DPR,0,0,DPR,0,0);
+      }
+      ctx.drawImage(bImg,0,0,nw,nh);
       baseRef.current=ctx.getImageData(0,0,c.width,c.height);
       var saved=imgData.strokes||[];
       strokesRef.current=saved.slice();
@@ -646,13 +667,13 @@ function ImageAnnotator(props){
       histRef.current=[saved.slice()]; futRef.current=[];
       setCanUndo(false); setCanRedo(false);
       setSelIdxs(new Set()); setSelBounds(null);
-      canvasDimRef.current={w:c.width,h:c.height};
+      canvasDimRef.current={w:nw,h:nh};
       var split=refPanel;
       var aw=(split?window.innerWidth*0.5:window.innerWidth)*0.96;
       var ah=(window.innerHeight-130)*0.96;
-      var sc=Math.min(1,aw/c.width,ah/c.height);
-      setDispW(Math.round(c.width*sc));
-      setDispH(Math.round(c.height*sc));
+      var sc=Math.min(1,aw/nw,ah/nh);
+      setDispW(Math.round(nw*sc));
+      setDispH(Math.round(nh*sc));
       setZoom(1); setPan({x:0,y:0});
     };
     bImg.src="data:"+(imgData.orig_mt||imgData.mt)+";base64,"+(imgData.orig_base64||imgData.base64);
@@ -663,33 +684,68 @@ function ImageAnnotator(props){
 
   var cZ=function(z){return Math.min(Math.max(z,0.1),20);};
 
-  // 参照画像のサイズを取得
+  // 参照画像のサイズを取得 + dispW/dispH再計算
   useEffect(function(){
     if(!refPanel||!refPanel.url){setRefImgDim(null);return;}
     var ri=new Image();
-    ri.onload=function(){setRefImgDim({w:ri.naturalWidth,h:ri.naturalHeight});};
+    ri.onload=function(){
+      setRefImgDim({w:ri.naturalWidth,h:ri.naturalHeight});
+      // 参照画像追加時にメインキャンバスの表示サイズを再計算
+      var dim=canvasDimRef.current;
+      if(!dim||!dim.w)return;
+      var aw=window.innerWidth*0.45*0.96;
+      var ah=(window.innerHeight-130)*0.96;
+      var sc=Math.min(1,aw/dim.w,ah/dim.h);
+      setDispW(Math.round(dim.w*sc));
+      setDispH(Math.round(dim.h*sc));
+      setPan({x:0,y:0});
+    };
     ri.src=refPanel.url;
   },[refPanel&&refPanel.url]);
+
+  // 参照パネル削除時もdispW/dispHをリセット
+  useEffect(function(){
+    if(refPanel)return;
+    var dim=canvasDimRef.current;
+    if(!dim||!dim.w)return;
+    var aw=window.innerWidth*0.96;
+    var ah=(window.innerHeight-130)*0.96;
+    var sc=Math.min(1,aw/dim.w,ah/dim.h);
+    setDispW(Math.round(dim.w*sc));
+    setDispH(Math.round(dim.h*sc));
+    setPan({x:0,y:0});
+  },[refPanel]);
 
   // キャンバス座標 → 画面(viewport)座標（参照画像が左に連結されても正確）
   function canvasToScreen(cx,cy){
     var c=canvasRef.current; if(!c)return{x:0,y:0};
     var rect=c.getBoundingClientRect();
-    var sw=rect.width/c.width, sh=rect.height/c.height;
+    var natW=c.width/(dprRef.current||1), natH=c.height/(dprRef.current||1);
+    var sw=rect.width/natW, sh=rect.height/natH;
     return{x:rect.left+cx*sw, y:rect.top+cy*sh};
   }
 
   function rebuild(strokes){
     var c=canvasRef.current; if(!c||!baseRef.current)return;
     var ctx=c.getContext("2d");
+    ctx.setTransform(1,0,0,1,0,0);
     ctx.putImageData(baseRef.current,0,0);
+    ctx.setTransform(dprRef.current||1,0,0,dprRef.current||1,0,0);
     strokes.forEach(function(s){drawStroke(ctx,s);});
   }
   function clearOverlay(){
     var oc=overlayCanvasRef.current; if(!oc)return;
-    oc.getContext("2d").clearRect(0,0,oc.width,oc.height);
+    var ctx=oc.getContext("2d");
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,oc.width,oc.height);
+    ctx.setTransform(dprRef.current||1,0,0,dprRef.current||1,0,0);
   }
-  function overlayCtx(){return overlayCanvasRef.current?overlayCanvasRef.current.getContext("2d"):null;}
+  function overlayCtx(){
+    var oc=overlayCanvasRef.current; if(!oc)return null;
+    var ctx=oc.getContext("2d");
+    ctx.setTransform(dprRef.current||1,0,0,dprRef.current||1,0,0);
+    return ctx;
+  }
   function commit(strokes){
     histRef.current=histRef.current.slice(-19).concat([strokes]);
     futRef.current=[]; setCanUndo(true); setCanRedo(false);
@@ -715,7 +771,8 @@ function ImageAnnotator(props){
 
   function getPos(e){
     var c=canvasRef.current, r=c.getBoundingClientRect();
-    var sx=c.width/r.width, sy=c.height/r.height;
+    var DPR=dprRef.current||1;
+    var sx=(c.width/r.width)/DPR, sy=(c.height/r.height)/DPR;
     var src=e.touches?e.touches[0]:e;
     return{x:(src.clientX-r.left)*sx, y:(src.clientY-r.top)*sy};
   }
@@ -905,11 +962,7 @@ function ImageAnnotator(props){
     }
     drawRef.current={on:true,sx:pos.x,sy:pos.y};
     if(tool==="freehand"){
-      freehandPts.current=[pos]; rebuild(strokesRef.current);
-      var ctx0=canvasRef.current.getContext("2d");
-      ctx0.globalAlpha=opacity; ctx0.strokeStyle=color; ctx0.lineWidth=lineW;
-      ctx0.lineCap="round"; ctx0.lineJoin="round"; ctx0.setLineDash([]);
-      ctx0.beginPath(); ctx0.moveTo(pos.x,pos.y);
+      freehandPts.current=[pos];
     }
   };
 
@@ -963,13 +1016,13 @@ function ImageAnnotator(props){
     var sdx=drawRef.current.sx, sdy=drawRef.current.sy;
     if(tool==="freehand"){
       var lp=freehandPts.current[freehandPts.current.length-1];
-      if(!lp||Math.hypot(rawPos.x-lp.x,rawPos.y-lp.y)>2){
-        var fctx=canvasRef.current.getContext("2d");
-        fctx.globalAlpha=opacity; fctx.strokeStyle=color; fctx.lineWidth=lineW;
-        fctx.lineCap="round"; fctx.lineJoin="round"; fctx.setLineDash([]);
-        fctx.lineTo(rawPos.x,rawPos.y); fctx.stroke();
-        fctx.beginPath(); fctx.moveTo(rawPos.x,rawPos.y); fctx.globalAlpha=1;
+      if(!lp||Math.hypot(rawPos.x-lp.x,rawPos.y-lp.y)>1){
         freehandPts.current.push(rawPos);
+        var oc_f=overlayCtx();
+        if(oc_f){
+          clearOverlay();
+          drawStroke(oc_f,{type:"freehand",pts:freehandPts.current,color:color,lineW:lineW,opacity:opacity});
+        }
       }
     } else if(tool==="eraser"){
       var er2=lineW*5;
@@ -1371,15 +1424,20 @@ function ImageAnnotator(props){
           color:fbStatus==='saving'?'#93c5fd':fbStatus==='ok'?'#86efac':'#fca5a5'}},
           fbStatus==='saving'?'⏳ 保存中…':fbStatus==='ok'?'✓ 保存完了':'✕ 保存失敗'
         ),
+        /* Firebase同期有効インジケーター */
+        props.fbCfg&&props.fbCfg.url&&!fbStatus&&ce("span",{style:{
+          fontSize:10,padding:"3px 7px",borderRadius:5,fontWeight:700,flexShrink:0,
+          background:"#431407",color:"#fb923c"}
+        },"🔥 同期有効"),
         ce("button",{onClick:function(){setShowLocalSave(true);},
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#14532d",color:"#86efac"})
-        },"💾 下書き"),
-        /* ☁ クラウド保存 */
+        },"💾 下書き保存"),
+        /* ☁ クラウド保存（現在の書き込みをFirebaseに保存） */
         ce("button",{onClick:fbSave,disabled:fbStatus==='saving',
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",
             background:props.fbCfg&&props.fbCfg.url?'#2a2a2a':'#1a1a1a',
             color:props.fbCfg&&props.fbCfg.url?'#a78bfa':'#444'})
-        },"☁ 保存"),
+        },"☁ クラウド保存"),
         /* Cancel / DL / Save */
         ce("button",{onClick:function(){setCancelConfirm(true);},style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#333",color:"#ccc"})},"キャンセル"),
         ce("button",{onClick:jsonLoad,style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#2a2a2a",color:"#aaa"})},"📂 JSON読込"),
@@ -1858,9 +1916,19 @@ function ImageAnnotator(props){
           strokes:strokesRef.current,name:name};
         var existing=caLoadMeta().find(function(m){return m.ticker===ticker&&m.name===name;});
         var id=existing?existing.id:caGenId();
+        var metaItem={id:id,ticker:ticker,name:name,savedAt:Date.now(),thumb:thumb};
         var nm=caLoadMeta().filter(function(m){return !(m.ticker===ticker&&m.name===name);});
-        nm.push({id:id,ticker:ticker,name:name,savedAt:Date.now(),thumb:thumb});
+        nm.push(metaItem);
         caSaveMeta(nm); caSaveData(id,data);
+        // Firebase同期
+        var cfg=props.fbCfg;
+        if(cfg&&cfg.url){
+          var base=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts';
+          var url=base+'/'+id+'.json'+(cfg.secret?'?auth='+cfg.secret:'');
+          fetch(url,{method:'PUT',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({ticker:ticker,name:name,savedAt:metaItem.savedAt,thumb:thumb,data:data})})
+            .catch(function(e){console.error('fbSyncDraft:',e);});
+        }
       },
       onClose:function(){setShowLocalSave(false);}
     })
@@ -1890,42 +1958,149 @@ function caGenThumb(canvasEl){
 
 /* ─── DraftLibrary ──────────────────────────────────────────── */
 function DraftLibrary(props){
-  var onOpen=props.onOpen, onClose=props.onClose;
+  var onOpen=props.onOpen, onClose=props.onClose, fbCfg=props.fbCfg||{};
   var s0=useState(caLoadTickers);   var tickers=s0[0],setTickers=s0[1];
   var s1=useState(null);            var selTicker=s1[0],setSelTicker=s1[1];
   var s2=useState(caLoadMeta);      var meta=s2[0],setMeta=s2[1];
   var s3=useState(false);           var adding=s3[0],setAdding=s3[1];
   var s4=useState('');              var newName=s4[0],setNewName=s4[1];
+  var s5=useState(null);            var syncStatus=s5[0],setSyncStatus=s5[1];
+  var s6=useState(null);            var dragOver=s6[0],setDragOver=s6[1];
   var inputRef=useRef(null);
+  var dragSrcRef=useRef(null);
+
+  // ── Firebase ヘルパー ──
+  function makeDraftsBase(){
+    if(!fbCfg.url)return null;
+    return fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts';
+  }
+  function makeFbTickersUrl(){
+    if(!fbCfg.url)return null;
+    return fbCfg.url.replace(/\/$/,'')+'/chart-annotator-tickers.json'+(fbCfg.secret?'?auth='+fbCfg.secret:'');
+  }
+
+  // Firebase からドラフト一覧を取得してlocalStorageとマージ
+  useEffect(function(){
+    if(!fbCfg.url)return;
+    var base=makeDraftsBase();
+    // ティッカーリストを同期
+    fetch(makeFbTickersUrl())
+      .then(function(r){return r.ok?r.json():null;})
+      .then(function(fbTickers){
+        if(fbTickers&&Array.isArray(fbTickers)){
+          // localStorageのものと結合（重複排除）
+          var merged=fbTickers.slice();
+          caLoadTickers().forEach(function(t){if(!merged.includes(t))merged.push(t);});
+          setTickers(merged); caSaveTickers(merged);
+        }
+      }).catch(function(){});
+    // メタデータを同期
+    setSyncStatus('loading');
+    fetch(base+'.json'+(fbCfg.secret?'?auth='+fbCfg.secret:''))
+      .then(function(r){return r.ok?r.json():null;})
+      .then(function(fbData){
+        setSyncStatus(null);
+        if(!fbData)return;
+        var localMeta=caLoadMeta();
+        var merged=localMeta.slice();
+        Object.keys(fbData).forEach(function(id){
+          var d=fbData[id];
+          if(!d)return;
+          var exists=merged.find(function(m){return m.id===id;});
+          if(!exists){
+            // Firebase にあってlocalにない → 追加
+            merged.push({id:id,ticker:d.ticker||'未分類',name:d.name||id,
+              savedAt:d.savedAt||0,thumb:d.thumb||''});
+            if(d.data)caSaveData(id,d.data);
+          }
+        });
+        setMeta(merged); caSaveMeta(merged);
+      })
+      .catch(function(){setSyncStatus(null);});
+  },[]);
+
+  function fbSaveDraft(id, metaItem, data){
+    if(!fbCfg.url)return;
+    var base=makeDraftsBase();
+    var url=base+'/'+id+'.json'+(fbCfg.secret?'?auth='+fbCfg.secret:'');
+    fetch(url,{method:'PUT',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ticker:metaItem.ticker,name:metaItem.name,
+        savedAt:metaItem.savedAt,thumb:metaItem.thumb,data:data})})
+      .catch(function(e){console.error('fbSaveDraft:',e);});
+  }
+  function fbDeleteDraft(id){
+    if(!fbCfg.url)return;
+    var base=makeDraftsBase();
+    var url=base+'/'+id+'.json'+(fbCfg.secret?'?auth='+fbCfg.secret:'');
+    fetch(url,{method:'DELETE'}).catch(function(){});
+  }
+  function fbSyncTickers(t){
+    if(!fbCfg.url)return;
+    fetch(makeFbTickersUrl(),{method:'PUT',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(t)}).catch(function(){});
+  }
 
   function addTicker(){
     var n=newName.trim(); if(!n||tickers.includes(n))return;
-    var nt=tickers.concat([n]); setTickers(nt); caSaveTickers(nt);
+    var nt=tickers.concat([n]); setTickers(nt); caSaveTickers(nt); fbSyncTickers(nt);
     setNewName(''); setAdding(false); setSelTicker(n);
   }
   function deleteTicker(t){
     if(!window.confirm('"'+t+'"を削除しますか？（チャートも削除されます）'))return;
+    var toDelete=meta.filter(function(m){return m.ticker===t;});
     var nm=meta.filter(function(m){return m.ticker!==t;});
-    meta.filter(function(m){return m.ticker===t;}).forEach(function(m){caDeleteData(m.id);});
+    toDelete.forEach(function(m){caDeleteData(m.id);fbDeleteDraft(m.id);});
     setMeta(nm); caSaveMeta(nm);
     var nt=tickers.filter(function(x){return x!==t;});
-    setTickers(nt); caSaveTickers(nt);
+    setTickers(nt); caSaveTickers(nt); fbSyncTickers(nt);
     if(selTicker===t)setSelTicker(null);
   }
   function deleteChart(id){
     if(!window.confirm('このチャートを削除しますか？'))return;
-    caDeleteData(id);
+    caDeleteData(id); fbDeleteDraft(id);
     var nm=meta.filter(function(m){return m.id!==id;});
     setMeta(nm); caSaveMeta(nm);
   }
   function openChart(id){
-    var d=caLoadData(id); if(!d)return;
-    onOpen(d);
+    var d=caLoadData(id);
+    if(d){onOpen(d);return;}
+    // ローカルになければFirebaseから取得
+    if(!fbCfg.url){alert('データが見つかりません');return;}
+    var base=makeDraftsBase();
+    var url=base+'/'+id+'.json'+(fbCfg.secret?'?auth='+fbCfg.secret:'');
+    setSyncStatus('loading');
+    fetch(url).then(function(r){return r.json();})
+      .then(function(fbItem){
+        setSyncStatus(null);
+        if(!fbItem||!fbItem.data){alert('データが見つかりません');return;}
+        caSaveData(id,fbItem.data);
+        onOpen(fbItem.data);
+      }).catch(function(){setSyncStatus(null);alert('読込失敗');});
+  }
+
+  // ── ドラッグ並び替え ──
+  function onDragStart(e,idx){dragSrcRef.current=idx;e.dataTransfer.effectAllowed='move';}
+  function onDragOver2(e,idx){e.preventDefault();e.dataTransfer.dropEffect='move';setDragOver(idx);}
+  function onDrop2(e,idx){
+    e.preventDefault();setDragOver(null);
+    var src=dragSrcRef.current; dragSrcRef.current=null;
+    if(src===null||src===idx)return;
+    var nt=tickers.slice();
+    var item=nt.splice(src,1)[0];nt.splice(idx,0,item);
+    setTickers(nt);caSaveTickers(nt);fbSyncTickers(nt);
+  }
+  function onDragEnd2(){dragSrcRef.current=null;setDragOver(null);}
+  // タッチ並び替え: ↑↓ボタン
+  function moveTicker(idx,dir){
+    var ni=idx+dir;
+    if(ni<0||ni>=tickers.length)return;
+    var nt=tickers.slice();var tmp=nt[idx];nt[idx]=nt[ni];nt[ni]=tmp;
+    setTickers(nt);caSaveTickers(nt);fbSyncTickers(nt);
   }
 
   var charts=selTicker?meta.filter(function(m){return m.ticker===selTicker;}).sort(function(a,b){return b.savedAt-a.savedAt;}):[];
-
   var BT={border:"none",cursor:"pointer",fontFamily:"inherit"};
+
   return ce("div",{style:{position:"fixed",inset:0,background:"#111",zIndex:9000,
     display:"flex",flexDirection:"column",overflowY:"auto"}},
     /* header */
@@ -1934,6 +2109,9 @@ function DraftLibrary(props){
       ce("button",{onClick:onClose,style:Object.assign({},BT,{
         fontSize:22,color:"#888",background:"none",padding:"0 4px",lineHeight:1})},"←"),
       ce("span",{style:{fontSize:16,fontWeight:700,color:"#fff",flex:1}},"📋 編集中のチャート"),
+      fbCfg.url&&ce("span",{style:{fontSize:10,padding:"3px 7px",borderRadius:5,
+        background:"#431407",color:"#fb923c",fontWeight:700,flexShrink:0}},
+        syncStatus==='loading'?'⏳ 同期中':'🔥 同期有効'),
       ce("button",{onClick:function(){setAdding(true);setTimeout(function(){inputRef.current&&inputRef.current.focus();},50);},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,background:"#2563eb",
           color:"#fff",padding:"7px 14px",borderRadius:8})},
@@ -1955,24 +2133,44 @@ function DraftLibrary(props){
     /* body */
     ce("div",{style:{display:"flex",flex:1,overflow:"hidden"}},
       /* ticker list */
-      ce("div",{style:{width:IS_TOUCH?120:150,background:"#161616",borderRight:"1px solid #2a2a2a",
+      ce("div",{style:{width:IS_TOUCH?130:155,background:"#161616",borderRight:"1px solid #2a2a2a",
         overflowY:"auto",flexShrink:0}},
         tickers.length===0
           ?ce("div",{style:{color:"#555",fontSize:12,textAlign:"center",padding:20}},"銘柄なし")
-          :tickers.map(function(t){
+          :tickers.map(function(t,idx){
             var cnt=meta.filter(function(m){return m.ticker===t;}).length;
             var isS=selTicker===t;
+            var isDO=dragOver===idx;
             return ce("div",{key:t,
+              draggable:true,
+              onDragStart:function(e){onDragStart(e,idx);},
+              onDragOver:function(e){onDragOver2(e,idx);},
+              onDrop:function(e){onDrop2(e,idx);},
+              onDragEnd:onDragEnd2,
               style:{display:"flex",alignItems:"center",borderBottom:"1px solid #1e1e1e",
-                background:isS?"#1e2a3a":"transparent",cursor:"pointer",
-                borderLeft:isS?"3px solid #6366F1":"3px solid transparent"}},
+                background:isS?"#1e2a3a":isDO?"#1a1a3a":"transparent",
+                borderLeft:isS?"3px solid #6366F1":isDO?"3px solid #6366F1":"3px solid transparent",
+                transition:"background .1s",opacity:dragSrcRef.current===idx?0.4:1}},
+              /* ドラッグハンドル */
+              ce("span",{style:{padding:"0 4px 0 6px",color:"#444",fontSize:14,cursor:"grab",flexShrink:0,
+                userSelect:"none",lineHeight:1}},"⠿"),
               ce("div",{onClick:function(){setSelTicker(t);},
-                style:{flex:1,padding:"13px 10px 13px 12px"}},
-                ce("div",{style:{fontSize:13,fontWeight:isS?700:400,color:isS?"#a5b4fc":"#ccc"}},t),
-                ce("div",{style:{fontSize:10,color:"#555",marginTop:2}},cnt+"件")
+                style:{flex:1,padding:"11px 6px 11px 4px",minWidth:0}},
+                ce("div",{style:{fontSize:12,fontWeight:isS?700:400,color:isS?"#a5b4fc":"#ccc",
+                  overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},t),
+                ce("div",{style:{fontSize:10,color:"#555",marginTop:1}},cnt+"件")
+              ),
+              /* ↑↓ ボタン（タッチ用） */
+              ce("div",{style:{display:"flex",flexDirection:"column",flexShrink:0,gap:1,padding:"0 3px"}},
+                ce("button",{onClick:function(e){e.stopPropagation();moveTicker(idx,-1);},
+                  style:Object.assign({},BT,{fontSize:9,color:"#555",background:"none",
+                    padding:"1px 3px",lineHeight:1})},IS_TOUCH?"↑":""),
+                ce("button",{onClick:function(e){e.stopPropagation();moveTicker(idx,1);},
+                  style:Object.assign({},BT,{fontSize:9,color:"#555",background:"none",
+                    padding:"1px 3px",lineHeight:1})},IS_TOUCH?"↓":"")
               ),
               ce("button",{onClick:function(e){e.stopPropagation();deleteTicker(t);},
-                style:Object.assign({},BT,{fontSize:12,color:"#555",padding:"4px 6px",
+                style:Object.assign({},BT,{fontSize:11,color:"#555",padding:"4px 5px",
                   background:"none",borderRadius:4,lineHeight:1,flexShrink:0})},"✕")
             );
           })
@@ -1988,11 +2186,12 @@ function DraftLibrary(props){
               var dateStr=new Date(m.savedAt).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
               return ce("div",{key:m.id,
                 style:{width:IS_TOUCH?150:170,background:"#1a1a1a",borderRadius:10,
-                  border:"1px solid #2a2a2a",overflow:"hidden",cursor:"pointer",flexShrink:0,
-                  transition:"border-color .15s"},
+                  border:"1px solid #2a2a2a",overflow:"hidden",cursor:"pointer",flexShrink:0},
                 onClick:function(){openChart(m.id);}},
                 ce("div",{style:{position:"relative"}},
-                  ce("img",{src:m.thumb,style:{width:"100%",display:"block",height:"auto"},draggable:false}),
+                  m.thumb?ce("img",{src:m.thumb,style:{width:"100%",display:"block",height:"auto"},draggable:false})
+                    :ce("div",{style:{width:"100%",height:80,background:"#222",display:"flex",alignItems:"center",
+                      justifyContent:"center",color:"#555",fontSize:11}},"no preview"),
                   ce("button",{
                     onClick:function(e){e.stopPropagation();deleteChart(m.id);},
                     style:Object.assign({},BT,{position:"absolute",top:4,right:4,
@@ -2250,6 +2449,7 @@ function App(){
 
   if(showDrafts){
     return ce(DraftLibrary,{
+      fbCfg:fbCfg,
       onOpen:function(d){setImg(d);setShowDrafts(false);},
       onClose:function(){setShowDrafts(false);}
     });
