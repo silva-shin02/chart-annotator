@@ -371,7 +371,7 @@ function drawStroke(ctx,s){
 
 /* ─── CancelConfirmModal ────────────────────────────────────── */
 function CancelConfirmModal(props){
-  var onJsonSave=props.onJsonSave, onClose=props.onClose, onBack=props.onBack;
+  var onClose=props.onClose, onBack=props.onBack;
   return ReactDOM.createPortal(
     ce("div",{
       onClick:function(e){if(e.target===e.currentTarget)onBack();},
@@ -387,11 +387,6 @@ function CancelConfirmModal(props){
           "保存されていない書き込みは消去されます。"
         ),
         ce("div",{style:{display:"flex",flexDirection:"column",gap:10}},
-          ce("button",{
-            onClick:function(){onJsonSave();onClose();},
-            style:{padding:"13px 0",fontSize:14,fontWeight:700,background:"#2563eb",color:"#fff",
-              border:"none",borderRadius:12,cursor:"pointer",width:"100%",fontFamily:"inherit"}
-          },"💾 JSONのみ保存して終わる"),
           ce("button",{
             onClick:onClose,
             style:{padding:"13px 0",fontSize:14,fontWeight:700,background:"#7f1d1d",color:"#fca5a5",
@@ -1306,8 +1301,6 @@ function ImageAnnotator(props){
     lnk.href=c4.toDataURL("image/png");
     lnk.download=(img.name||"image")+".png";
     lnk.click();
-    // JSON も同時保存
-    jsonSave();
     // ② 参照画像がある場合、両画像を連結した1枚も保存
     if(refPanel&&refPanel.url&&refImgDim){
       var ch=c4.height, cw=c4.width;
@@ -1333,24 +1326,6 @@ function ImageAnnotator(props){
       };
       refImg.src=refPanel.url;
     }
-  }
-
-  // ── JSON 保存：原画 + ストロークデータを .json として出力 ──
-  function jsonSave(){
-    var d=imgDataRef.current;
-    var data={
-      version:1,
-      name:img.name||"chart",
-      orig_base64:d.orig_base64||d.base64,
-      orig_mt:d.orig_mt||d.mt,
-      strokes:strokesRef.current
-    };
-    var blob=new Blob([JSON.stringify(data)],{type:"application/json"});
-    var a=document.createElement("a");
-    a.href=URL.createObjectURL(blob);
-    a.download=(img.name||"chart")+".json";
-    a.click();
-    URL.revokeObjectURL(a.href);
   }
 
   // ── Firebase クラウド保存 ──
@@ -1515,7 +1490,7 @@ function ImageAnnotator(props){
         },"💾 下書き保存"),
         /* Cancel / DL / Save */
         ce("button",{onClick:function(){setCancelConfirm(true);},style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#333",color:"#ccc"})},"分析を終了する"),
-        ce("button",{onClick:downloadPng,style:Object.assign({},TS,{fontSize:12,padding:"6px 12px",background:"#2563eb",color:"#fff",fontWeight:700})},"⬇ 全保存")
+        ce("button",{onClick:downloadPng,style:Object.assign({},TS,{fontSize:12,padding:"6px 12px",background:"#2563eb",color:"#fff",fontWeight:700})},"⬇ PNG保存")
       ),
       /* Row 2: color + lineW + opacity + zoom */
       ce("div",{style:{display:"flex",gap:IS_TOUCH?6:14,alignItems:"center",padding:IS_TOUCH?"5px 8px":"10px 14px",
@@ -2002,7 +1977,6 @@ function ImageAnnotator(props){
 
     /* ── キャンセル確認モーダル ── */
     cancelConfirm&&ce(CancelConfirmModal,{
-      onJsonSave:jsonSave,
       onClose:onClose,
       onBack:function(){setCancelConfirm(false);}
     }),
