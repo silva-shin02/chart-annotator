@@ -156,13 +156,22 @@ function _fbCheckLimits(u){
   }
 }
 function _fbShowBanner(text,bg){
+  // 既存バナーがあれば削除（重複防止）
+  var old=document.getElementById('_fb_banner');
+  if(old)old.remove();
   var el=document.createElement('div');
-  el.style.cssText='position:fixed;top:0;left:0;right:0;z-index:99999;padding:12px 16px;font-size:13px;font-weight:600;color:#fff;text-align:center;background:'+bg+';box-shadow:0 2px 8px rgba(0,0,0,0.3);';
+  el.id='_fb_banner';
+  el.style.cssText='position:fixed;top:0;left:50%;transform:translateX(-50%);z-index:99999;'
+    +'padding:10px 16px;font-size:13px;font-weight:600;color:#fff;text-align:center;'
+    +'background:'+bg+';box-shadow:0 2px 8px rgba(0,0,0,0.3);border-radius:0 0 12px 12px;'
+    +'max-width:90vw;pointer-events:none;';
   el.textContent=text;
-  var cl=document.createElement('span');cl.textContent=' ✕';cl.style.cssText='cursor:pointer;margin-left:12px;opacity:0.8;';
+  var cl=document.createElement('span');cl.textContent=' ✕';
+  cl.style.cssText='cursor:pointer;margin-left:12px;opacity:0.8;pointer-events:auto;';
   cl.onclick=function(){el.remove();};el.appendChild(cl);
   document.body.appendChild(el);
-  if(bg!=='#D32F2F')setTimeout(function(){el.remove();},8000);
+  var timeout=bg==='#D32F2F'?30000:8000;
+  setTimeout(function(){if(el.parentNode)el.remove();},timeout);
 }
 
 /* ─── Color Picker ─────────────────────────────────────────── */
@@ -2565,9 +2574,12 @@ function caLoadTrash(){try{var s=localStorage.getItem(CA_TRASH_KEY);return s?JSO
 function caSaveTrash(t){try{localStorage.setItem(CA_TRASH_KEY,JSON.stringify(t));}catch(e){}}
 function caGenId(){return Date.now().toString(36)+Math.random().toString(36).slice(2,6);}
 function caGenThumb(canvasEl){
-  var W=600,ratio=W/canvasEl.width,H=Math.round(canvasEl.height*ratio);
+  var W=Math.min(canvasEl.width,800),ratio=W/canvasEl.width,H=Math.round(canvasEl.height*ratio);
   var tc=document.createElement('canvas');tc.width=W;tc.height=H;
-  tc.getContext('2d').drawImage(canvasEl,0,0,W,H);
+  var ctx=tc.getContext('2d');
+  ctx.imageSmoothingEnabled=true;
+  ctx.imageSmoothingQuality='high';
+  ctx.drawImage(canvasEl,0,0,W,H);
   return tc.toDataURL('image/png');
 }
 
@@ -2600,28 +2612,58 @@ function DraftLibrary(props){
   function addImageDirect(file){
     if(!file||!file.type.startsWith('image/'))return;
     if(!selTicker){alert('銘柄を選択してください');return;}
+    var id=caGenId();
+    var savedAt=Date.now();
+    var chartName=file.name.replace(/\.[^.]+$/,'')||'chart';
+    // Phase 1: blob URLで即座にサムネイル表示（通信・変換なし）
+    var tempThumb=URL.createObjectURL(file);
+    setMeta(function(prev){
+      return prev.concat([{id:id,ticker:selTicker,name:chartName,savedAt:savedAt,thumb:tempThumb}]);
+    });
+    // Phase 2: バックグラウンドで読み込み + 高品質サムネイル生成
     var reader=new FileReader();
     reader.onload=function(ev){
       var dataUrl=ev.target.result;
       var parts=dataUrl.split(',');
       var b64=parts[1];
       var mt=parts[0].match(/data:([^;]+)/)[1];
-      var chartName=file.name.replace(/\.[^.]+$/,'')||'chart';
-      // サムネイル生成用にImageを読み込む
+      var data={orig_base64:b64,orig_mt:mt,strokes:[],name:chartName};
+      caSaveData(id,data);
       var tImg=new Image();
       tImg.onload=function(){
-        var W=600,ratio=W/tImg.width,H=Math.round(tImg.height*ratio);
+        URL.revokeObjectURL(tempThumb);
+        // PNG（ロスレス）で高品質サムネイル生成
+        var W=Math.min(tImg.width,800),ratio=W/tImg.width,H=Math.round(tImg.height*ratio);
         var tc=document.createElement('canvas');tc.width=W;tc.height=H;
-        tc.getContext('2d').drawImage(tImg,0,0,W,H);
+        var tctx=tc.getContext('2d');
+        tctx.imageSmoothingEnabled=true;
+        tctx.imageSmoothingQuality='high';
+        tctx.drawImage(tImg,0,0,W,H);
         var thumb=tc.toDataURL('image/png');
-        var id=caGenId();
-        var savedAt=Date.now();
-        var data={orig_base64:b64,orig_mt:mt,strokes:[],name:chartName};
         var metaItem={id:id,ticker:selTicker,name:chartName,savedAt:savedAt,thumb:thumb};
-        var nm=caLoadMeta().slice();nm.push(metaItem);
-        caSaveMeta(nm);caSaveData(id,data);
-        setMeta(nm);
-        // Firebase同期
+        // localStorage を先に更新
+        var stored=caLoadMeta().filter(function(m){return m.id!==id;});
+        stored.push(metaItem);
+        caSaveMeta(stored);
+        // React state 更新（functional update で複数追加の競合回避）
+        setMeta(function(prev){
+          var updated=false;
+          var nm=prev.map(function(m){if(m.id===id){updated=true;return metaItem;}return m;});
+          if(!updated)nm=nm.concat([metaItem]);
+          return nm;
+        });
+        fbSaveDraft(id,metaItem,data);
+      };
+      tImg.onerror=function(){
+        URL.revokeObjectURL(tempThumb);
+        var fallbackThumb=dataUrl.length<500000?dataUrl:'';
+        var metaItem={id:id,ticker:selTicker,name:chartName,savedAt:savedAt,thumb:fallbackThumb};
+        var stored=caLoadMeta().filter(function(m){return m.id!==id;});
+        stored.push(metaItem);
+        caSaveMeta(stored);
+        setMeta(function(prev){
+          return prev.map(function(m){return m.id===id?metaItem:m;});
+        });
         fbSaveDraft(id,metaItem,data);
       };
       tImg.src=dataUrl;
@@ -3314,6 +3356,21 @@ function VirtualJoystick(props){
 
 /* ─── App (drop zone) ──────────────────────────────────────── */
 function App(){
+  // 起動時に画面上部のクリックブロッカーを検出・除去
+  useEffect(function(){
+    var b=document.getElementById('_fb_banner');if(b)b.remove();
+    // body直下の不要要素を検出除去（500ms後にチェック）
+    var tid=setTimeout(function(){
+      var root=document.getElementById('root');
+      var cx=window.innerWidth/2, cy=40;
+      var el=document.elementFromPoint(cx,cy);
+      if(el&&el!==document.body&&el!==document.documentElement&&root&&!root.contains(el)){
+        console.warn('[CA] Removed blocking element at center-top:',el.tagName,el.id,el.className,el.style.cssText);
+        el.remove();
+      }
+    },500);
+    return function(){clearTimeout(tid);};
+  },[]);
   var s0=useState(function(){
     // リロード時にセッションから復元
     try{
