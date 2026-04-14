@@ -1036,7 +1036,10 @@ function ImageAnnotator(props){
       try{sessionStorage.setItem('ca_session',JSON.stringify({
         orig_base64:imgData.orig_base64||imgData.base64,
         orig_mt:imgData.orig_mt||imgData.mt,
-        name:imgData.name||img.name||'chart',
+        name:imgData.name||img._name||img.name||'chart',
+        _draftId:img._draftId||null,
+        _ticker:img._ticker||'',
+        _name:img._name||img.name||'',
         strokes:saved
       }));}catch(e){}
     };
@@ -1147,7 +1150,7 @@ function ImageAnnotator(props){
         // meta
         uploadThumbToStorage(cfg2,draftId,thumb).then(function(thumbUrl){
           if(_fbForcePaused)return;
-          var metaDb={ticker:img._ticker||'',name:img.name||'chart',savedAt:savedAt};
+          var metaDb={ticker:img._ticker||'',name:img._name||img.name||'chart',savedAt:savedAt};
           if(thumbUrl)metaDb.thumbUrl=thumbUrl;
           var metaBody=JSON.stringify(metaDb);
           _fbTrack('db_ul',metaBody.length);
@@ -1157,8 +1160,8 @@ function ImageAnnotator(props){
         });
         // data
         var draftData=imageUrl
-          ?{imageUrl:imageUrl,orig_mt:mt,strokes:strokes,name:img.name||'chart'}
-          :{orig_base64:b64,orig_mt:mt,strokes:strokes,name:img.name||'chart'};
+          ?{imageUrl:imageUrl,orig_mt:mt,strokes:strokes,name:img._name||img.name||'chart'}
+          :{orig_base64:b64,orig_mt:mt,strokes:strokes,name:img._name||img.name||'chart'};
         var dataBody=JSON.stringify(draftData);
         _fbTrack('db_ul',dataBody.length);
         fetch(draftDataBase+'/'+draftId+'.json'+auth,{method:'PUT',
@@ -1723,7 +1726,7 @@ function ImageAnnotator(props){
     var d=imgDataRef.current;
     var id=savedDraftIdRef.current;
     var ticker=savedTickerRef.current;
-    var chartName=img.name||'chart';
+    var chartName=img._name||img.name||'chart';
     var b64=d.orig_base64||d.base64;
     var mt=d.orig_mt||d.mt||'image/png';
     var data={orig_base64:b64,orig_mt:mt,strokes:strokesRef.current,name:chartName};
@@ -2424,14 +2427,40 @@ function ImageAnnotator(props){
 
     /* ── キャンセル確認モーダル ── */
     cancelConfirm&&ce(CancelConfirmModal,{
-      onClose:function(){onClose(savedTickerRef.current||img._ticker||null);},
+      onClose:function(){
+        // ── エディタ終了時にlocalStorageを更新（Firebase通信なし） ──
+        var id=savedDraftIdRef.current||img._draftId;
+        if(id){
+          var d=imgDataRef.current;
+          var chartName=img._name||img.name||'chart';
+          var data={orig_base64:d.orig_base64||d.base64,orig_mt:d.orig_mt||d.mt,
+            strokes:strokesRef.current,name:chartName};
+          caSaveData(id,data);
+          // メタも更新（サムネイル + 名前 + 保存日時）
+          rebuild(strokesRef.current);
+          var thumb=canvasRef.current?caGenThumb(canvasRef.current):(img._thumb||'');
+          var now=Date.now();
+          var localMeta=caLoadMeta();
+          var found=false;
+          var nm=localMeta.map(function(m){
+            if(m.id===id){found=true;return Object.assign({},m,{name:chartName,thumb:thumb,savedAt:now});}
+            return m;
+          });
+          if(!found){
+            var ticker=savedTickerRef.current||img._ticker||'';
+            nm.push({id:id,ticker:ticker,name:chartName,savedAt:now,thumb:thumb});
+          }
+          caSaveMeta(nm);
+        }
+        onClose(savedTickerRef.current||img._ticker||null);
+      },
       onBack:function(){setCancelConfirm(false);}
     }),
 
     /* ── 下書き保存モーダル ── */
     showLocalSave&&ce(LocalSaveModal,{
       tickers:caLoadTickers(),
-      defaultName:img.name||'chart',
+      defaultName:img._name||img.name||'chart',
       onSave:function(ticker,name){
         rebuild(strokesRef.current);
         var thumb=caGenThumb(canvasRef.current);
@@ -2872,7 +2901,7 @@ function DraftLibrary(props){
   }
   function openChart(id){
     var mi=meta.find(function(m){return m.id===id;});
-    var extra={_draftId:id,_ticker:mi?mi.ticker:'',_thumb:mi?mi.thumb:'',_savedAt:mi?mi.savedAt:0};
+    var extra={_draftId:id,_ticker:mi?mi.ticker:'',_name:mi?mi.name:'',_thumb:mi?mi.thumb:'',_savedAt:mi?mi.savedAt:0};
     var d=caLoadData(id);
     if(d&&(d.orig_base64||d.base64)){onOpen(Object.assign({},d,extra));return;}
     if(!fbCfg.url||_fbForcePaused){alert('データが見つかりません');return;}
