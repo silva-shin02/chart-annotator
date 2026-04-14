@@ -987,6 +987,9 @@ function ImageAnnotator(props){
           loadedSavedAtRef.current=savedAt;
           setRemoteUpdate(false);
         }
+      }).catch(function(e){
+        console.error('triggerAutoSave:',e);
+        setAutoSaveStatus('err');setTimeout(function(){setAutoSaveStatus(null);},3000);
       });
     },600);
   }
@@ -1026,7 +1029,7 @@ function ImageAnnotator(props){
           if(timeSinceCommit>45000){
             fetch(dataUrl).then(function(r){return r.ok?r.json():null;})
               .then(function(fbData){
-                if(!fbData||!fbData.strokes)return;
+                if(!fbData||typeof fbData!=='object'||fbData.error||!fbData.strokes)return;
                 var newStrokes=fbData.strokes;
                 strokesRef.current=newStrokes;
                 histRef.current=[newStrokes]; futRef.current=[];
@@ -2418,21 +2421,21 @@ function DraftLibrary(props){
     fetch(makeFbTickersUrl())
       .then(function(r){return r.ok?r.json():null;})
       .then(function(fbTickers){
-        if(fbTickers&&Array.isArray(fbTickers)){setTickers(fbTickers);caSaveTickers(fbTickers);}
-      }).catch(function(){});
+        if(fbTickers&&Array.isArray(fbTickers)&&fbTickers.length>0){setTickers(fbTickers);caSaveTickers(fbTickers);}
+      }).catch(function(e){console.error('fetchFromFirebase tickers:',e);});
 
     // ドラフトメタ同期（/chart-annotator-drafts にはメタしか入っていない）
     fetch(base+'.json'+auth)
       .then(function(r){return r.ok?r.json():null;})
       .then(function(fbMeta){
         setSyncStatus(null);
-        if(fbMeta===null)return;
-        var fbIds=Object.keys(fbMeta||{});
+        // null、非オブジェクト、エラー応答の場合はローカルデータをそのまま維持
+        if(!fbMeta||typeof fbMeta!=='object'||fbMeta.error||Array.isArray(fbMeta))return;
+        var fbIds=Object.keys(fbMeta);
         var localMeta=caLoadMeta();
         var merged=[];
         fbIds.forEach(function(id){
-          var d=fbMeta[id]; if(!d)return;
-          // localStorageにthumbがあればそれを優先、なければthumbUrlを使用
+          var d=fbMeta[id]; if(!d||typeof d!=='object')return;
           var local=localMeta.find(function(m){return m.id===id;});
           var resolvedThumb=(local&&local.thumb)?local.thumb:(d.thumbUrl||d.thumb||'');
           merged.push({id:id,ticker:d.ticker||'未分類',name:d.name||id,
@@ -2443,18 +2446,18 @@ function DraftLibrary(props){
         });
         setMeta(merged);caSaveMeta(merged);
       })
-      .catch(function(){setSyncStatus(null);});
+      .catch(function(e){console.error('fetchFromFirebase drafts:',e);setSyncStatus(null);});
 
     // ゴミ箱メタ同期
     fetch(trashBase+'.json'+auth)
       .then(function(r){return r.ok?r.json():null;})
       .then(function(fbTrashMeta){
-        if(!fbTrashMeta)return;
+        if(!fbTrashMeta||typeof fbTrashMeta!=='object'||fbTrashMeta.error||Array.isArray(fbTrashMeta))return;
         var localTrash=caLoadTrash();
         var fbIds=Object.keys(fbTrashMeta);
         var merged=localTrash.slice();
         fbIds.forEach(function(id){
-          var d=fbTrashMeta[id]; if(!d)return;
+          var d=fbTrashMeta[id]; if(!d||typeof d!=='object')return;
           if(!merged.find(function(m){return m.id===id;})){
             var lt=localTrash.find(function(m){return m.id===id;});
             var rt=(lt&&lt.thumb)?lt.thumb:(d.thumbUrl||d.thumb||'');
@@ -2462,7 +2465,7 @@ function DraftLibrary(props){
           }
         });
         setTrash(merged);caSaveTrash(merged);
-      }).catch(function(){});
+      }).catch(function(e){console.error('fetchFromFirebase trash:',e);});
   }
 
   useEffect(function(){
