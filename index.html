@@ -455,12 +455,46 @@ function FbSettingsModal(props){
   var s0=useState(cfg.url||'');    var url=s0[0],setUrl=s0[1];
   var s1=useState(cfg.secret||''); var secret=s1[0],setSecret=s1[1];
   var s2=useState(cfg.storageBucket||''); var bucket=s2[0],setBucket=s2[1];
-  var s3=useState(cfg.paused!==false); var paused=s3[0],setPaused=s3[1]; // デフォルトON
+  var s3=useState(cfg.paused!==false); var paused=s3[0],setPaused=s3[1];
+  var s4=useState(null); var cleanupStatus=s4[0],setCleanupStatus=s4[1]; // null|'running'|'done:N'|'error'
   function save(){
     var nc={url:url.trim(),secret:secret.trim(),storageBucket:bucket.trim(),paused:paused};
     try{localStorage.setItem(FB_CFG_KEY,JSON.stringify(nc));}catch(e){}
     _fbApp=null;_fbStorage=null;
     onSave(nc); onClose();
+  }
+  function runCleanup(){
+    var u=url.trim(); if(!u){setCleanupStatus('error: URLが未設定');return;}
+    var a=secret.trim()?'?auth='+secret.trim():'';
+    setCleanupStatus('running');
+    var count=0;
+    var draftsBase=u.replace(/\/$/,'')+'/chart-annotator-drafts';
+    var trashBase=u.replace(/\/$/,'')+'/chart-annotator-trash';
+    function cleanPath(base){
+      return fetch(base+'.json'+a).then(function(r){return r.ok?r.json():null;})
+        .then(function(all){
+          if(!all||typeof all!=='object'||all.error)return;
+          var ids=Object.keys(all);
+          var proms=[];
+          ids.forEach(function(id){
+            var item=all[id]; if(!item||typeof item!=='object')return;
+            // thumbフィールド（base64 dataURL）があれば削除
+            if(item.thumb&&typeof item.thumb==='string'&&item.thumb.length>200){
+              proms.push(fetch(base+'/'+id+'/thumb.json'+a,{method:'DELETE'}));
+              count++;
+            }
+            // dataフィールド（orig_base64含む重いデータ）があれば削除
+            if(item.data&&typeof item.data==='object'){
+              proms.push(fetch(base+'/'+id+'/data.json'+a,{method:'DELETE'}));
+              count++;
+            }
+          });
+          return Promise.all(proms);
+        });
+    }
+    Promise.all([cleanPath(draftsBase),cleanPath(trashBase)])
+      .then(function(){setCleanupStatus('done:'+count);})
+      .catch(function(e){console.error('cleanup:',e);setCleanupStatus('error: '+e.message);});
   }
   var INP={width:"100%",padding:"10px 12px",background:"#2a2a2a",border:"1px solid #3a3a3a",
     borderRadius:10,color:"#fff",fontSize:13,outline:"none",boxSizing:"border-box"};
@@ -508,6 +542,31 @@ function FbSettingsModal(props){
             ce("input",{type:"text",value:bucket,onChange:function(e){setBucket(e.target.value);},
               placeholder:"scalping-notebbok.firebasestorage.app",style:INP}),
             ce("div",{style:{fontSize:10,color:"#555",marginTop:4}},"Firebase Console → Storage で確認できます")
+          ),
+          /* ── 旧データクリーンアップ ── */
+          ce("div",{style:{background:"#1a1a1a",borderRadius:10,padding:"10px 12px",
+            border:"1px solid #2a2a2a"}},
+            ce("div",{style:{display:"flex",alignItems:"center",gap:8}},
+              ce("div",{style:{flex:1}},
+                ce("div",{style:{fontSize:12,fontWeight:700,color:"#ccc"}},"旧データをDBから削除"),
+                ce("div",{style:{fontSize:10,color:"#666",marginTop:2,lineHeight:1.5}},
+                  "DBに残っているBase64画像・サムネイルを削除し帯域を節約します。",ce("br",null),
+                  "localStorageのデータには影響しません。")
+              ),
+              ce("button",{
+                onClick:cleanupStatus==='running'?null:function(){
+                  if(!window.confirm('Firebase DB内の旧Base64データ（thumb, data）を削除します。\nlocalStorageには影響しません。実行しますか？'))return;
+                  runCleanup();
+                },
+                style:{fontSize:11,fontWeight:700,padding:"8px 14px",borderRadius:8,border:"none",
+                  cursor:cleanupStatus==='running'?'wait':'pointer',fontFamily:"inherit",flexShrink:0,
+                  background:cleanupStatus==='running'?'#333':'#b91c1c',color:'#fff'}
+              },cleanupStatus==='running'?'⏳ 実行中…':'🗑 実行')
+            ),
+            cleanupStatus&&cleanupStatus.indexOf('done:')===0&&ce("div",{style:{fontSize:11,color:"#86efac",marginTop:8,fontWeight:600}},
+              "✓ 完了！ "+cleanupStatus.split(':')[1]+"件のフィールドを削除しました"),
+            cleanupStatus&&cleanupStatus.indexOf('error')===0&&ce("div",{style:{fontSize:11,color:"#fca5a5",marginTop:8}},
+              "✕ "+cleanupStatus)
           ),
           ce("div",{style:{display:"flex",gap:10,marginTop:4}},
             ce("button",{onClick:onClose,
