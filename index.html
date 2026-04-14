@@ -520,6 +520,9 @@ function ImageAnnotator(props){
   var autoSaveTimerRef=useRef(null);
   var loadedSavedAtRef=useRef(0);
   var lastLocalCommitRef=useRef(0);
+  var savedDraftIdRef=useRef(img._draftId||null);
+  var savedTickerRef=useRef(img._ticker||'');
+  var postSaveCallbackRef=useRef(null);
   var baseRef=useRef(null);
   var overlayCanvasRef=useRef(null);
   var strokesRef=useRef([]);
@@ -1293,39 +1296,69 @@ function ImageAnnotator(props){
       strokes:[]};
     if(onSave)onSave(saved);
   }
-  function downloadPng(){
+  function downloadCombined(){
     rebuild(strokesRef.current);
     var c4=canvasRef.current;
-    // ① メインチャート単体
-    var lnk=document.createElement("a");
-    lnk.href=c4.toDataURL("image/png");
-    lnk.download=(img.name||"image")+".png";
-    lnk.click();
-    // ② 参照画像がある場合、両画像を連結した1枚も保存
-    if(refPanel&&refPanel.url&&refImgDim){
-      var ch=c4.height, cw=c4.width;
-      // 参照画像をメインキャンバスと同じ高さにスケール
-      var rw=Math.round(refImgDim.w*ch/refImgDim.h);
-      // refOffsetY（wrapper論理px）→ キャンバスpx に変換
-      var offsetPx=Math.round(refOffsetY*(ch/(dispH||ch)));
-      // 縦方向のレイアウト（オフセット方向によって全高が変わる）
-      var totalH, refY, mainY;
-      if(offsetPx>=0){refY=offsetPx; mainY=0; totalH=ch+offsetPx;}
-      else{refY=0; mainY=-offsetPx; totalH=ch+(-offsetPx);}
-      var combined=document.createElement("canvas");
-      combined.width=rw+cw; combined.height=totalH;
-      var cctx=combined.getContext("2d");
-      var refImg=new Image();
-      refImg.onload=function(){
-        cctx.drawImage(refImg,0,refY,rw,ch);
-        cctx.drawImage(c4,rw,mainY);
-        var lnk2=document.createElement("a");
-        lnk2.href=combined.toDataURL("image/png");
-        var now=new Date();var ds=now.getFullYear()+('0'+(now.getMonth()+1)).slice(-2)+('0'+now.getDate()).slice(-2);
-        lnk2.download=ds+"_combined.png";
-        lnk2.click();
-      };
-      refImg.src=refPanel.url;
+    if(!(refPanel&&refPanel.url&&refImgDim))return;
+    var ch=c4.height, cw=c4.width;
+    var rw=Math.round(refImgDim.w*ch/refImgDim.h);
+    var offsetPx=Math.round(refOffsetY*(ch/(dispH||ch)));
+    var totalH, refY, mainY;
+    if(offsetPx>=0){refY=offsetPx; mainY=0; totalH=ch+offsetPx;}
+    else{refY=0; mainY=-offsetPx; totalH=ch+(-offsetPx);}
+    var combined=document.createElement("canvas");
+    combined.width=rw+cw; combined.height=totalH;
+    var cctx=combined.getContext("2d");
+    var refImg2=new Image();
+    refImg2.onload=function(){
+      cctx.drawImage(refImg2,0,refY,rw,ch);
+      cctx.drawImage(c4,rw,mainY);
+      var lnk2=document.createElement("a");
+      lnk2.href=combined.toDataURL("image/png");
+      var now=new Date();var ds=now.getFullYear()+('0'+(now.getMonth()+1)).slice(-2)+('0'+now.getDate()).slice(-2);
+      lnk2.download=ds+"_combined.png";
+      lnk2.click();
+    };
+    refImg2.src=refPanel.url;
+  }
+  function saveDraftSilent(){
+    rebuild(strokesRef.current);
+    var thumb=caGenThumb(canvasRef.current);
+    var d=imgDataRef.current;
+    var id=savedDraftIdRef.current;
+    var ticker=savedTickerRef.current;
+    var chartName=img.name||'chart';
+    var data={orig_base64:d.orig_base64||d.base64,orig_mt:d.orig_mt||d.mt,
+      strokes:strokesRef.current,name:chartName};
+    var savedAt=Date.now();
+    var metaItem={id:id,ticker:ticker,name:chartName,savedAt:savedAt,thumb:thumb};
+    var nm=caLoadMeta().filter(function(m){return m.id!==id;});
+    nm.push(metaItem);
+    caSaveMeta(nm);caSaveData(id,data);
+    // Firebase同期
+    var cfg=props.fbCfg;
+    if(cfg&&cfg.url){
+      var base=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts';
+      var auth=cfg.secret?'?auth='+cfg.secret:'';
+      fetch(base+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ticker:ticker,name:chartName,savedAt:savedAt,thumb:thumb,data:data})})
+        .catch(function(e){console.error('fbSyncDraft:',e);});
+      // タイムスタンプ
+      var tsBase=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-ts';
+      fetch(tsBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({t:savedAt})}).catch(function(){});
+      loadedSavedAtRef.current=savedAt;
+    }
+  }
+  function saveAndExport(){
+    if(savedDraftIdRef.current){
+      // _draftIdあり → サイレント上書き + combined出力
+      saveDraftSilent();
+      downloadCombined();
+    }else{
+      // _draftIdなし → モーダルで銘柄選択、保存後にcombined出力
+      postSaveCallbackRef.current=function(){downloadCombined();};
+      setShowLocalSave(true);
     }
   }
 
@@ -1491,7 +1524,7 @@ function ImageAnnotator(props){
         },"💾 下書き保存"),
         /* Cancel / DL / Save */
         ce("button",{onClick:function(){setCancelConfirm(true);},style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#333",color:"#ccc"})},"分析を終了する"),
-        ce("button",{onClick:downloadPng,style:Object.assign({},TS,{fontSize:12,padding:"6px 12px",background:"#2563eb",color:"#fff",fontWeight:700})},"⬇ PNG保存")
+        ce("button",{onClick:saveAndExport,style:Object.assign({},TS,{fontSize:12,padding:"6px 12px",background:"#2563eb",color:"#fff",fontWeight:700})},"💾 保存・出力")
       ),
       /* Row 2: color + lineW + opacity + zoom */
       ce("div",{style:{display:"flex",gap:IS_TOUCH?6:14,alignItems:"center",padding:IS_TOUCH?"5px 8px":"10px 14px",
@@ -1998,6 +2031,9 @@ function ImageAnnotator(props){
         var nm=caLoadMeta().filter(function(m){return !(m.ticker===ticker&&m.name===name);});
         nm.push(metaItem);
         caSaveMeta(nm); caSaveData(id,data);
+        // draftId を記録（以後のセッションでサイレント上書き可能に）
+        savedDraftIdRef.current=id;
+        savedTickerRef.current=ticker;
         // Firebase同期
         var cfg=props.fbCfg;
         if(cfg&&cfg.url){
@@ -2007,8 +2043,10 @@ function ImageAnnotator(props){
             body:JSON.stringify({ticker:ticker,name:name,savedAt:metaItem.savedAt,thumb:thumb,data:data})})
             .catch(function(e){console.error('fbSyncDraft:',e);});
         }
+        // post-save callback（保存・出力からの呼び出し時にcombined出力）
+        if(postSaveCallbackRef.current){postSaveCallbackRef.current();postSaveCallbackRef.current=null;}
       },
-      onClose:function(){setShowLocalSave(false);}
+      onClose:function(){setShowLocalSave(false);postSaveCallbackRef.current=null;}
     })
 
   ); /* end return */
