@@ -80,6 +80,15 @@ function storageUrlToBase64(url){
       });
     });
 }
+function uploadThumbToStorage(cfg,id,thumbDataUrl){
+  if(!cfg||!cfg.storageBucket||!thumbDataUrl||thumbDataUrl.indexOf(',')<0)return Promise.resolve(null);
+  var b64=thumbDataUrl.split(',')[1]; if(!b64)return Promise.resolve(null);
+  var st=getFirebaseStorage(cfg); if(!st)return Promise.resolve(null);
+  var blob=base64ToBlob(b64,'image/png');
+  var ref=st.ref('chart-thumbs/'+id+'.png');
+  return ref.put(blob).then(function(){return ref.getDownloadURL();})
+    .catch(function(e){console.error('Thumb upload:',e);return null;});
+}
 
 /* ─── Color Picker ─────────────────────────────────────────── */
 var ANNOT_PRESET_KEY = 'scalping_annot_presets_v1';
@@ -955,11 +964,14 @@ function ImageAnnotator(props){
           var draftBase=cfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts';
           var draftDataBase=cfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
           var thumb=canvasRef.current?caGenThumb(canvasRef.current):(img._thumb||'');
-          // meta
-          fetch(draftBase+'/'+draftId+'.json'+auth,{method:'PUT',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({ticker:img._ticker||'',name:img.name||'chart',savedAt:savedAt,thumb:thumb})})
-            .catch(function(e){console.error('draft meta sync:',e);});
+          // meta（thumbをStorageに→thumbUrlのみDB保存）
+          uploadThumbToStorage(cfg2,draftId,thumb).then(function(thumbUrl){
+            var metaDb={ticker:img._ticker||'',name:img.name||'chart',savedAt:savedAt};
+            if(thumbUrl)metaDb.thumbUrl=thumbUrl;
+            fetch(draftBase+'/'+draftId+'.json'+auth,{method:'PUT',
+              headers:{'Content-Type':'application/json'},body:JSON.stringify(metaDb)})
+              .catch(function(e){console.error('draft meta sync:',e);});
+          });
           // data（imageUrlがあればbase64を含めない）
           var draftData=imageUrl
             ?{imageUrl:imageUrl,orig_mt:mt,strokes:strokes,name:img.name||'chart'}
@@ -1549,10 +1561,13 @@ function ImageAnnotator(props){
       var auth=cfg.secret?'?auth='+cfg.secret:'';
       var draftBase=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts';
       var draftDataBase=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
-      // meta
-      fetch(draftBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({ticker:ticker,name:chartName,savedAt:savedAt,thumb:thumb})})
-        .catch(function(e){console.error('fbSyncDraft meta:',e);});
+      // meta（thumbをStorage→thumbUrlのみDB）
+      uploadThumbToStorage(cfg,id,thumb).then(function(thumbUrl){
+        var metaDb={ticker:ticker,name:chartName,savedAt:savedAt};
+        if(thumbUrl)metaDb.thumbUrl=thumbUrl;
+        fetch(draftBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify(metaDb)}).catch(function(e){console.error('fbSyncDraft meta:',e);});
+      });
       // data（imageUrlがあればbase64省略）
       var urlP=imageStorageUrlRef.current?Promise.resolve(imageStorageUrlRef.current)
         :cfg.storageBucket&&b64?uploadToStorage(cfg,id,b64,mt).then(function(u){if(u)imageStorageUrlRef.current=u;return u;})
@@ -2265,10 +2280,13 @@ function ImageAnnotator(props){
           var fbAuth=cfg.secret?'?auth='+cfg.secret:'';
           var draftBase=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts';
           var draftDataBase=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
-          // meta
-          fetch(draftBase+'/'+id+'.json'+fbAuth,{method:'PUT',headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({ticker:ticker,name:name,savedAt:metaItem.savedAt,thumb:thumb})})
-            .catch(function(e){console.error('fbSyncDraft meta:',e);});
+          // meta（thumbをStorage→thumbUrlのみDB）
+          uploadThumbToStorage(cfg,id,thumb).then(function(thumbUrl){
+            var metaDb={ticker:ticker,name:name,savedAt:metaItem.savedAt};
+            if(thumbUrl)metaDb.thumbUrl=thumbUrl;
+            fetch(draftBase+'/'+id+'.json'+fbAuth,{method:'PUT',headers:{'Content-Type':'application/json'},
+              body:JSON.stringify(metaDb)}).catch(function(e){console.error('fbSyncDraft meta:',e);});
+          });
           // data（Storage→imageUrl or base64フォールバック）
           var b64s=data.orig_base64||data.base64;
           var mts=data.orig_mt||data.mt||'image/png';
@@ -2414,8 +2432,11 @@ function DraftLibrary(props){
         var merged=[];
         fbIds.forEach(function(id){
           var d=fbMeta[id]; if(!d)return;
+          // localStorageにthumbがあればそれを優先、なければthumbUrlを使用
+          var local=localMeta.find(function(m){return m.id===id;});
+          var resolvedThumb=(local&&local.thumb)?local.thumb:(d.thumbUrl||d.thumb||'');
           merged.push({id:id,ticker:d.ticker||'未分類',name:d.name||id,
-            savedAt:d.savedAt||0,thumb:d.thumb||''});
+            savedAt:d.savedAt||0,thumb:resolvedThumb,thumbUrl:d.thumbUrl||''});
         });
         localMeta.forEach(function(m){
           if(!fbIds.includes(m.id)&&(now-(m.savedAt||0)<90000))merged.push(m);
@@ -2434,8 +2455,11 @@ function DraftLibrary(props){
         var merged=localTrash.slice();
         fbIds.forEach(function(id){
           var d=fbTrashMeta[id]; if(!d)return;
-          if(!merged.find(function(m){return m.id===id;}))
-            merged.push({id:id,ticker:d.ticker||'',name:d.name||id,savedAt:d.savedAt||0,thumb:d.thumb||''});
+          if(!merged.find(function(m){return m.id===id;})){
+            var lt=localTrash.find(function(m){return m.id===id;});
+            var rt=(lt&&lt.thumb)?lt.thumb:(d.thumbUrl||d.thumb||'');
+            merged.push({id:id,ticker:d.ticker||'',name:d.name||id,savedAt:d.savedAt||0,thumb:rt,thumbUrl:d.thumbUrl||''});
+          }
         });
         setTrash(merged);caSaveTrash(merged);
       }).catch(function(){});
@@ -2453,12 +2477,16 @@ function DraftLibrary(props){
   function fbSaveDraft(id,metaItem,data){
     var base=makeDraftsBase(), dataBase=makeDraftsDataBase();
     if(!base)return;
-    // meta → /chart-annotator-drafts/{id}（軽量・即時）
-    fetch(base+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({ticker:metaItem.ticker,name:metaItem.name,
-        savedAt:metaItem.savedAt,thumb:metaItem.thumb})})
-      .catch(function(e){console.error('fbSaveDraft meta:',e);});
-    // data → Storage にアップロード → DB に imageUrl + strokes のみ保存
+    // meta: thumbをStorageにアップ→ thumbUrlだけDBに保存
+    var thumbP=metaItem.thumb?uploadThumbToStorage(fbCfg,id,metaItem.thumb):Promise.resolve(null);
+    thumbP.then(function(thumbUrl){
+      var metaDb={ticker:metaItem.ticker,name:metaItem.name,savedAt:metaItem.savedAt};
+      if(thumbUrl)metaDb.thumbUrl=thumbUrl;
+      fetch(base+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(metaDb)})
+        .catch(function(e){console.error('fbSaveDraft meta:',e);});
+    });
+    // data: 画像をStorageにアップ→ imageUrlだけDBに保存
     if(data){
       var b64=data.orig_base64||data.base64;
       var mt=data.orig_mt||data.mt||'image/png';
@@ -2466,14 +2494,11 @@ function DraftLibrary(props){
         uploadToStorage(fbCfg,id,b64,mt).then(function(imageUrl){
           var dbData={imageUrl:imageUrl,orig_mt:mt,strokes:data.strokes||[],name:data.name||''};
           fetch(dataBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
-            body:JSON.stringify(dbData)})
-            .catch(function(e){console.error('fbSaveDraft data:',e);});
+            body:JSON.stringify(dbData)}).catch(function(e){console.error('fbSaveDraft data:',e);});
         });
       }else{
-        // Storage未設定時は従来通り（base64含む）
         fetch(dataBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify(data)})
-          .catch(function(e){console.error('fbSaveDraft data:',e);});
+          body:JSON.stringify(data)}).catch(function(e){console.error('fbSaveDraft data:',e);});
       }
     }
   }
@@ -2488,10 +2513,15 @@ function DraftLibrary(props){
   function fbMoveToTrash(id,metaItem,data){
     var trashBase=makeTrashBase(), trashDataBase=makeTrashDataBase();
     if(!trashBase)return;
-    fetch(trashBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({ticker:metaItem.ticker||'',name:metaItem.name||'',
-        savedAt:metaItem.savedAt||0,thumb:metaItem.thumb||'',deletedAt:metaItem.deletedAt||Date.now()})})
-      .catch(function(){});
+    var trashDb={ticker:metaItem.ticker||'',name:metaItem.name||'',
+      savedAt:metaItem.savedAt||0,deletedAt:metaItem.deletedAt||Date.now()};
+    // thumbUrlがあればそれを使い、なければthumbをStorageにアップ
+    var tp=metaItem.thumbUrl?Promise.resolve(metaItem.thumbUrl)
+      :metaItem.thumb?uploadThumbToStorage(fbCfg,'trash_'+id,metaItem.thumb):Promise.resolve(null);
+    tp.then(function(tu){if(tu)trashDb.thumbUrl=tu;
+      fetch(trashBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(trashDb)}).catch(function(){});
+    });
     if(data){
       fetch(trashDataBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
         body:JSON.stringify(data)}).catch(function(){});
