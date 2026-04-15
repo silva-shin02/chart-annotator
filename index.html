@@ -75,14 +75,16 @@ function uploadToStorage(cfg,id,b64,mt){
     .catch(function(e){console.error('Storage upload:',e);return null;});
 }
 function storageUrlToBase64(url){
-  if(_fbForcePaused)return Promise.reject(new Error('Firebase paused'));
-  return fetch(url).then(function(r){return r.blob();})
+  return fetch(url).then(function(r){
+    if(!r.ok)throw new Error('Storage HTTP '+r.status);
+    return r.blob();
+  })
     .then(function(blob){
       _fbTrack('st_dl',blob.size);
       return new Promise(function(resolve,reject){
         var rd=new FileReader();
         rd.onload=function(){var parts=rd.result.split(',');resolve({base64:parts[1],mt:blob.type||'image/png'});};
-        rd.onerror=reject;
+        rd.onerror=function(){reject(new Error('FileReader failed'));};
         rd.readAsDataURL(blob);
       });
     });
@@ -739,7 +741,7 @@ function RefChartPicker(props){
       onSelect('data:'+mt+';base64,'+b);
       return;
     }
-    if(fbCfg.url&&!_fbForcePaused){
+    if(fbCfg.url){
       var dataBase=fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
       var oldBase=fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts';
       var auth=fbCfg.secret?'?auth='+fbCfg.secret:'';
@@ -748,7 +750,6 @@ function RefChartPicker(props){
           if(txt)_fbTrack('db_dl',txt.length);
           var fbData=txt?JSON.parse(txt):null;
           if(!fbData){
-            if(_fbForcePaused){alert('画像データが見つかりません');return;}
             return fetch(oldBase+'/'+id+'.json'+auth).then(function(r2){return r2.ok?r2.text():null;})
               .then(function(txt2){
                 if(txt2)_fbTrack('db_dl',txt2.length);
@@ -775,7 +776,7 @@ function RefChartPicker(props){
             });
           }
           alert('画像データが見つかりません');
-        }).catch(function(){alert('読込失敗');});
+        }).catch(function(e){console.error('[pickChart] Error:',e);alert('読込失敗: '+(e&&e.message?e.message:'不明'));});
     }else{
       alert('画像データが見つかりません');
     }
@@ -3143,7 +3144,7 @@ function DraftLibrary(props){
     var extra={_draftId:id,_ticker:mi?mi.ticker:'',_name:mi?mi.name:'',_thumb:mi?mi.thumb:'',_savedAt:mi?mi.savedAt:0};
     var d=caLoadData(id);
     if(d&&(d.orig_base64||d.base64)){onOpen(Object.assign({},d,extra));return;}
-    if(!fbCfg.url||_fbForcePaused){alert('データが見つかりません');return;}
+    if(!fbCfg.url){alert('データが見つかりません（Firebase未設定）');return;}
     var dataBase=makeDraftsDataBase();
     var oldBase=makeDraftsBase();
     setSyncStatus('loading');
@@ -3152,7 +3153,6 @@ function DraftLibrary(props){
         if(txt)_fbTrack('db_dl',txt.length);
         var fbData=txt?JSON.parse(txt):null;
         if(!fbData){
-          if(_fbForcePaused){setSyncStatus(null);alert('データが見つかりません');return;}
           // 新パスにデータなし → 旧パスフォールバック
           return fetch(oldBase+'/'+id+'.json'+auth).then(function(r2){return r2.ok?r2.text():null;})
             .then(function(txt2){
@@ -3176,10 +3176,28 @@ function DraftLibrary(props){
               strokes:fbData.strokes||[],name:fbData.name||''};
             caSaveData(id,localData);setSyncStatus(null);
             onOpen(Object.assign({},localData,extra));
+          }).catch(function(e){
+            // Storage URL直接変換失敗 → Image経由でbase64化を試行
+            console.warn('[openChart] storageUrlToBase64 failed, trying Image fallback:',e);
+            return new Promise(function(resolve,reject){
+              var fi=new Image(); fi.crossOrigin='anonymous';
+              fi.onload=function(){
+                var tc=document.createElement('canvas');tc.width=fi.naturalWidth;tc.height=fi.naturalHeight;
+                tc.getContext('2d').drawImage(fi,0,0);
+                try{
+                  var du=tc.toDataURL('image/png');var b64=du.split(',')[1];
+                  var localData={orig_base64:b64,orig_mt:'image/png',strokes:fbData.strokes||[],name:fbData.name||''};
+                  caSaveData(id,localData);setSyncStatus(null);
+                  onOpen(Object.assign({},localData,extra));resolve();
+                }catch(e2){reject(e2);}
+              };
+              fi.onerror=function(){reject(new Error('Image load failed: '+fbData.imageUrl.substring(0,60)));};
+              fi.src=fbData.imageUrl;
+            });
           });
         }
         setSyncStatus(null);alert('データが見つかりません');
-      }).catch(function(){setSyncStatus(null);alert('読込失敗');});
+      }).catch(function(e){setSyncStatus(null);console.error('[openChart] Error:',e);alert('読込失敗: '+(e&&e.message?e.message:'不明なエラー'));});
   }
 
   // ── ドラッグ並び替え ──
