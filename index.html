@@ -66,12 +66,11 @@ function base64ToBlob(b64,mimeType){
   return new Blob([ba],{type:mimeType});
 }
 function uploadToStorage(cfg,id,b64,mt){
-  if(_fbForcePaused)return Promise.resolve(null);
   var st=getFirebaseStorage(cfg); if(!st)return Promise.resolve(null);
   var blob=base64ToBlob(b64,mt);
   var ext=mt==='image/png'?'.png':mt==='image/jpeg'?'.jpg':'.bin';
   var ref=st.ref('chart-images/'+id+ext);
-  return ref.put(blob).then(function(){_fbTrack('st_ul',blob.size);return ref.getDownloadURL();})
+  return ref.put(blob).then(function(){return ref.getDownloadURL();})
     .catch(function(e){console.error('Storage upload:',e);return null;});
 }
 function storageUrlToBase64(url){
@@ -79,9 +78,7 @@ function storageUrlToBase64(url){
     if(!r.ok)throw new Error('Storage HTTP '+r.status);
     return r.blob();
   })
-    .then(function(blob){
-      _fbTrack('st_dl',blob.size);
-      return new Promise(function(resolve,reject){
+    .then(function(blob){return new Promise(function(resolve,reject){
         var rd=new FileReader();
         rd.onload=function(){var parts=rd.result.split(',');resolve({base64:parts[1],mt:blob.type||'image/png'});};
         rd.onerror=function(){reject(new Error('FileReader failed'));};
@@ -95,85 +92,14 @@ function uploadThumbToStorage(cfg,id,thumbDataUrl){
   var st=getFirebaseStorage(cfg); if(!st)return Promise.resolve(null);
   var blob=base64ToBlob(b64,'image/png');
   var ref=st.ref('chart-thumbs/'+id+'.png');
-  return ref.put(blob).then(function(){_fbTrack('st_ul',blob.size);return ref.getDownloadURL();})
+  return ref.put(blob).then(function(){return ref.getDownloadURL();})
     .catch(function(e){console.error('Thumb upload:',e);return null;});
 }
 
-/* ─── Firebase 通信量トラッカー + 自動停止 ───────────────── */
-var _FB_USAGE_PFX='fb_usage_';
-function _fbUsageKey(){var d=new Date();return _FB_USAGE_PFX+d.getFullYear()+'_'+(d.getMonth()+1);}
-function _fbUsageGet(){try{var s=localStorage.getItem(_fbUsageKey());if(s)return JSON.parse(s);}catch(e){}
-  return{db_dl:0,db_ul:0,st_dl:0,st_ul:0,st_ul_ops:0,st_dl_ops:0,polls:0,puts:0};}
-function _fbUsageSave(u){try{localStorage.setItem(_fbUsageKey(),JSON.stringify(u));}catch(e){}}
-function _fbUsageFmt(b){
-  if(b<1024)return b+' B';if(b<1048576)return(b/1024).toFixed(1)+' KB';
-  if(b<1073741824)return(b/1048576).toFixed(2)+' MB';return(b/1073741824).toFixed(2)+' GB';}
-var _FB_FREE={db_dl:10737418240,st_dl:107374182400,st_ul_ops:5000,st_dl_ops:50000};
-var _fbWarnShown={};
-/* ── グローバル強制停止フラグ（90%到達時にlocalStorage + メモリの両方で即時停止） ── */
-var _fbForcePaused=false;
+/* ─── Firebase ヘルパー ───────────────── */
 function _fbIsPaused(cfg){
-  if(_fbForcePaused)return true;
   if(!cfg||!cfg.url)return true;
   return cfg.paused!==false;
-}
-function _fbForceAutoPause(){
-  if(_fbForcePaused)return;
-  _fbForcePaused=true;
-  // localStorageのcfgにも paused:true を書き込んで永続化
-  try{
-    var s=localStorage.getItem('chart_annotator_fb_v1');
-    if(s){var c=JSON.parse(s);c.paused=true;localStorage.setItem('chart_annotator_fb_v1',JSON.stringify(c));}
-  }catch(e){}
-  _fbShowBanner('⛔ 無料枠90%超過: Firebase同期を強制停止しました。設定画面で確認してください。','#D32F2F');
-}
-var _fbAutoPauseCb=null;
-function _fbSetAutoPauseCb(cb){_fbAutoPauseCb=cb;}
-function _fbTrack(cat,bytes){
-  var u=_fbUsageGet();
-  u[cat]=(u[cat]||0)+(bytes||0);
-  if(cat==='db_dl')u.polls=(u.polls||0)+1;
-  if(cat==='db_ul')u.puts=(u.puts||0)+1;
-  if(cat==='st_dl')u.st_dl_ops=(u.st_dl_ops||0)+1;
-  if(cat==='st_ul')u.st_ul_ops=(u.st_ul_ops||0)+1;
-  _fbUsageSave(u);_fbCheckLimits(u);
-}
-function _fbCheckLimits(u){
-  var checks=[
-    {key:'db_dl',val:u.db_dl,free:_FB_FREE.db_dl,label:'DBダウンロード'},
-    {key:'st_dl',val:u.st_dl,free:_FB_FREE.st_dl,label:'Storageダウンロード'},
-    {key:'st_ul_ops',val:u.st_ul_ops||0,free:_FB_FREE.st_ul_ops,label:'Storageアップロード操作'},
-    {key:'st_dl_ops',val:u.st_dl_ops||0,free:_FB_FREE.st_dl_ops,label:'Storageダウンロード操作'}
-  ];
-  for(var i=0;i<checks.length;i++){
-    var c=checks[i],pct=c.val/c.free*100;
-    if(pct>=90&&!_fbWarnShown[c.key+'_90']){
-      _fbWarnShown[c.key+'_90']=true;
-      _fbForceAutoPause();
-      if(_fbAutoPauseCb)_fbAutoPauseCb();
-    }else if(pct>=80&&!_fbWarnShown[c.key+'_80']){
-      _fbWarnShown[c.key+'_80']=true;
-      _fbShowBanner('⚠️ 無料枠80%: '+c.label+' ('+Math.round(pct)+'%)','#E65100');
-    }
-  }
-}
-function _fbShowBanner(text,bg){
-  // 既存バナーがあれば削除（重複防止）
-  var old=document.getElementById('_fb_banner');
-  if(old)old.remove();
-  var el=document.createElement('div');
-  el.id='_fb_banner';
-  el.style.cssText='position:fixed;top:0;left:50%;transform:translateX(-50%);z-index:99999;'
-    +'padding:10px 16px;font-size:13px;font-weight:600;color:#fff;text-align:center;'
-    +'background:'+bg+';box-shadow:0 2px 8px rgba(0,0,0,0.3);border-radius:0 0 12px 12px;'
-    +'max-width:90vw;pointer-events:none;';
-  el.textContent=text;
-  var cl=document.createElement('span');cl.textContent=' ✕';
-  cl.style.cssText='cursor:pointer;margin-left:12px;opacity:0.8;pointer-events:auto;';
-  cl.onclick=function(){el.remove();};el.appendChild(cl);
-  document.body.appendChild(el);
-  var timeout=bg==='#D32F2F'?30000:8000;
-  setTimeout(function(){if(el.parentNode)el.remove();},timeout);
 }
 
 /* ─── Color Picker ─────────────────────────────────────────── */
@@ -548,7 +474,7 @@ function FbSettingsModal(props){
     try{localStorage.setItem(FB_CFG_KEY,JSON.stringify(nc));}catch(e){}
     _fbApp=null;_fbStorage=null;
     // ユーザーが明示的にpause解除 → 強制停止フラグもリセット
-    if(!paused)_fbForcePaused=false;
+    
     onSave(nc); onClose();
   }
   function runCleanup(){
@@ -562,24 +488,18 @@ function FbSettingsModal(props){
       return fetch(base+'.json'+a).then(function(r){
           if(r.ok)return r.text(); return null;})
         .then(function(txt){
-          if(!txt)return;
-          _fbTrack('db_dl',txt.length);
-          var all; try{all=JSON.parse(txt);}catch(e){return;}
+          if(!txt)return;var all; try{all=JSON.parse(txt);}catch(e){return;}
           if(!all||typeof all!=='object'||all.error)return;
           var ids=Object.keys(all);
           var proms=[];
           ids.forEach(function(id){
             var item=all[id]; if(!item||typeof item!=='object')return;
             // thumbフィールド（base64 dataURL）があれば削除
-            if(item.thumb&&typeof item.thumb==='string'&&item.thumb.length>200){
-              _fbTrack('db_ul',10);
-              proms.push(fetch(base+'/'+id+'/thumb.json'+a,{method:'DELETE'}));
+            if(item.thumb&&typeof item.thumb==='string'&&item.thumb.length>200){proms.push(fetch(base+'/'+id+'/thumb.json'+a,{method:'DELETE'}));
               count++;
             }
             // dataフィールド（orig_base64含む重いデータ）があれば削除
-            if(item.data&&typeof item.data==='object'){
-              _fbTrack('db_ul',10);
-              proms.push(fetch(base+'/'+id+'/data.json'+a,{method:'DELETE'}));
+            if(item.data&&typeof item.data==='object'){proms.push(fetch(base+'/'+id+'/data.json'+a,{method:'DELETE'}));
               count++;
             }
           });
@@ -637,35 +557,7 @@ function FbSettingsModal(props){
               placeholder:"scalping-notebbok.firebasestorage.app",style:INP}),
             ce("div",{style:{fontSize:10,color:"#555",marginTop:4}},"Firebase Console → Storage で確認できます")
           ),
-          /* ── 通信量モニター ── */
-          (function(){
-            var u=_fbUsageGet();
-            var rows=[
-              {label:'DB DL',val:u.db_dl,free:_FB_FREE.db_dl},
-              {label:'Storage DL',val:u.st_dl,free:_FB_FREE.st_dl},
-              {label:'Storage UL ops',val:u.st_ul_ops||0,free:_FB_FREE.st_ul_ops},
-              {label:'Storage DL ops',val:u.st_dl_ops||0,free:_FB_FREE.st_dl_ops}
-            ];
-            return ce("div",{style:{background:"#1a1a1a",borderRadius:10,padding:"10px 12px",border:"1px solid #2a2a2a"}},
-              ce("div",{style:{fontSize:12,fontWeight:700,color:"#ccc",marginBottom:8}},"📊 今月の通信量"),
-              rows.map(function(r,i){
-                var pct=r.free>0?Math.min(r.val/r.free*100,100):0;
-                var col=pct>=90?'#ef4444':pct>=80?'#f97316':pct>=50?'#eab308':'#22c55e';
-                var valStr=r.free>10000?_fbUsageFmt(r.val)+' / '+_fbUsageFmt(r.free)
-                  :((r.val||0)+' / '+r.free+' 回');
-                return ce("div",{key:i,style:{marginBottom:6}},
-                  ce("div",{style:{display:"flex",justifyContent:"space-between",fontSize:10,color:"#888",marginBottom:2}},
-                    ce("span",null,r.label),
-                    ce("span",null,valStr+' ('+Math.round(pct)+'%)')
-                  ),
-                  ce("div",{style:{height:4,background:"#333",borderRadius:2,overflow:"hidden"}},
-                    ce("div",{style:{height:4,width:pct+'%',background:col,borderRadius:2,transition:"width .3s"}})
-                  )
-                );
-              }),
-              ce("div",{style:{fontSize:10,color:"#555",marginTop:6}},"ポーリング: "+u.polls+"回 / PUT: "+u.puts+"回")
-            );
-          })(),
+
           /* ── 旧データクリーンアップ ── */
           ce("div",{style:{background:"#1a1a1a",borderRadius:10,padding:"10px 12px",
             border:"1px solid #2a2a2a"}},
@@ -747,13 +639,11 @@ function RefChartPicker(props){
       var auth=fbCfg.secret?'?auth='+fbCfg.secret:'';
       fetch(dataBase+'/'+id+'.json'+auth).then(function(r){return r.ok?r.text():null;})
         .then(function(txt){
-          if(txt)_fbTrack('db_dl',txt.length);
-          var fbData=txt?JSON.parse(txt):null;
+          if(txt)var fbData=txt?JSON.parse(txt):null;
           if(!fbData){
             return fetch(oldBase+'/'+id+'.json'+auth).then(function(r2){return r2.ok?r2.text():null;})
               .then(function(txt2){
-                if(txt2)_fbTrack('db_dl',txt2.length);
-                var fbOld=txt2?JSON.parse(txt2):null;
+                if(txt2)var fbOld=txt2?JSON.parse(txt2):null;
                 if(fbOld&&fbOld.data&&(fbOld.data.orig_base64||fbOld.data.base64)){
                   caSaveData(id,fbOld.data);
                   onSelect('data:'+(fbOld.data.orig_mt||fbOld.data.mt||'image/png')+';base64,'+(fbOld.data.orig_base64||fbOld.data.base64));
@@ -1201,18 +1091,14 @@ function ImageAnnotator(props){
       }
 
       urlPromise.then(function(imageUrl){
-        if(_fbForcePaused){setAutoSaveStatus(null);return;}
         var draftBase=cfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts';
         var draftDataBase=cfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
         var thumb=canvasRef.current?caGenThumb(canvasRef.current):(img._thumb||'');
         // meta
         uploadThumbToStorage(cfg2,draftId,thumb).then(function(thumbUrl){
-          if(_fbForcePaused)return;
           var metaDb={ticker:img._ticker||'',name:img._name||img.name||'chart',savedAt:savedAt};
           if(thumbUrl)metaDb.thumbUrl=thumbUrl;
-          var metaBody=JSON.stringify(metaDb);
-          _fbTrack('db_ul',metaBody.length);
-          fetch(draftBase+'/'+draftId+'.json'+auth,{method:'PUT',
+          var metaBody=JSON.stringify(metaDb);fetch(draftBase+'/'+draftId+'.json'+auth,{method:'PUT',
             headers:{'Content-Type':'application/json'},body:metaBody})
             .catch(function(e){console.error('draft meta sync:',e);});
         });
@@ -1220,9 +1106,7 @@ function ImageAnnotator(props){
         var draftData=imageUrl
           ?{imageUrl:imageUrl,orig_mt:mt,strokes:strokes,name:img._name||img.name||'chart'}
           :{orig_base64:b64,orig_mt:mt,strokes:strokes,name:img._name||img.name||'chart'};
-        var dataBody=JSON.stringify(draftData);
-        _fbTrack('db_ul',dataBody.length);
-        fetch(draftDataBase+'/'+draftId+'.json'+auth,{method:'PUT',
+        var dataBody=JSON.stringify(draftData);fetch(draftDataBase+'/'+draftId+'.json'+auth,{method:'PUT',
           headers:{'Content-Type':'application/json'},body:dataBody})
           .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);
             setAutoSaveStatus('ok');setTimeout(function(){setAutoSaveStatus(null);},2000);
@@ -1231,13 +1115,9 @@ function ImageAnnotator(props){
             setAutoSaveStatus('err');setTimeout(function(){setAutoSaveStatus(null);},3000);});
         // タイムスタンプ + バージョン
         var tsBase=cfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts-ts';
-        var tsBody=JSON.stringify({t:savedAt});
-        _fbTrack('db_ul',tsBody.length);
-        fetch(tsBase+'/'+draftId+'.json'+auth,{method:'PUT',
+        var tsBody=JSON.stringify({t:savedAt});fetch(tsBase+'/'+draftId+'.json'+auth,{method:'PUT',
           headers:{'Content-Type':'application/json'},body:tsBody}).catch(function(){});
-        var vBody=JSON.stringify({_v:savedAt});
-        _fbTrack('db_ul',vBody.length);
-        fetch(cfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts-v.json'+auth,
+        var vBody=JSON.stringify({_v:savedAt});fetch(cfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts-v.json'+auth,
           {method:'PUT',headers:{'Content-Type':'application/json'},body:vBody}).catch(function(){});
         loadedSavedAtRef.current=savedAt;
         setRemoteUpdate(false);
@@ -1274,22 +1154,16 @@ function ImageAnnotator(props){
     var dataUrl=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data/'+draftId+'.json'+auth;
 
     function poll(){
-      if(_fbForcePaused)return;
-      fetch(tsUrl).then(function(r){
-          _fbTrack('db_dl',40);
-          return r.ok?r.json():null;})
+      fetch(tsUrl).then(function(r){return r.ok?r.json():null;})
         .then(function(ts){
           if(!ts||!ts.t)return;
           var remoteT=ts.t;
           if(remoteT<=loadedSavedAtRef.current)return;
           var timeSinceCommit=Date.now()-lastLocalCommitRef.current;
           if(timeSinceCommit>45000){
-            if(_fbForcePaused)return;
             fetch(dataUrl).then(function(r){return r.ok?r.text():null;})
               .then(function(txt){
-                if(!txt)return;
-                _fbTrack('db_dl',txt.length);
-                var fbData; try{fbData=JSON.parse(txt);}catch(e){return;}
+                if(!txt)return;var fbData; try{fbData=JSON.parse(txt);}catch(e){return;}
                 if(!fbData||typeof fbData!=='object'||fbData.error||!fbData.strokes)return;
                 var newStrokes=fbData.strokes;
                 strokesRef.current=newStrokes;
@@ -1805,12 +1679,9 @@ function ImageAnnotator(props){
       var draftDataBase=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
       // meta（thumbをStorage→thumbUrlのみDB）
       uploadThumbToStorage(cfg,id,thumb).then(function(thumbUrl){
-        if(_fbForcePaused)return;
         var metaDb={ticker:ticker,name:chartName,savedAt:savedAt};
         if(thumbUrl)metaDb.thumbUrl=thumbUrl;
-        var metaBody=JSON.stringify(metaDb);
-        _fbTrack('db_ul',metaBody.length);
-        fetch(draftBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
+        var metaBody=JSON.stringify(metaDb);fetch(draftBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
           body:metaBody}).catch(function(e){console.error('fbSyncDraft meta:',e);});
       });
       // data（imageUrlがあればbase64省略）
@@ -1818,24 +1689,17 @@ function ImageAnnotator(props){
         :cfg.storageBucket&&b64?uploadToStorage(cfg,id,b64,mt).then(function(u){if(u)imageStorageUrlRef.current=u;return u;})
         :Promise.resolve(null);
       urlP.then(function(imageUrl){
-        if(_fbForcePaused)return;
         var dbData=imageUrl
           ?{imageUrl:imageUrl,orig_mt:mt,strokes:strokesRef.current,name:chartName}
           :{orig_base64:b64,orig_mt:mt,strokes:strokesRef.current,name:chartName};
-        var dataBody=JSON.stringify(dbData);
-        _fbTrack('db_ul',dataBody.length);
-        fetch(draftDataBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
+        var dataBody=JSON.stringify(dbData);fetch(draftDataBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
           body:dataBody}).catch(function(e){console.error('fbSyncDraft data:',e);});
       });
       // タイムスタンプ + バージョン
       var tsBase=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-ts';
-      var tsBody=JSON.stringify({t:savedAt});
-      _fbTrack('db_ul',tsBody.length);
-      fetch(tsBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
+      var tsBody=JSON.stringify({t:savedAt});fetch(tsBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
         body:tsBody}).catch(function(){});
-      var vBody=JSON.stringify({_v:savedAt});
-      _fbTrack('db_ul',vBody.length);
-      fetch(cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-v.json'+auth,{method:'PUT',
+      var vBody=JSON.stringify({_v:savedAt});fetch(cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-v.json'+auth,{method:'PUT',
         headers:{'Content-Type':'application/json'},body:vBody}).catch(function(){});
       loadedSavedAtRef.current=savedAt;
     }
@@ -1972,9 +1836,9 @@ function ImageAnnotator(props){
         /* 自動保存インジケーター */
         props.fbCfg&&props.fbCfg.url&&ce("span",{style:{
           fontSize:10,padding:"3px 8px",borderRadius:5,fontWeight:700,flexShrink:0,
-          background:_fbForcePaused?'#D32F2F':_fbIsPaused(props.fbCfg)?'#7f1d1d':autoSaveStatus==='saving'?'#1e3a5f':autoSaveStatus==='ok'?'#14532d':autoSaveStatus==='err'?'#7f1d1d':'#431407',
-          color:_fbForcePaused?'#fff':_fbIsPaused(props.fbCfg)?'#f87171':autoSaveStatus==='saving'?'#93c5fd':autoSaveStatus==='ok'?'#86efac':autoSaveStatus==='err'?'#fca5a5':'#fb923c'}},
-          _fbForcePaused?'⛔ 枠超過停止':_fbIsPaused(props.fbCfg)?'⏸ 同期停止中':autoSaveStatus==='saving'?'⏳ 自動保存中':autoSaveStatus==='ok'?'✓ 自動保存済':autoSaveStatus==='err'?'✕ 自動保存失敗':'🔥 自動保存ON'
+          background:_fbIsPaused(props.fbCfg)?'#7f1d1d':autoSaveStatus==='saving'?'#1e3a5f':autoSaveStatus==='ok'?'#14532d':autoSaveStatus==='err'?'#7f1d1d':'#431407',
+          color:_fbIsPaused(props.fbCfg)?'#f87171':autoSaveStatus==='saving'?'#93c5fd':autoSaveStatus==='ok'?'#86efac':autoSaveStatus==='err'?'#fca5a5':'#fb923c'}},
+          _fbIsPaused(props.fbCfg)?'⏸ 同期停止中':autoSaveStatus==='saving'?'⏳ 自動保存中':autoSaveStatus==='ok'?'✓ 自動保存済':autoSaveStatus==='err'?'✕ 自動保存失敗':'🔥 自動保存ON'
         ),
         ce("button",{onClick:function(){setCancelConfirm(true);},style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#333",color:"#ccc"})},"分析を終了する"),
         ce("button",{onClick:saveAndExport,style:Object.assign({},TS,{fontSize:12,padding:"6px 12px",background:"#2563eb",color:"#fff",fontWeight:700})},"💾 保存・出力")
@@ -2050,15 +1914,13 @@ function ImageAnnotator(props){
       ce("button",{
         onClick:function(){
           var cfg=props.fbCfg; var draftId=img._draftId;
-          if(!cfg||!cfg.url||!draftId||_fbForcePaused)return;
+          if(!cfg||!cfg.url||!draftId)return;
           var fbAuth=cfg.secret?'?auth='+cfg.secret:'';
           var dataUrl=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data/'+draftId+'.json'+fbAuth;
           var oldUrl=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts/'+draftId+'.json'+fbAuth;
           fetch(dataUrl).then(function(r){return r.ok?r.text():null;})
             .then(function(txt){
-              if(!txt)return;
-              _fbTrack('db_dl',txt.length);
-              var fbData; try{fbData=JSON.parse(txt);}catch(e){return;}
+              if(!txt)return;var fbData; try{fbData=JSON.parse(txt);}catch(e){return;}
               // 新パスにstrokesがあればそれを使う
               if(fbData&&fbData.strokes){
                 var ns=fbData.strokes;
@@ -2070,12 +1932,9 @@ function ImageAnnotator(props){
                 return;
               }
               // 旧パスフォールバック
-              if(_fbForcePaused)return;
               return fetch(oldUrl).then(function(r2){return r2.ok?r2.text():null;})
                 .then(function(txt2){
-                  if(!txt2)return;
-                  _fbTrack('db_dl',txt2.length);
-                  var fbOld; try{fbOld=JSON.parse(txt2);}catch(e){return;}
+                  if(!txt2)return;var fbOld; try{fbOld=JSON.parse(txt2);}catch(e){return;}
                   if(!fbOld||!fbOld.data||!fbOld.data.strokes)return;
                   var ns2=fbOld.data.strokes;
                   strokesRef.current=ns2;
@@ -2576,12 +2435,9 @@ function ImageAnnotator(props){
           var draftDataBase=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
           // meta（thumbをStorage→thumbUrlのみDB）
           uploadThumbToStorage(cfg,id,thumb).then(function(thumbUrl){
-            if(_fbForcePaused)return;
             var metaDb={ticker:ticker,name:name,savedAt:metaItem.savedAt};
             if(thumbUrl)metaDb.thumbUrl=thumbUrl;
-            var metaBody=JSON.stringify(metaDb);
-            _fbTrack('db_ul',metaBody.length);
-            fetch(draftBase+'/'+id+'.json'+fbAuth,{method:'PUT',headers:{'Content-Type':'application/json'},
+            var metaBody=JSON.stringify(metaDb);fetch(draftBase+'/'+id+'.json'+fbAuth,{method:'PUT',headers:{'Content-Type':'application/json'},
               body:metaBody}).catch(function(e){console.error('fbSyncDraft meta:',e);});
           });
           // data（Storage→imageUrl or base64フォールバック）
@@ -2591,24 +2447,17 @@ function ImageAnnotator(props){
             ?uploadToStorage(cfg,id,b64s,mts).then(function(u){if(u)imageStorageUrlRef.current=u;return u;})
             :Promise.resolve(null);
           urlPs.then(function(imageUrl){
-            if(_fbForcePaused)return;
             var dbData=imageUrl
               ?{imageUrl:imageUrl,orig_mt:mts,strokes:data.strokes||[],name:name}
               :{orig_base64:b64s,orig_mt:mts,strokes:data.strokes||[],name:name};
-            var dataBody=JSON.stringify(dbData);
-            _fbTrack('db_ul',dataBody.length);
-            fetch(draftDataBase+'/'+id+'.json'+fbAuth,{method:'PUT',headers:{'Content-Type':'application/json'},
+            var dataBody=JSON.stringify(dbData);fetch(draftDataBase+'/'+id+'.json'+fbAuth,{method:'PUT',headers:{'Content-Type':'application/json'},
               body:dataBody}).catch(function(e){console.error('fbSyncDraft data:',e);});
           });
           // バージョン + タイムスタンプ書き込み
           var tsBase=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-ts';
-          var tsBody=JSON.stringify({t:metaItem.savedAt});
-          _fbTrack('db_ul',tsBody.length);
-          fetch(tsBase+'/'+id+'.json'+fbAuth,{method:'PUT',headers:{'Content-Type':'application/json'},
+          var tsBody=JSON.stringify({t:metaItem.savedAt});fetch(tsBase+'/'+id+'.json'+fbAuth,{method:'PUT',headers:{'Content-Type':'application/json'},
             body:tsBody}).catch(function(){});
-          var vBody=JSON.stringify({_v:Date.now()});
-          _fbTrack('db_ul',vBody.length);
-          fetch(cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-v.json'+fbAuth,{method:'PUT',
+          var vBody=JSON.stringify({_v:Date.now()});fetch(cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-v.json'+fbAuth,{method:'PUT',
             headers:{'Content-Type':'application/json'},body:vBody}).catch(function(){});
         }
         // post-save callback（保存・出力からの呼び出し時にcombined出力）
@@ -2871,9 +2720,7 @@ function DraftLibrary(props){
     var vUrl=makeDraftsVUrl(); if(!vUrl||_fbIsPaused(fbCfg))return;
     var v=Date.now();
     localVRef.current=v;
-    var vBody=JSON.stringify({_v:v});
-    _fbTrack('db_ul',vBody.length);
-    fetch(vUrl,{method:'PUT',headers:{'Content-Type':'application/json'},
+    var vBody=JSON.stringify({_v:v});fetch(vUrl,{method:'PUT',headers:{'Content-Type':'application/json'},
       body:vBody}).catch(function(){});
   }
 
@@ -2885,9 +2732,7 @@ function DraftLibrary(props){
     // Step 1: バージョン番号だけ取得（~20バイト）
     fetch(vUrl).then(function(r){return r.ok?r.text():null;})
       .then(function(txt){
-        if(!txt)return;
-        _fbTrack('db_dl',txt.length);
-        var vData; try{vData=JSON.parse(txt);}catch(e){return;}
+        if(!txt)return;var vData; try{vData=JSON.parse(txt);}catch(e){return;}
         if(!vData||!vData._v)return;
         var remoteV=vData._v;
         if(remoteV<=localVRef.current){setSyncStatus(null);return;}
@@ -2907,8 +2752,7 @@ function DraftLibrary(props){
     fetch(makeFbTickersUrl())
       .then(function(r){return r.ok?r.text():null;})
       .then(function(txt){
-        if(!txt)return; _fbTrack('db_dl',txt.length);
-        var fbTickers; try{fbTickers=JSON.parse(txt);}catch(e){return;}
+        if(!txt)return;var fbTickers; try{fbTickers=JSON.parse(txt);}catch(e){return;}
         if(fbTickers&&Array.isArray(fbTickers)&&fbTickers.length>0){setTickers(fbTickers);caSaveTickers(fbTickers);}
       }).catch(function(e){console.error('fetchFullMeta tickers:',e);});
 
@@ -2917,8 +2761,7 @@ function DraftLibrary(props){
       .then(function(r){return r.ok?r.text():null;})
       .then(function(txt){
         setSyncStatus(null);
-        if(!txt)return; _fbTrack('db_dl',txt.length);
-        var fbMeta; try{fbMeta=JSON.parse(txt);}catch(e){return;}
+        if(!txt)return;var fbMeta; try{fbMeta=JSON.parse(txt);}catch(e){return;}
         if(!fbMeta||typeof fbMeta!=='object'||fbMeta.error||Array.isArray(fbMeta))return;
         var fbIds=Object.keys(fbMeta);
         var localMeta=caLoadMeta();
@@ -2943,8 +2786,7 @@ function DraftLibrary(props){
     fetch(trashBase+'.json'+auth)
       .then(function(r){return r.ok?r.text():null;})
       .then(function(txt){
-        if(!txt)return; _fbTrack('db_dl',txt.length);
-        var fbTrashMeta; try{fbTrashMeta=JSON.parse(txt);}catch(e){return;}
+        if(!txt)return;var fbTrashMeta; try{fbTrashMeta=JSON.parse(txt);}catch(e){return;}
         if(!fbTrashMeta||typeof fbTrashMeta!=='object'||fbTrashMeta.error||Array.isArray(fbTrashMeta))return;
         var localTrash=caLoadTrash();
         var fbIds=Object.keys(fbTrashMeta);
@@ -2965,23 +2807,13 @@ function DraftLibrary(props){
   }
 
   // ── 自動停止コールバック登録 ──
-  useEffect(function(){
-    _fbSetAutoPauseCb(function(){
-      console.warn('[FB AUTO-PAUSE] Usage limit reached — forcing pause');
-      // _fbForcePaused は既にグローバルでtrueにセットされている
-      // UIに反映するためにsetSyncStatusを更新
-      setSyncStatus(null);
-    });
-    return function(){_fbSetAutoPauseCb(null);};
-  },[]);
-
   // ── ポーリング開始 ──
   useEffect(function(){
     if(_fbIsPaused(fbCfg))return;
     setSyncStatus('loading');
     fetchFullMeta(); // 初回はフルメタ取得
     var timer=setInterval(function(){
-      if(_fbForcePaused){clearInterval(timer);setSyncStatus(null);return;}
+      
       setSyncStatus('loading');pollFb();
     },15000);
     return function(){clearInterval(timer);};
@@ -2994,18 +2826,12 @@ function DraftLibrary(props){
     // ① サムネイルアップロード → メタ書き込み（thumbUrl含む）→ TS/V書き込み の順序保証
     var thumbP=metaItem.thumb?uploadThumbToStorage(fbCfg,id,metaItem.thumb):Promise.resolve(null);
     thumbP.then(function(thumbUrl){
-      if(_fbForcePaused)return;
       var metaDb={ticker:metaItem.ticker,name:metaItem.name,savedAt:metaItem.savedAt};
       if(thumbUrl)metaDb.thumbUrl=thumbUrl;
-      var body=JSON.stringify(metaDb); _fbTrack('db_ul',body.length);
-      return fetch(base+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:body});
+      var body=JSON.stringify(metaDb);return fetch(base+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:body});
     }).then(function(){
-      // メタ書き込み完了後にTS + バージョン更新（他端末がfetchFullMetaした時にthumbUrlが確実に存在する）
-      if(_fbForcePaused)return;
       var tsBase=fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-ts';
-      var tsBody=JSON.stringify({t:metaItem.savedAt||Date.now()});
-      _fbTrack('db_ul',tsBody.length);
-      fetch(tsBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:tsBody})
+      var tsBody=JSON.stringify({t:metaItem.savedAt||Date.now()});fetch(tsBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:tsBody})
         .catch(function(){});
       fbWriteV();
     }).catch(function(e){console.error('fbSaveDraft:',e);});
@@ -3015,29 +2841,20 @@ function DraftLibrary(props){
       var mt=data.orig_mt||data.mt||'image/png';
       if(b64&&fbCfg.storageBucket){
         uploadToStorage(fbCfg,id,b64,mt).then(function(imageUrl){
-          if(_fbForcePaused)return;
           var dbData={imageUrl:imageUrl,orig_mt:mt,strokes:data.strokes||[],name:data.name||''};
-          var body2=JSON.stringify(dbData); _fbTrack('db_ul',body2.length);
-          fetch(dataBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:body2})
+          var body2=JSON.stringify(dbData);fetch(dataBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:body2})
             .catch(function(e){console.error('fbSaveDraft data:',e);});
         });
       }else{
-        var body3=JSON.stringify(data); _fbTrack('db_ul',body3.length);
-        fetch(dataBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:body3})
+        var body3=JSON.stringify(data);fetch(dataBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:body3})
           .catch(function(e){console.error('fbSaveDraft data:',e);});
       }
     }
   }
   function fbDeleteDraft(id){
     var base=makeDraftsBase(), dataBase=makeDraftsDataBase();
-    if(!base||_fbIsPaused(fbCfg))return;
-    _fbTrack('db_ul',10);
-    fetch(base+'/'+id+'.json'+auth,{method:'DELETE'}).catch(function(){});
-    _fbTrack('db_ul',10);
-    fetch(dataBase+'/'+id+'.json'+auth,{method:'DELETE'}).catch(function(){});
-    var tsBase=fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-ts';
-    _fbTrack('db_ul',10);
-    fetch(tsBase+'/'+id+'.json'+auth,{method:'DELETE'}).catch(function(){});
+    if(!base||_fbIsPaused(fbCfg))return;fetch(base+'/'+id+'.json'+auth,{method:'DELETE'}).catch(function(){});fetch(dataBase+'/'+id+'.json'+auth,{method:'DELETE'}).catch(function(){});
+    var tsBase=fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-ts';fetch(tsBase+'/'+id+'.json'+auth,{method:'DELETE'}).catch(function(){});
     fbWriteV();
   }
   function fbMoveToTrash(id,metaItem,data){
@@ -3049,33 +2866,22 @@ function DraftLibrary(props){
     var tp=metaItem.thumbUrl?Promise.resolve(metaItem.thumbUrl)
       :metaItem.thumb?uploadThumbToStorage(fbCfg,'trash_'+id,metaItem.thumb):Promise.resolve(null);
     tp.then(function(tu){
-      if(_fbForcePaused)return;
       if(tu)trashDb.thumbUrl=tu;
-      var body=JSON.stringify(trashDb);
-      _fbTrack('db_ul',body.length);
-      fetch(trashBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
+      var body=JSON.stringify(trashDb);fetch(trashBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
         body:body}).catch(function(){});
     });
     if(data){
-      var body2=JSON.stringify(data);
-      _fbTrack('db_ul',body2.length);
-      fetch(trashDataBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
+      var body2=JSON.stringify(data);fetch(trashDataBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
         body:body2}).catch(function(){});
     }
   }
   function fbDeleteFromTrash(id){
     var trashBase=makeTrashBase(), trashDataBase=makeTrashDataBase();
-    if(!trashBase||_fbIsPaused(fbCfg))return;
-    _fbTrack('db_ul',10);
-    fetch(trashBase+'/'+id+'.json'+auth,{method:'DELETE'}).catch(function(){});
-    _fbTrack('db_ul',10);
-    fetch(trashDataBase+'/'+id+'.json'+auth,{method:'DELETE'}).catch(function(){});
+    if(!trashBase||_fbIsPaused(fbCfg))return;fetch(trashBase+'/'+id+'.json'+auth,{method:'DELETE'}).catch(function(){});fetch(trashDataBase+'/'+id+'.json'+auth,{method:'DELETE'}).catch(function(){});
   }
   function fbSyncTickers(t){
     var u=makeFbTickersUrl(); if(!u||_fbIsPaused(fbCfg))return;
-    var body=JSON.stringify(t);
-    _fbTrack('db_ul',body.length);
-    fetch(u,{method:'PUT',headers:{'Content-Type':'application/json'},body:body}).catch(function(){});
+    var body=JSON.stringify(t);fetch(u,{method:'PUT',headers:{'Content-Type':'application/json'},body:body}).catch(function(){});
   }
 
   // ── 銘柄操作 ──
@@ -3150,15 +2956,13 @@ function DraftLibrary(props){
     setSyncStatus('loading');
     fetch(dataBase+'/'+id+'.json'+auth).then(function(r){return r.ok?r.text():null;})
       .then(function(txt){
-        if(txt)_fbTrack('db_dl',txt.length);
-        var fbData=txt?JSON.parse(txt):null;
+        if(txt)var fbData=txt?JSON.parse(txt):null;
         if(!fbData){
           // 新パスにデータなし → 旧パスフォールバック
           return fetch(oldBase+'/'+id+'.json'+auth).then(function(r2){return r2.ok?r2.text():null;})
             .then(function(txt2){
               setSyncStatus(null);
-              if(txt2)_fbTrack('db_dl',txt2.length);
-              var fbOld=txt2?JSON.parse(txt2):null;
+              if(txt2)var fbOld=txt2?JSON.parse(txt2):null;
               var od=fbOld&&fbOld.data?fbOld.data:null;
               if(od&&(od.orig_base64||od.base64)){caSaveData(id,od);onOpen(Object.assign({},od,extra));}
               else{alert('データが見つかりません');}
@@ -3238,9 +3042,9 @@ function DraftLibrary(props){
       ce("span",{style:{fontSize:16,fontWeight:700,color:"#fff",flex:1}},
         showTrash?"🗑 ゴミ箱":"📋 チャート画像保管庫"),
       fbCfg.url&&ce("span",{style:{fontSize:10,padding:"3px 7px",borderRadius:5,
-        background:_fbForcePaused?"#D32F2F":_fbIsPaused(fbCfg)?"#7f1d1d":"#431407",
-        color:_fbForcePaused?"#fff":_fbIsPaused(fbCfg)?"#f87171":"#fb923c",fontWeight:700,flexShrink:0}},
-        _fbForcePaused?'⛔ 枠超過停止':_fbIsPaused(fbCfg)?'⏸ 同期停止中':syncStatus==='loading'?'⏳ 同期中':'🔥 同期有効'),
+        background:_fbIsPaused(fbCfg)?"#7f1d1d":"#431407",
+        color:_fbIsPaused(fbCfg)?"#f87171":"#fb923c",fontWeight:700,flexShrink:0}},
+        _fbIsPaused(fbCfg)?'⏸ 同期停止中':syncStatus==='loading'?'⏳ 同期中':'🔥 同期有効'),
       ce("button",{onClick:function(){setShowTrash(function(v){return !v;});},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,
           background:showTrash?"#431407":"#2a2a2a",
@@ -3563,7 +3367,7 @@ function VirtualJoystick(props){
 function App(){
   // 起動時に画面上部のクリックブロッカーを検出・除去
   useEffect(function(){
-    var b=document.getElementById('_fb_banner');if(b)b.remove();
+    
     // body直下の不要要素を検出除去（500ms後にチェック）
     var tid=setTimeout(function(){
       var root=document.getElementById('root');
@@ -3710,15 +3514,14 @@ function App(){
 
     /* ── Firebase 設定 ── */
     ce("div",{style:{width:"100%",maxWidth:480,marginTop:14,
-      background:"#161616",border:"1px solid "+(_fbForcePaused?"#D32F2F":fbCfg.url&&fbCfg.paused!==false?"#991b1b":"#2a2a2a"),borderRadius:14,padding:"12px 16px",
+      background:"#161616",border:"1px solid "+(fbCfg.url&&fbCfg.paused!==false?"#991b1b":"#2a2a2a"),borderRadius:14,padding:"12px 16px",
       display:"flex",alignItems:"center",gap:10}},
       ce("span",{style:{fontSize:13,fontWeight:700,
-        color:_fbForcePaused?"#ff6b6b":!fbCfg.url?"#888":fbCfg.paused!==false?"#f87171":"#fb923c",flex:1}},
-        _fbForcePaused?"⛔ 無料枠超過: 同期強制停止"
-          :!fbCfg.url?"☁ Firebase 未設定"
+        color:!fbCfg.url?"#888":fbCfg.paused!==false?"#f87171":"#fb923c",flex:1}},
+        !fbCfg.url?"☁ Firebase 未設定"
           :fbCfg.paused!==false?"⏸ 同期を一時停止中":"🔥 Firebase 同期有効"),
-      fbCfg.url&&(fbCfg.paused!==false||_fbForcePaused)&&ce("span",{style:{fontSize:10,color:"#f87171",fontWeight:700,flexShrink:0}},"停止中"),
-      fbCfg.url&&fbCfg.paused===false&&!_fbForcePaused&&ce("span",{style:{fontSize:10,color:"#555",overflow:"hidden",
+      fbCfg.url&&fbCfg.paused!==false&&ce("span",{style:{fontSize:10,color:"#f87171",fontWeight:700,flexShrink:0}},"停止中"),
+      fbCfg.url&&fbCfg.paused===false&&ce("span",{style:{fontSize:10,color:"#555",overflow:"hidden",
         textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:160}},fbCfg.url),
       ce("button",{
         onClick:function(){setShowFbSettings(true);},
@@ -3727,6 +3530,16 @@ function App(){
           border:"1px solid #333",borderRadius:8,cursor:"pointer",fontFamily:"inherit",flexShrink:0}
       },"⚙ 設定")
     ),
+
+    /* ── Firebase使用量確認ボタン ── */
+    fbCfg.url&&ce("a",{
+      href:"https://console.firebase.google.com/u/0/project/scalping-notebbok/overview?hl=ja",
+      target:"_blank",rel:"noopener noreferrer",
+      style:{display:"block",width:"100%",maxWidth:480,marginTop:8,padding:"10px 16px",
+        background:"#161616",border:"1px solid #2a2a2a",borderRadius:12,
+        color:"#93c5fd",fontSize:12,fontWeight:600,textAlign:"center",
+        textDecoration:"none",fontFamily:"inherit"}
+    },"📊 Firebase使用量を確認（Firebase Console）"),
 
     ce("div",{style:{marginTop:16,fontSize:11,color:"#3a3a3a",textAlign:"center",lineHeight:2.2}},
       "直線 / 点線 / 矢印 / 四角 / 丸 / マーカー / フリー / テキスト / 選択・変形 / 消しゴム",ce("br",null),
