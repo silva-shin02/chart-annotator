@@ -133,13 +133,13 @@ function ColorPicker(props){
   function pick(c){
     onChange(c); onHistory(c);
     if(editingSlot!==null){ var nq=quickColors.slice(); nq[editingSlot]=c; onQuickColors(nq); }
-    else if(!quickColors.includes(c)) onQuickColors([c].concat(quickColors).slice(0,6));
+    else if(!quickColors.includes(c)) onQuickColors([c].concat(quickColors).slice(0,7));
     closeAll();
   }
   function addCustom(){
     if(!presets.includes(customVal)) savePresets(presets.concat([customVal]));
     onChange(customVal); onHistory(customVal);
-    if(!quickColors.includes(customVal)) onQuickColors([customVal].concat(quickColors).slice(0,6));
+    if(!quickColors.includes(customVal)) onQuickColors([customVal].concat(quickColors).slice(0,7));
     setTab("preset");
   }
   function remPreset(c){ savePresets(presets.filter(function(x){return x!==c;})); }
@@ -753,7 +753,7 @@ function ImageAnnotator(props){
   var st2=useState([]);      var colorHist=st2[0],setColorHist=st2[1];
   var st3=useState(function(){
     try{var q=JSON.parse(localStorage.getItem("annot_quickcolors_v1"));if(q&&q.length)return q;}catch(e){}
-    return["#E53935","#1565C0","#000000","#F57F17","#1B5E20","#ffffff"];
+    return["#E53935","#EC407A","#FF9800","#FFEB3B","#1565C0","#ffffff","#8BC34A"];
   }); var quickColors=st3[0],setQuickColors=st3[1];
   function setQuickColorsAndSave(qc){
     setQuickColors(qc);
@@ -797,6 +797,8 @@ function ImageAnnotator(props){
   var postSaveCallbackRef=useRef(null);
   var imageStorageUrlRef=useRef(null); // Storage URL キャッシュ（1セッション中再利用）
   var baseRef=useRef(null);
+  var baseImgRef=useRef(null); // Image要素のfallback（CORS制限時に使用）
+  var baseDimRef=useRef(null); // {w,h} ベース画像の描画寸法
   var overlayCanvasRef=useRef(null);
   var strokesRef=useRef([]);
   var histRef=useRef([[]]);
@@ -820,12 +822,15 @@ function ImageAnnotator(props){
   var refDragRef=useRef(null);    // 参照パネルのドラッグ
   var textDragRef=useRef(null);   // テキストツールで既存テキストをドラッグ移動
   var refSlideDragRef=useRef(null); // 参照画像の縦スライドドラッグ
+  var penTapRef=useRef({time:0,prevTool:null,x:0,y:0}); // ダブルタップ消しゴムトグル用
+  var toolRef=useRef("pan"); // tool stateのミラー（pointerイベント用）
+  useEffect(function(){toolRef.current=tool;},[tool]);
   useEffect(function(){zoomRef.current=zoom;},[zoom]);
 
   // textInputRef を最新の textInputState に同期 + ライブプレビュー描画
   useEffect(function(){
     textInputRef.current=textInputState;
-    if(!textInputState||!canvasRef.current||!baseRef.current)return;
+    if(!textInputState||!canvasRef.current||(!baseRef.current&&!baseImgRef.current))return;
     var txt=taRef.current?taRef.current.value:(textInputState.text||"");
     // 編集中の元ストロークは除外して rebuild（二重描画防止）
     var skipIdx=textInputState.idx;
@@ -903,12 +908,13 @@ function ImageAnnotator(props){
     imgDataRef.current=imgData;
     var ctx=c.getContext("2d");
     var bImg=new Image();
+    if(imgData._imageUrl&&!(imgData.orig_base64||imgData.base64)){
+      bImg.crossOrigin='anonymous';
+    }
     bImg.onload=function(){
       var nw=bImg.naturalWidth, nh=bImg.naturalHeight;
-      // iOS Safari のキャンバスメモリ制限を考慮した動的DPR
-      // メイン + overlay + getImageData で3面分消費するので安全圏を確保
       var devDPR=window.devicePixelRatio||1;
-      var MAX_CANVAS_PX=16777216; // 16M pixels（iOS Safari安全上限）
+      var MAX_CANVAS_PX=16777216;
       var DPR=devDPR;
       if(nw*DPR*nh*DPR>MAX_CANVAS_PX){
         DPR=Math.sqrt(MAX_CANVAS_PX/(nw*nh));
@@ -923,7 +929,10 @@ function ImageAnnotator(props){
         overlayCanvasRef.current.getContext("2d").setTransform(DPR,0,0,DPR,0,0);
       }
       ctx.drawImage(bImg,0,0,nw,nh);
-      baseRef.current=ctx.getImageData(0,0,c.width,c.height);
+      baseImgRef.current=bImg;
+      baseDimRef.current={w:nw,h:nh};
+      try{baseRef.current=ctx.getImageData(0,0,c.width,c.height);}
+      catch(e){baseRef.current=null;console.warn('getImageData failed (tainted canvas), using Image fallback');}
       var saved=imgData.strokes||[];
       strokesRef.current=saved.slice();
       saved.forEach(function(s){drawStroke(ctx,s);});
@@ -952,20 +961,32 @@ function ImageAnnotator(props){
         strokes:saved
       }));}catch(e){}
     };
-    bImg.src="data:"+(imgData.orig_mt||imgData.mt)+";base64,"+(imgData.orig_base64||imgData.base64);
+    bImg.onerror=function(){
+      // crossOrigin='anonymous'で失敗した場合、crossOriginなしで再試行（tainted canvasだがdrawImage可）
+      if(bImg.crossOrigin==='anonymous'&&imgData._imageUrl){
+        console.warn('CORS image load failed, retrying without crossOrigin');
+        var origOnload=bImg.onload;
+        var bImg2=new Image();
+        bImg2.onload=function(){bImg=bImg2;origOnload();};
+        bImg2.src=imgData._imageUrl;
+      }
+    };
+    if(imgData.orig_base64||imgData.base64){
+      bImg.src="data:"+(imgData.orig_mt||imgData.mt)+";base64,"+(imgData.orig_base64||imgData.base64);
+    }else if(imgData._imageUrl){
+      bImg.src=imgData._imageUrl;
+    }
   }
 
   // ── DPR動的変更（参照画像追加/削除時にメモリ調整）──
   function adjustDPR(newDPR){
-    var c=canvasRef.current; if(!c||!baseRef.current)return;
+    var c=canvasRef.current; if(!c||(!baseRef.current&&!baseImgRef.current))return;
     var dim=canvasDimRef.current; if(!dim||!dim.w)return;
     var nw=dim.w, nh=dim.h;
     var oldDPR=dprRef.current||1;
     if(Math.abs(newDPR-oldDPR)<0.01)return;
-    // 原画からフル再描画
     var d=imgDataRef.current; if(!d)return;
-    var bImg=new Image();
-    bImg.onload=function(){
+    function redraw(bi){
       dprRef.current=newDPR;
       c.width=Math.round(nw*newDPR); c.height=Math.round(nh*newDPR);
       var ctx=c.getContext("2d");
@@ -975,11 +996,18 @@ function ImageAnnotator(props){
         overlayCanvasRef.current.height=c.height;
         overlayCanvasRef.current.getContext("2d").setTransform(newDPR,0,0,newDPR,0,0);
       }
-      ctx.drawImage(bImg,0,0,nw,nh);
-      baseRef.current=ctx.getImageData(0,0,c.width,c.height);
+      ctx.drawImage(bi,0,0,nw,nh);
+      baseImgRef.current=bi;
+      try{baseRef.current=ctx.getImageData(0,0,c.width,c.height);}catch(e){baseRef.current=null;}
       strokesRef.current.forEach(function(s){drawStroke(ctx,s);});
-    };
-    bImg.src="data:"+(d.orig_mt||d.mt)+";base64,"+(d.orig_base64||d.base64);
+    }
+    if(d.orig_base64||d.base64){
+      var bImg=new Image();
+      bImg.onload=function(){redraw(bImg);};
+      bImg.src="data:"+(d.orig_mt||d.mt)+";base64,"+(d.orig_base64||d.base64);
+    }else if(baseImgRef.current){
+      redraw(baseImgRef.current);
+    }
   }
 
   // 初回ロード
@@ -1050,10 +1078,16 @@ function ImageAnnotator(props){
   }
 
   function rebuild(strokes){
-    var c=canvasRef.current; if(!c||!baseRef.current)return;
+    var c=canvasRef.current; if(!c||(!baseRef.current&&!baseImgRef.current))return;
     var ctx=c.getContext("2d");
     ctx.setTransform(1,0,0,1,0,0);
-    ctx.putImageData(baseRef.current,0,0);
+    if(baseRef.current){
+      ctx.putImageData(baseRef.current,0,0);
+    }else if(baseImgRef.current&&baseDimRef.current){
+      ctx.clearRect(0,0,c.width,c.height);
+      ctx.setTransform(dprRef.current||1,0,0,dprRef.current||1,0,0);
+      ctx.drawImage(baseImgRef.current,0,0,baseDimRef.current.w,baseDimRef.current.h);
+    }
     ctx.setTransform(dprRef.current||1,0,0,dprRef.current||1,0,0);
     strokes.forEach(function(s){drawStroke(ctx,s);});
   }
@@ -1452,7 +1486,11 @@ function ImageAnnotator(props){
       }
       if(mode2==="dragging_sel"){
         var dx2=rawPos.x-selDragRef.current.sx,dy2=rawPos.y-selDragRef.current.sy;
-        if(Math.hypot(dx2,dy2)>4)lassoModeRef.current="moving";
+        if(Math.hypot(dx2,dy2)>4){
+          lassoModeRef.current="moving";
+          // 移動開始時: メインキャンバスから選択ストロークを除外して再描画
+          rebuild(strokesRef.current.filter(function(_,i){return !selIdxs.has(i);}));
+        }
       } else if(mode2==="moving"){
         var mdx=rawPos.x-selDragRef.current.sx, mdy=rawPos.y-selDragRef.current.sy;
         selDragRef.current.dx=mdx; selDragRef.current.dy=mdy;
@@ -1524,7 +1562,7 @@ function ImageAnnotator(props){
         var ens=strokesRef.current.map(function(s,i){return selIdxs.has(i)?shiftStroke(s,edx,edy):s;});
         strokesRef.current=ens;
         var enb=selBounds?Object.assign({},selBounds,{x:selBounds.x+edx,y:selBounds.y+edy}):null;
-        setSelBounds(enb); commit(ens); rebuild(ens); lassoModeRef.current="idle";
+        setSelBounds(enb); commit(ens); clearOverlay(); rebuild(ens); lassoModeRef.current="idle";
       } else {
         // ドラッグなしのクリック → テキストストローク単体選択なら即編集
         lassoModeRef.current="idle";
@@ -1574,8 +1612,11 @@ function ImageAnnotator(props){
     if(e.touches.length===2){
       drawRef.current.on=false;
       var tdx=e.touches[0].clientX-e.touches[1].clientX,tdy=e.touches[0].clientY-e.touches[1].clientY;
+      var aRect=canvasAreaRef.current?canvasAreaRef.current.getBoundingClientRect():null;
+      var acx=aRect?(aRect.left+aRect.width/2):0,acy=aRect?(aRect.top+aRect.height/2):0;
       pinchRef.current={d:Math.hypot(tdx,tdy),z:zoom,px:pan.x,py:pan.y,
-        mx:(e.touches[0].clientX+e.touches[1].clientX)/2,my:(e.touches[0].clientY+e.touches[1].clientY)/2};
+        mx:(e.touches[0].clientX+e.touches[1].clientX)/2,my:(e.touches[0].clientY+e.touches[1].clientY)/2,
+        acx:acx,acy:acy};
     } else onStart(e);
   };
   var onTM=function(e){
@@ -1583,9 +1624,14 @@ function ImageAnnotator(props){
       e.preventDefault();
       var tdx2=e.touches[0].clientX-e.touches[1].clientX,tdy2=e.touches[0].clientY-e.touches[1].clientY;
       var td=Math.hypot(tdx2,tdy2),tmx=(e.touches[0].clientX+e.touches[1].clientX)/2,tmy=(e.touches[0].clientY+e.touches[1].clientY)/2;
-      setZoom(cZ(pinchRef.current.z*(td/pinchRef.current.d)));
-      setPan({x:pinchRef.current.px+(tmx-pinchRef.current.mx),y:pinchRef.current.py+(tmy-pinchRef.current.my)});
-      // ★ pinchRef は更新しない（毎フレーム更新するとぶれの原因になる）
+      var p=pinchRef.current;
+      var newZ=cZ(p.z*(td/p.d));
+      var sc=newZ/p.z;
+      // ピンチ位置を中心にズーム + パン移動
+      var nx=p.px*sc+(p.mx-p.acx)*(1-sc)+(tmx-p.mx);
+      var ny=p.py*sc+(p.my-p.acy)*(1-sc)+(tmy-p.my);
+      setZoom(newZ);
+      setPan({x:nx,y:ny});
     } else onMove(e);
   };
   var onTE=function(e){pinchRef.current=null;onEnd(e);};
@@ -1596,15 +1642,41 @@ function ImageAnnotator(props){
     function _ts(e){if(_tHandlers.current.ts)_tHandlers.current.ts(e);}
     function _tm(e){if(_tHandlers.current.tm)_tHandlers.current.tm(e);}
     function _te(e){if(_tHandlers.current.te)_tHandlers.current.te(e);}
+    // ダブルタップ → 消しゴムトグル（ペン・指どちらでも）
+    function _pd(e){
+      if(e.pointerType==='mouse')return; // マウスは除外（PCはツールバー操作）
+      if(textInputRef.current)return; // テキスト編集中は無視
+      var now=Date.now();
+      var pt=penTapRef.current;
+      var dx=pt.x!==undefined?Math.abs(e.clientX-pt.x):0;
+      var dy=pt.y!==undefined?Math.abs(e.clientY-pt.y):0;
+      if(now-pt.time<300&&dx<30&&dy<30){
+        // ダブルタップ検出 → トグル
+        e.preventDefault();
+        var cur=toolRef.current;
+        if(cur==='eraser'){
+          var restore=pt.prevTool||'freehand';
+          setTool(restore);toolRef.current=restore;
+          penTapRef.current={time:0,prevTool:null,x:0,y:0};
+        }else{
+          penTapRef.current={time:0,prevTool:cur,x:0,y:0};
+          setTool('eraser');toolRef.current='eraser';
+        }
+      }else{
+        penTapRef.current={time:now,prevTool:pt.prevTool,x:e.clientX,y:e.clientY};
+      }
+    }
     el.addEventListener("touchstart",_ts,{passive:false});
     el.addEventListener("touchmove",_tm,{passive:false});
     el.addEventListener("touchend",_te);
     el.addEventListener("touchcancel",_te);
+    el.addEventListener("pointerdown",_pd);
     return function(){
       el.removeEventListener("touchstart",_ts);
       el.removeEventListener("touchmove",_tm);
       el.removeEventListener("touchend",_te);
       el.removeEventListener("touchcancel",_te);
+      el.removeEventListener("pointerdown",_pd);
     };
   },[]);
   // 毎レンダー後に最新ハンドラを差し替え
@@ -2202,33 +2274,32 @@ function ImageAnnotator(props){
             quickColors.map(function(qc,qi){
               var isA=ti.color===qc;
               var QS=IS_TOUCH?24:20;
-              return ce("span",{key:qi,
-                onMouseDown:function(e){e.stopPropagation();if(blurTimer)clearTimeout(blurTimer);},
-                onClick:function(){
-                  if(isA){
-                    // 同じ色を再クリック → ネイティブカラーピッカーでスロットの色を変更
-                    var inp=document.createElement('input');inp.type='color';inp.value=qc;
-                    inp.style.cssText='position:fixed;top:-9999px;left:-9999px;opacity:0;';
-                    document.body.appendChild(inp);
-                    inp.addEventListener('input',function(ev){
+              var circleStyle={width:QS,height:QS,borderRadius:"50%",background:qc,cursor:"pointer",flexShrink:0,
+                  boxShadow:isA?"0 0 0 2px #111,0 0 0 3.5px #6366F1":"0 1px 3px rgba(0,0,0,.4)",
+                  border:"1.5px solid rgba(255,255,255,.4)",
+                  transform:isA?"scale(1.15)":"scale(1)",transition:"transform .1s"};
+              if(isA){
+                // アクティブ色: label+hidden input で直接ピッカー起動（iPad対応）
+                return ce("label",{key:qi,
+                  onMouseDown:function(e){e.stopPropagation();if(blurTimer)clearTimeout(blurTimer);},
+                  style:Object.assign({},circleStyle,{display:"inline-block",position:"relative"})},
+                  ce("input",{type:"color",value:qc,
+                    onInput:function(ev){
                       var nc=ev.target.value;
                       setTextInputState(function(s){return Object.assign({},s,{color:nc});});
                       var nq=quickColors.slice();nq[qi]=nc;setQuickColorsAndSave(nq);
-                    });
-                    inp.addEventListener('change',function(){
-                      if(taRef.current)taRef.current.focus();
-                      setTimeout(function(){inp.remove();},100);
-                    });
-                    inp.click();
-                  } else {
-                    setTextInputState(function(s){return Object.assign({},s,{color:qc});});
-                    if(taRef.current)taRef.current.focus();
-                  }
+                    },
+                    onChange:function(){if(taRef.current)taRef.current.focus();},
+                    style:{position:"absolute",opacity:0,width:1,height:1,top:0,left:0}})
+                );
+              }
+              return ce("span",{key:qi,
+                onMouseDown:function(e){e.stopPropagation();if(blurTimer)clearTimeout(blurTimer);},
+                onClick:function(){
+                  setTextInputState(function(s){return Object.assign({},s,{color:qc});});
+                  if(taRef.current)taRef.current.focus();
                 },
-                style:{width:QS,height:QS,borderRadius:"50%",background:qc,cursor:"pointer",flexShrink:0,
-                  boxShadow:isA?"0 0 0 2px #111,0 0 0 3.5px #6366F1":"0 1px 3px rgba(0,0,0,.4)",
-                  border:"1.5px solid rgba(255,255,255,.4)",
-                  transform:isA?"scale(1.15)":"scale(1)",transition:"transform .1s"}
+                style:circleStyle
               });
             }),
             ce("label",{
@@ -2305,7 +2376,6 @@ function ImageAnnotator(props){
               defaultValue:ti.text||"",
               rows:1,
               onKeyDown:function(e){
-                if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();confirmText();}
                 if(e.key==="Escape"){e.preventDefault();
                   var si=textInputRef.current?textInputRef.current.idx:-1;
                   var bs=si>=0?strokesRef.current.filter(function(_,i){return i!==si;}):strokesRef.current;
@@ -2319,7 +2389,7 @@ function ImageAnnotator(props){
                 el.style.height=el.scrollHeight+"px";
                 // ライブプレビュー（元ストロークを除外して二重防止）
                 var ti2=textInputRef.current;
-                if(!ti2||!canvasRef.current||!baseRef.current)return;
+                if(!ti2||!canvasRef.current||(!baseRef.current&&!baseImgRef.current))return;
                 var si2=ti2.idx;
                 var bs2=si2>=0?strokesRef.current.filter(function(_,i){return i!==si2;}):strokesRef.current;
                 rebuild(bs2);
