@@ -48,12 +48,12 @@ var IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
 /* ─── Firebase Storage ヘルパー ────────────────────────────── */
 var _fbApp=null, _fbStorage=null;
 function getFirebaseStorage(cfg){
-  if(!cfg||!cfg.storageBucket)return null;
+  if(!cfg||!cfg.storageBucket||!cfg.apiKey)return null;
   if(_fbStorage)return _fbStorage;
   try{
     if(!_fbApp){
       try{_fbApp=firebase.app();}catch(e2){
-        _fbApp=firebase.initializeApp({storageBucket:cfg.storageBucket});
+        _fbApp=firebase.initializeApp({apiKey:cfg.apiKey,storageBucket:cfg.storageBucket});
       }
     }
     _fbStorage=firebase.storage(_fbApp);
@@ -468,9 +468,10 @@ function FbSettingsModal(props){
   var s1=useState(cfg.secret||''); var secret=s1[0],setSecret=s1[1];
   var s2=useState(cfg.storageBucket||''); var bucket=s2[0],setBucket=s2[1];
   var s3=useState(cfg.paused!==false); var paused=s3[0],setPaused=s3[1];
+  var sAK=useState(cfg.apiKey||''); var apiKey=sAK[0],setApiKey=sAK[1];
   var s4=useState(null); var cleanupStatus=s4[0],setCleanupStatus=s4[1]; // null|'running'|'done:N'|'error'
   function save(){
-    var nc={url:url.trim(),secret:secret.trim(),storageBucket:bucket.trim(),paused:paused};
+    var nc={url:url.trim(),secret:secret.trim(),apiKey:apiKey.trim(),storageBucket:bucket.trim(),paused:paused};
     try{localStorage.setItem(FB_CFG_KEY,JSON.stringify(nc));}catch(e){}
     _fbApp=null;_fbStorage=null;
     // ユーザーが明示的にpause解除 → 強制停止フラグもリセット
@@ -556,6 +557,12 @@ function FbSettingsModal(props){
             ce("input",{type:"text",value:bucket,onChange:function(e){setBucket(e.target.value);},
               placeholder:"scalping-notebbok.firebasestorage.app",style:INP}),
             ce("div",{style:{fontSize:10,color:"#555",marginTop:4}},"Firebase Console → Storage で確認できます")
+          ),
+          ce("div",null,
+            ce("div",{style:{fontSize:11,color:"#888",marginBottom:6,fontWeight:600}},"API Key（Storage用）"),
+            ce("input",{type:"text",value:apiKey,onChange:function(e){setApiKey(e.target.value);},
+              placeholder:"AIza...",style:INP}),
+            ce("div",{style:{fontSize:10,color:"#555",marginTop:4}},"Firebase Console → プロジェクト設定 → 全般 で確認")
           ),
 
           /* ── 旧データクリーンアップ ── */
@@ -3389,7 +3396,7 @@ function App(){
     return null;
   }); var img=s0[0],setImg=s0[1];
   var s1=useState(false); var drag=s1[0],setDrag=s1[1];
-  var FB_DEFAULTS={url:'',secret:'',storageBucket:'scalping-notebbok.firebasestorage.app',paused:true};
+  var FB_DEFAULTS={url:'',secret:'',apiKey:'',storageBucket:'scalping-notebbok.firebasestorage.app',paused:true};
   var s2=useState(function(){try{var s=localStorage.getItem(FB_CFG_KEY);if(s){var p=JSON.parse(s);return Object.assign({},FB_DEFAULTS,p);}return FB_DEFAULTS;}catch(e){return FB_DEFAULTS;}}); var fbCfg=s2[0],setFbCfg=s2[1];
   var s3=useState(false); var showFbSettings=s3[0],setShowFbSettings=s3[1];
   var s4=useState(function(){try{return sessionStorage.getItem('ca_screen')==='drafts';}catch(e){return false;}}); var showDrafts=s4[0],setShowDrafts=s4[1];
