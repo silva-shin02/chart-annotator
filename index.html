@@ -829,7 +829,7 @@ function RefChartPicker(props){
                       transition:"border-color .15s"},
                     onMouseEnter:function(e){e.currentTarget.style.borderColor='#6366F1';},
                     onMouseLeave:function(e){e.currentTarget.style.borderColor='#2a2a2a';}},
-                    (caLoadThumb(m.id)||m.thumbUrl||m.thumb)?ce("img",{src:caLoadThumb(m.id)||m.thumbUrl||m.thumb,style:{width:"100%",display:"block",height:"auto"},draggable:false,onError:function(e){e.target.style.display="none";}})
+                    (m.thumbUrl||_thumbMemCache[m.id]||m.thumb)?ce("img",{src:m.thumbUrl||_thumbMemCache[m.id]||m.thumb,style:{width:"100%",display:"block",height:"auto"},draggable:false,onError:function(e){e.target.style.display="none";}})
                       :ce("div",{style:{width:"100%",height:60,background:"#222",display:"flex",
                         alignItems:"center",justifyContent:"center",color:"#555",fontSize:10}},"no preview"),
                     ce("div",{style:{padding:"5px 7px"}},
@@ -2600,6 +2600,9 @@ function ImageAnnotator(props){
 }
 
 /* ─── Draft Storage ─────────────────────────────────────────── */
+/* ── メモリキャッシュ（iPadのlocalStorage 5MB制限を回避）── */
+var _dataMemCache={};  // id -> data object
+var _thumbMemCache={}; // id -> thumb dataUrl
 var CA_TICKERS_KEY='ca_tickers_v1';
 var CA_META_KEY='ca_meta_v1';
 var CA_DATA_PFX='ca_data_';
@@ -2611,36 +2614,38 @@ function caLoadMeta(){
   try{
     var s=localStorage.getItem(CA_META_KEY);if(!s)return[];
     var arr=JSON.parse(s);
-    // 既存thumbを個別キーにマイグレーション
-    var dirty=false;
+    // 既存thumbをメモリキャッシュに退避
     arr.forEach(function(item){
-      if(item.thumb&&typeof item.thumb==='string'&&item.thumb.length>500&&!caLoadThumb(item.id)){
-        caSaveThumb(item.id,item.thumb);
-        item.thumb=null; dirty=true;
+      if(item.thumb&&typeof item.thumb==='string'&&item.thumb.length>500){
+        _thumbMemCache[item.id]=item.thumb;
       }
     });
-    if(dirty)try{localStorage.setItem(CA_META_KEY,JSON.stringify(arr));}catch(e){}
     return arr;
   }catch(e){return[];}
 }
 function caSaveMeta(m){
   var lite=m.map(function(item){
+    // thumbはメモリキャッシュに退避、metaにはthumbUrlのみ残す
     if(item.thumb&&typeof item.thumb==='string'&&item.thumb.length>500){
-      caSaveThumb(item.id,item.thumb);
-      return Object.assign({},item,{thumb:null});
+      _thumbMemCache[item.id]=item.thumb;
     }
-    return item;
+    return Object.assign({},item,{thumb:null});
   });
   try{localStorage.setItem(CA_META_KEY,JSON.stringify(lite));}catch(e){
-    lite=lite.map(function(x){return Object.assign({},x,{thumb:null});});
-    try{localStorage.setItem(CA_META_KEY,JSON.stringify(lite));}catch(e2){
-      console.error('[caSaveMeta] save failed');
-    }
+    console.error('[caSaveMeta] save failed');
   }
 }
-function caLoadData(id){try{var s=localStorage.getItem(CA_DATA_PFX+id);return s?JSON.parse(s):null;}catch(e){return null;}}
-function caSaveData(id,d){try{localStorage.setItem(CA_DATA_PFX+id,JSON.stringify(d));}catch(e){}}
-function caDeleteData(id){try{localStorage.removeItem(CA_DATA_PFX+id);}catch(e){}}
+function caLoadData(id){
+  if(_dataMemCache[id])return _dataMemCache[id];
+  try{var s=localStorage.getItem(CA_DATA_PFX+id);if(s){var d=JSON.parse(s);_dataMemCache[id]=d;return d;}return null;}catch(e){return null;}
+}
+function caSaveData(id,d){
+  _dataMemCache[id]=d;
+  try{localStorage.setItem(CA_DATA_PFX+id,JSON.stringify(d));}catch(e){
+    console.warn('[caSaveData] localStorage full for',id,'(memory cache only)');
+  }
+}
+function caDeleteData(id){delete _dataMemCache[id];try{localStorage.removeItem(CA_DATA_PFX+id);}catch(e){}}
 function caLoadTrash(){try{var s=localStorage.getItem(CA_TRASH_KEY);return s?JSON.parse(s):[];}catch(e){return[];}}
 function caSaveTrash(t){try{localStorage.setItem(CA_TRASH_KEY,JSON.stringify(t));}catch(e){}}
 function caGenId(){return Date.now().toString(36)+Math.random().toString(36).slice(2,6);}
@@ -2653,10 +2658,9 @@ function caGenThumb(canvasEl){
   ctx.drawImage(canvasEl,0,0,W,H);
   return tc.toDataURL('image/png');
 }
-var CA_THUMB_PFX='ca_thumb_';
-function caSaveThumb(id,dataUrl){try{localStorage.setItem(CA_THUMB_PFX+id,dataUrl);}catch(e){try{localStorage.removeItem(CA_THUMB_PFX+id);}catch(e2){}}}
-function caLoadThumb(id){try{return localStorage.getItem(CA_THUMB_PFX+id)||null;}catch(e){return null;}}
-function caDeleteThumb(id){try{localStorage.removeItem(CA_THUMB_PFX+id);}catch(e){}}
+function caSaveThumb(id,dataUrl){_thumbMemCache[id]=dataUrl;}
+function caLoadThumb(id){return _thumbMemCache[id]||null;}
+function caDeleteThumb(id){delete _thumbMemCache[id];}
 
 function DraftLibrary(props){
   var onOpen=props.onOpen, onClose=props.onClose, fbCfg=props.fbCfg||{}, initialTicker=props.initialTicker||null;
@@ -2688,10 +2692,10 @@ function DraftLibrary(props){
     return function(){window.removeEventListener('ca_back',onBack);};
   },[showTrash,onClose]);
 
-  // ── サムネイル再生成: thumbが無いアイテムのサムネイルをデータから生成 ──
+  // ── サムネイル再生成: thumbUrlが無いアイテムのサムネイルをデータから生成→Storage UL ──
   useEffect(function(){
     var current=caLoadMeta();
-    var missing=current.filter(function(m){return !caLoadThumb(m.id)&&!m.thumbUrl&&!(m.thumb&&m.thumb.length>100);});
+    var missing=current.filter(function(m){return !m.thumbUrl&&!_thumbMemCache[m.id];});
     if(!missing.length)return;
     var auth=fbCfg.secret?'?auth='+fbCfg.secret:'';
     var dataBase=fbCfg.url?fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data':'';
@@ -2705,24 +2709,31 @@ function DraftLibrary(props){
         var tctx=tc.getContext('2d');tctx.imageSmoothingEnabled=true;tctx.imageSmoothingQuality='high';
         tctx.drawImage(tImg,0,0,W,H);
         var thumb=tc.toDataURL('image/png');
-        caSaveThumb(m.id,thumb);
-        setMeta(function(prev){return prev.map(function(x){return x.id===m.id?Object.assign({},x,{thumb:thumb}):x;});});
-        setTimeout(processNext,50);
+        _thumbMemCache[m.id]=thumb;
+        setMeta(function(prev){return prev.map(function(x){return x.id===m.id?Object.assign({},x,{thumb:null}):x;});});
+        // Firebase Storageにアップロード→thumbUrlをmetaに保存
+        uploadThumbToStorage(fbCfg,m.id,thumb).then(function(thumbUrl){
+          if(thumbUrl){
+            setMeta(function(prev){
+              var nm=prev.map(function(x){return x.id===m.id?Object.assign({},x,{thumbUrl:thumbUrl}):x;});
+              caSaveMeta(nm); return nm;
+            });
+          }
+        });
+        setTimeout(processNext,100);
       };
-      tImg.onerror=function(){setTimeout(processNext,50);};
+      tImg.onerror=function(){setTimeout(processNext,100);};
       tImg.src=src;
     }
 
     function processNext(){
       if(idx>=missing.length)return;
       var m=missing[idx]; idx++;
-      // 1. ローカルデータから生成
       var d=caLoadData(m.id);
       if(d&&(d.orig_base64||d.base64)){
         genThumb(m,'data:'+(d.orig_mt||d.mt||'image/png')+';base64,'+(d.orig_base64||d.base64));
         return;
       }
-      // 2. Firebaseからフェッチして生成
       if(dataBase&&!_fbIsPaused(fbCfg)){
         fetch(dataBase+'/'+m.id+'.json'+auth).then(function(r){return r.ok?r.json():null;})
         .then(function(fbData){
@@ -3218,7 +3229,7 @@ function DraftLibrary(props){
                 return ce("div",{key:m.id,
                   style:{width:IS_TOUCH?450:510,background:"#1a1a1a",borderRadius:10,
                     border:"1px solid #3a1a1a",overflow:"hidden",flexShrink:0}},
-                  (caLoadThumb(m.id)||m.thumbUrl||m.thumb)?ce("img",{src:caLoadThumb(m.id)||m.thumbUrl||m.thumb,style:{width:"100%",display:"block",height:"auto"},draggable:false,onError:function(e){e.target.style.display="none";}}):null,
+                  (m.thumbUrl||_thumbMemCache[m.id]||m.thumb)?ce("img",{src:m.thumbUrl||_thumbMemCache[m.id]||m.thumb,style:{width:"100%",display:"block",height:"auto"},draggable:false,onError:function(e){e.target.style.display="none";}}):null,
                   ce("div",{style:{padding:"8px 10px"}},
                     ce("div",{style:{fontSize:12,fontWeight:700,color:"#ddd",
                       overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},m.name),
@@ -3320,7 +3331,7 @@ function DraftLibrary(props){
                   border:"1px solid #2a2a2a",overflow:"hidden",cursor:"pointer",flexShrink:0},
                 onClick:function(){openChart(m.id);}},
                 ce("div",{style:{position:"relative"}},
-                  (caLoadThumb(m.id)||m.thumbUrl||m.thumb)?ce("img",{src:caLoadThumb(m.id)||m.thumbUrl||m.thumb,style:{width:"100%",display:"block",height:"auto"},draggable:false,onError:function(e){e.target.style.display="none";}})
+                  (m.thumbUrl||_thumbMemCache[m.id]||m.thumb)?ce("img",{src:m.thumbUrl||_thumbMemCache[m.id]||m.thumb,style:{width:"100%",display:"block",height:"auto"},draggable:false,onError:function(e){e.target.style.display="none";}})
                     :ce("div",{style:{width:"100%",height:80,background:"#222",display:"flex",
                       alignItems:"center",justifyContent:"center",color:"#555",fontSize:11}},"no preview"),
                   ce("button",{onClick:function(e){e.stopPropagation();deleteChart(m.id);},
