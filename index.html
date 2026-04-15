@@ -784,6 +784,8 @@ function ImageAnnotator(props){
   var stLS=useState(false);   var showLocalSave=stLS[0],setShowLocalSave=stLS[1];
   var stAS=useState(null);    var autoSaveStatus=stAS[0],setAutoSaveStatus=stAS[1]; // null|'saving'|'ok'|'err'
   var stRU=useState(false);   var remoteUpdate=stRU[0],setRemoteUpdate=stRU[1];
+  var remoteUpdateRef=useRef(false);
+  remoteUpdateRef.current=remoteUpdate;
   var stRCP=useState(false);  var showRefPicker=stRCP[0],setShowRefPicker=stRCP[1];
 
   var dprRef=useRef(1);
@@ -1073,6 +1075,7 @@ function ImageAnnotator(props){
     if(autoSaveTimerRef.current)clearTimeout(autoSaveTimerRef.current);
     autoSaveTimerRef.current=setTimeout(function(){
       var cfg2=props.fbCfg; if(_fbIsPaused(cfg2))return;
+      if(remoteUpdateRef.current)return; // 別端末更新の未反映中はRTDB書き込みを抑制
       var d=imgDataRef.current;
       var savedAt=Date.now();
       var strokes=strokesRef.current;
@@ -1170,8 +1173,8 @@ function ImageAnnotator(props){
             fetch(dataUrl).then(function(r){return r.ok?r.text():null;})
               .then(function(txt){
                 if(!txt)return;var fbData; try{fbData=JSON.parse(txt);}catch(e){return;}
-                if(!fbData||typeof fbData!=='object'||fbData.error||!fbData.strokes)return;
-                var newStrokes=fbData.strokes;
+                if(!fbData||typeof fbData!=='object'||fbData.error)return;
+                var newStrokes=Array.isArray(fbData.strokes)?fbData.strokes:[];
                 strokesRef.current=newStrokes;
                 histRef.current=[newStrokes]; futRef.current=[];
                 setCanUndo(false); setCanRedo(false);
@@ -1928,29 +1931,15 @@ function ImageAnnotator(props){
           fetch(dataUrl).then(function(r){return r.ok?r.text():null;})
             .then(function(txt){
               if(!txt)return;var fbData; try{fbData=JSON.parse(txt);}catch(e){return;}
-              // 新パスにstrokesがあればそれを使う
-              if(fbData&&fbData.strokes){
-                var ns=fbData.strokes;
-                strokesRef.current=ns;
-                histRef.current=[ns]; futRef.current=[];
-                setCanUndo(false); setCanRedo(false);
-                rebuild(ns); setRemoteUpdate(false);
-                loadedSavedAtRef.current=Date.now();
-                return;
-              }
-              // 旧パスフォールバック
-              return fetch(oldUrl).then(function(r2){return r2.ok?r2.text():null;})
-                .then(function(txt2){
-                  if(!txt2)return;var fbOld; try{fbOld=JSON.parse(txt2);}catch(e){return;}
-                  if(!fbOld||!fbOld.data||!fbOld.data.strokes)return;
-                  var ns2=fbOld.data.strokes;
-                  strokesRef.current=ns2;
-                  histRef.current=[ns2]; futRef.current=[];
-                  setCanUndo(false); setCanRedo(false);
-                  rebuild(ns2); setRemoteUpdate(false);
-                  loadedSavedAtRef.current=Date.now();
-                });
-            }).catch(function(){});
+              if(!fbData||typeof fbData!=='object')return;
+              // strokesを取得（全削除時はnullになる場合がある→空配列扱い）
+              var ns=Array.isArray(fbData.strokes)?fbData.strokes:[];
+              strokesRef.current=ns;
+              histRef.current=[ns]; futRef.current=[];
+              setCanUndo(false); setCanRedo(false);
+              rebuild(ns); setRemoteUpdate(false);
+              loadedSavedAtRef.current=Date.now();
+            }).catch(function(e){console.error('[反映する] fetch error:',e);});
         },
         style:{fontSize:12,fontWeight:700,padding:"5px 12px",background:"#2563eb",
           color:"#fff",border:"none",borderRadius:6,cursor:"pointer",fontFamily:"inherit",flexShrink:0}
