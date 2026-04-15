@@ -1127,7 +1127,6 @@ function ImageAnnotator(props){
         var vBody=JSON.stringify({_v:savedAt});fetch(cfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts-v.json'+auth,
           {method:'PUT',headers:{'Content-Type':'application/json'},body:vBody}).catch(function(){});
         loadedSavedAtRef.current=savedAt;
-        setRemoteUpdate(false);
       }).catch(function(e){
         console.error('triggerAutoSave:',e);
         setAutoSaveStatus('err');setTimeout(function(){setAutoSaveStatus(null);},3000);
@@ -1178,6 +1177,7 @@ function ImageAnnotator(props){
                 setCanUndo(false); setCanRedo(false);
                 rebuild(newStrokes);
                 loadedSavedAtRef.current=remoteT;
+                setRemoteUpdate(false);
                 setAutoSaveStatus('ok');
                 setTimeout(function(){setAutoSaveStatus(null);},2000);
                 try{
