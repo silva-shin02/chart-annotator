@@ -829,7 +829,8 @@ function RefChartPicker(props){
                       transition:"border-color .15s"},
                     onMouseEnter:function(e){e.currentTarget.style.borderColor='#6366F1';},
                     onMouseLeave:function(e){e.currentTarget.style.borderColor='#2a2a2a';}},
-                    m.thumb?ce("img",{src:m.thumb,style:{width:"100%",display:"block",height:"auto"},draggable:false})
+                    (m.thumb||m.thumbUrl)?ce("img",{src:m.thumb||m.thumbUrl,style:{width:"100%",display:"block",height:"auto"},draggable:false,
+                      onError:function(e){e.target.style.display='none';}})
                       :ce("div",{style:{width:"100%",height:60,background:"#222",display:"flex",
                         alignItems:"center",justifyContent:"center",color:"#555",fontSize:10}},"no preview"),
                     ce("div",{style:{padding:"5px 7px"}},
@@ -935,9 +936,9 @@ function ImageAnnotator(props){
     rebuild(baseStrokes);
     drawStroke(canvasRef.current.getContext("2d"),{
       type:"text",x:textInputState.x,y:textInputState.y,text:txt,
-      fontSize:textInputState.fontSize,fontBold:textInputState.fontBold,
+      fontSize:Math.round((textInputState.fontSize||24)*canvasScale()),fontBold:textInputState.fontBold,
       color:textInputState.color,opacity:textInputState.opacity,lineW:1,
-      boxW:textInputState.boxW||undefined
+      boxW:textInputState.boxW?Math.round(textInputState.boxW*canvasScale()):undefined
     });
   },[textInputState]);
 
@@ -1007,8 +1008,9 @@ function ImageAnnotator(props){
       var nw=bImg.naturalWidth, nh=bImg.naturalHeight;
       // iOS Safari のキャンバスメモリ制限を考慮した動的DPR
       // メイン + overlay + getImageData で3面分消費するので安全圏を確保
+      // タッチデバイス（iPad等）では参照画像を追加する可能性があるため上限を厳しく設定
       var devDPR=window.devicePixelRatio||1;
-      var MAX_CANVAS_PX=16777216; // 16M pixels（iOS Safari安全上限）
+      var MAX_CANVAS_PX=IS_TOUCH?8388608:16777216; // Touch: 8M, Desktop: 16M
       var DPR=devDPR;
       if(nw*DPR*nh*DPR>MAX_CANVAS_PX){
         DPR=Math.sqrt(MAX_CANVAS_PX/(nw*nh));
@@ -1032,7 +1034,7 @@ function ImageAnnotator(props){
       setSelIdxs(new Set()); setSelBounds(null);
       canvasDimRef.current={w:nw,h:nh};
       var split=refPanel;
-      var aw=(split?window.innerWidth*0.5:window.innerWidth)*0.96;
+      var aw=(split?window.innerWidth*0.45:window.innerWidth)*0.96;
       var ah=(window.innerHeight-130)*0.96;
       var sc=Math.min(1,aw/nw,ah/nh);
       setDispW(Math.round(nw*sc));
@@ -1396,21 +1398,34 @@ function ImageAnnotator(props){
     if(!textInputState)return;
     var ti=Object.assign({},textInputState,{text:taRef.current?taRef.current.value:textInputState.text});
     if(!ti.text.trim()){rebuild(strokesRef.current);setTextInputState(null);return;}
+    var cs=canvasScale();
+    var scaledFS=Math.round(ti.fontSize*cs);
+    var scaledBW=ti.boxW?Math.round(ti.boxW*cs):Math.round(400*cs);
     var tmpCtx=document.createElement("canvas").getContext("2d");
-    tmpCtx.font=(ti.fontBold?"bold ":"")+ti.fontSize+"px -apple-system,sans-serif";
+    tmpCtx.font=(ti.fontBold?"bold ":"")+scaledFS+"px -apple-system,sans-serif";
     var measW=tmpCtx.measureText(ti.text.trim()).width;
     var ns2={type:"text",x:ti.x,y:ti.y,text:ti.text.trim(),
-      fontSize:ti.fontSize,fontBold:ti.fontBold,color:ti.color,opacity:ti.opacity,
-      lineW:1,measuredWidth:measW,boxW:ti.boxW||400};
+      fontSize:scaledFS,fontBold:ti.fontBold,color:ti.color,opacity:ti.opacity,
+      lineW:1,measuredWidth:measW,boxW:scaledBW};
     var arr;
     if(ti.idx>=0){ arr=strokesRef.current.map(function(s,i){return i===ti.idx?ns2:s;}); }
     else { arr=strokesRef.current.concat([ns2]); }
     strokesRef.current=arr; commit(arr); rebuild(arr); setTextInputState(null);
   }
 
+  // ── Canvas ↔ Screen scale ──
+  // lineW/fontSize はユーザーが画面上で見たいサイズ（CSSピクセル）
+  // canvas座標系に変換するためのスケール係数
+  function canvasScale(){
+    var dim=canvasDimRef.current;
+    if(!dim||!dim.w||!dispW)return 1;
+    return dim.w/dispW;
+  }
+
   // ── Build stroke ──
   function buildStroke(x1,y1,x2,y2){
-    var b={color:color,lineW:lineW,opacity:opacity};
+    var cs=canvasScale();
+    var b={color:color,lineW:lineW*cs,opacity:opacity};
     switch(tool){
       case"line":   return Object.assign({},b,{type:"line",  x1:x1,y1:y1,x2:x2,y2:y2});
       case"dotted": return Object.assign({},b,{type:"dotted",x1:x1,y1:y1,x2:x2,y2:y2});
@@ -1541,11 +1556,11 @@ function ImageAnnotator(props){
         var oc_f=overlayCtx();
         if(oc_f){
           clearOverlay();
-          drawStroke(oc_f,{type:"freehand",pts:freehandPts.current,color:color,lineW:lineW,opacity:opacity});
+          drawStroke(oc_f,{type:"freehand",pts:freehandPts.current,color:color,lineW:lineW*canvasScale(),opacity:opacity});
         }
       }
     } else if(tool==="eraser"){
-      var er2=lineW*5;
+      var er2=lineW*canvasScale()*5;
       var after=strokesRef.current.filter(function(s){return !strokeHits(s,rawPos.x,rawPos.y,er2);});
       if(after.length!==strokesRef.current.length){strokesRef.current=after;rebuild(after);}
     } else {
@@ -1620,7 +1635,7 @@ function ImageAnnotator(props){
       :lastPosRef.current;
     if(tool==="freehand"){
       if(freehandPts.current.length>1){
-        var fs2={type:"freehand",pts:freehandPts.current.slice(),color:color,lineW:lineW,opacity:opacity};
+        var fs2={type:"freehand",pts:freehandPts.current.slice(),color:color,lineW:lineW*canvasScale(),opacity:opacity};
         var fns=strokesRef.current.concat([fs2]);
         strokesRef.current=fns; commit(fns); clearOverlay(); rebuild(fns);
       } else rebuild(strokesRef.current);
@@ -1896,7 +1911,10 @@ function ImageAnnotator(props){
         /* 📂 過去チャートを参照 */
         ce("button",{
           onClick:function(){
-            if(refPanel){setRefPanel(null);setRefImgDim(null);setRefSlideMode(false);setRefOffsetY(0);}
+            if(refPanel){
+              if(refPanel._blobUrl)try{URL.revokeObjectURL(refPanel.url);}catch(e3){}
+              setRefPanel(null);setRefImgDim(null);setRefSlideMode(false);setRefOffsetY(0);
+            }
             else{setShowRefPicker(true);}
           },
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",
@@ -2070,8 +2088,8 @@ function ImageAnnotator(props){
             return{
             width:rDispW,
             height:rDispH,display:"block",
-            objectFit:"fill",flexShrink:0,
-            imageRendering:"high-quality",WebkitImageRendering:"high-quality",
+            flexShrink:0,
+            imageRendering:"auto",
             pointerEvents:refSlideMode?"auto":"none",
             userSelect:"none",
             transform:refOffsetY?"translateY("+refOffsetY+"px)":"none",
@@ -2085,7 +2103,7 @@ function ImageAnnotator(props){
           ce("canvas",{
             ref:canvasRef,
             style:{position:"absolute",inset:0,width:dispW,height:dispH,
-              imageRendering:"high-quality",WebkitImageRendering:"high-quality",
+              imageRendering:"auto",
               cursor:tool==="pan"?"grab":tool==="eraser"?"cell":tool==="lasso"?(lassoModeRef.current==="panning"?"grabbing":"default"):"crosshair",
               touchAction:"none",display:"block",
               borderRadius:refPanel&&refPanel.url?0:4},
@@ -2094,7 +2112,7 @@ function ImageAnnotator(props){
           ce("canvas",{
             ref:overlayCanvasRef,
             style:{position:"absolute",inset:0,width:dispW,height:dispH,
-              imageRendering:"high-quality",WebkitImageRendering:"high-quality",
+              imageRendering:"auto",
               pointerEvents:"none",display:"block"}
           })
         )
@@ -2548,7 +2566,20 @@ function ImageAnnotator(props){
     showRefPicker&&ce(RefChartPicker,{
       fbCfg:props.fbCfg,
       onSelect:function(dataUrl){
-        setRefPanel({url:dataUrl});setRefSlideMode(false);setRefOffsetY(0);
+        // data URL → blob URL 変換（Safari/iPadのメモリ効率改善＝画質維持）
+        try{
+          var parts=dataUrl.split(',');
+          var mime=parts[0].match(/data:([^;]+)/)[1];
+          var raw=atob(parts[1]);
+          var arr=new Uint8Array(raw.length);
+          for(var i=0;i<raw.length;i++)arr[i]=raw.charCodeAt(i);
+          var blob=new Blob([arr],{type:mime});
+          var blobUrl=URL.createObjectURL(blob);
+          setRefPanel({url:blobUrl,_blobUrl:true,_dataUrl:dataUrl});
+        }catch(e2){
+          setRefPanel({url:dataUrl});
+        }
+        setRefSlideMode(false);setRefOffsetY(0);
         setShowRefPicker(false);
       },
       onClose:function(){setShowRefPicker(false);}
@@ -2566,7 +2597,7 @@ var CA_DEF_TICKERS=['INPEX','JX金属','フジクラ','川崎重工業','IHI','�
 function caLoadTickers(){try{var s=localStorage.getItem(CA_TICKERS_KEY);return s?JSON.parse(s):CA_DEF_TICKERS.slice();}catch(e){return CA_DEF_TICKERS.slice();}}
 function caSaveTickers(t){try{localStorage.setItem(CA_TICKERS_KEY,JSON.stringify(t));}catch(e){}}
 function caLoadMeta(){try{var s=localStorage.getItem(CA_META_KEY);return s?JSON.parse(s):[];}catch(e){return[];}}
-function caSaveMeta(m){try{localStorage.setItem(CA_META_KEY,JSON.stringify(m));}catch(e){}}
+function caSaveMeta(m){try{localStorage.setItem(CA_META_KEY,JSON.stringify(m));}catch(e){console.warn('[caSaveMeta] localStorage full, evicting thumbs oldest first');var sorted=m.slice().sort(function(a,b){return(a.savedAt||0)-(b.savedAt||0);});for(var i=0;i<sorted.length;i++){var tid=sorted[i].id;if(sorted[i].thumb&&sorted[i].thumb.length>200){m=m.map(function(x){return x.id===tid?Object.assign({},x,{thumb:null}):x;});try{localStorage.setItem(CA_META_KEY,JSON.stringify(m));return;}catch(e2){}}}console.error('[caSaveMeta] save failed even after evicting all thumbs');}}
 function caLoadData(id){try{var s=localStorage.getItem(CA_DATA_PFX+id);return s?JSON.parse(s):null;}catch(e){return null;}}
 function caSaveData(id,d){try{localStorage.setItem(CA_DATA_PFX+id,JSON.stringify(d));}catch(e){}}
 function caDeleteData(id){try{localStorage.removeItem(CA_DATA_PFX+id);}catch(e){}}
@@ -2574,13 +2605,13 @@ function caLoadTrash(){try{var s=localStorage.getItem(CA_TRASH_KEY);return s?JSO
 function caSaveTrash(t){try{localStorage.setItem(CA_TRASH_KEY,JSON.stringify(t));}catch(e){}}
 function caGenId(){return Date.now().toString(36)+Math.random().toString(36).slice(2,6);}
 function caGenThumb(canvasEl){
-  var W=Math.min(canvasEl.width,800),ratio=W/canvasEl.width,H=Math.round(canvasEl.height*ratio);
+  var W=Math.min(canvasEl.width,400),ratio=W/canvasEl.width,H=Math.round(canvasEl.height*ratio);
   var tc=document.createElement('canvas');tc.width=W;tc.height=H;
   var ctx=tc.getContext('2d');
   ctx.imageSmoothingEnabled=true;
   ctx.imageSmoothingQuality='high';
   ctx.drawImage(canvasEl,0,0,W,H);
-  return tc.toDataURL('image/png');
+  return tc.toDataURL('image/jpeg',0.75);
 }
 
 function DraftLibrary(props){
@@ -2608,6 +2639,16 @@ function DraftLibrary(props){
   var dragSrcRef=useRef(null);
   var addFileRef=useRef(null);
 
+  // ── スワイプ戻る対応 ──
+  useEffect(function(){
+    function onBack(){
+      if(showTrash){setShowTrash(false);}
+      else{onClose();}
+    }
+    window.addEventListener('ca_back',onBack);
+    return function(){window.removeEventListener('ca_back',onBack);};
+  },[showTrash,onClose]);
+
   // ── 画像を保管庫に直接追加（画質劣化なし）──
   function addImageDirect(file){
     if(!file||!file.type.startsWith('image/'))return;
@@ -2632,14 +2673,14 @@ function DraftLibrary(props){
       var tImg=new Image();
       tImg.onload=function(){
         URL.revokeObjectURL(tempThumb);
-        // PNG（ロスレス）で高品質サムネイル生成
-        var W=Math.min(tImg.width,800),ratio=W/tImg.width,H=Math.round(tImg.height*ratio);
+        // JPEG で軽量サムネイル生成
+        var W=Math.min(tImg.width,400),ratio=W/tImg.width,H=Math.round(tImg.height*ratio);
         var tc=document.createElement('canvas');tc.width=W;tc.height=H;
         var tctx=tc.getContext('2d');
         tctx.imageSmoothingEnabled=true;
         tctx.imageSmoothingQuality='high';
         tctx.drawImage(tImg,0,0,W,H);
-        var thumb=tc.toDataURL('image/png');
+        var thumb=tc.toDataURL('image/jpeg',0.75);
         var metaItem={id:id,ticker:selTicker,name:chartName,savedAt:savedAt,thumb:thumb};
         // localStorage を先に更新
         var stored=caLoadMeta().filter(function(m){return m.id!==id;});
@@ -3086,7 +3127,8 @@ function DraftLibrary(props){
                 return ce("div",{key:m.id,
                   style:{width:IS_TOUCH?450:510,background:"#1a1a1a",borderRadius:10,
                     border:"1px solid #3a1a1a",overflow:"hidden",flexShrink:0}},
-                  m.thumb&&ce("img",{src:m.thumb,style:{width:"100%",display:"block",height:"auto"},draggable:false}),
+                  (m.thumb||m.thumbUrl)?ce("img",{src:m.thumb||m.thumbUrl,style:{width:"100%",display:"block",height:"auto"},draggable:false,
+                    onError:function(e){e.target.style.display='none';}}):null,
                   ce("div",{style:{padding:"8px 10px"}},
                     ce("div",{style:{fontSize:12,fontWeight:700,color:"#ddd",
                       overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},m.name),
@@ -3188,7 +3230,8 @@ function DraftLibrary(props){
                   border:"1px solid #2a2a2a",overflow:"hidden",cursor:"pointer",flexShrink:0},
                 onClick:function(){openChart(m.id);}},
                 ce("div",{style:{position:"relative"}},
-                  m.thumb?ce("img",{src:m.thumb,style:{width:"100%",display:"block",height:"auto"},draggable:false})
+                  (m.thumb||m.thumbUrl)?ce("img",{src:m.thumb||m.thumbUrl,style:{width:"100%",display:"block",height:"auto"},draggable:false,
+                    onError:function(e){e.target.style.display='none';}})
                     :ce("div",{style:{width:"100%",height:80,background:"#222",display:"flex",
                       alignItems:"center",justifyContent:"center",color:"#555",fontSize:11}},"no preview"),
                   ce("button",{onClick:function(e){e.stopPropagation();deleteChart(m.id);},
@@ -3386,9 +3429,24 @@ function App(){
   var FB_DEFAULTS={url:'',secret:'',storageBucket:'scalping-notebbok.firebasestorage.app',paused:true};
   var s2=useState(function(){try{var s=localStorage.getItem(FB_CFG_KEY);if(s){var p=JSON.parse(s);return Object.assign({},FB_DEFAULTS,p);}return FB_DEFAULTS;}catch(e){return FB_DEFAULTS;}}); var fbCfg=s2[0],setFbCfg=s2[1];
   var s3=useState(false); var showFbSettings=s3[0],setShowFbSettings=s3[1];
-  var s4=useState(false); var showDrafts=s4[0],setShowDrafts=s4[1];
-  var s5=useState(null);  var draftInitTicker=s5[0],setDraftInitTicker=s5[1];
+  var s4=useState(function(){
+    try{var v=sessionStorage.getItem('ca_screen');return v==='drafts';}catch(e){return false;}
+  }); var showDrafts=s4[0],setShowDrafts=s4[1];
+  var s5=useState(function(){
+    try{return sessionStorage.getItem('ca_draftTicker')||null;}catch(e){return null;}
+  });  var draftInitTicker=s5[0],setDraftInitTicker=s5[1];
   var fileRef=useRef(null);
+
+  // ── 画面状態をsessionStorageに保存（リフレッシュ復帰用）──
+  useEffect(function(){
+    try{
+      if(img){sessionStorage.setItem('ca_screen','editor');}
+      else if(showDrafts){sessionStorage.setItem('ca_screen','drafts');}
+      else{sessionStorage.setItem('ca_screen','home');}
+      if(draftInitTicker)sessionStorage.setItem('ca_draftTicker',draftInitTicker);
+      else sessionStorage.removeItem('ca_draftTicker');
+    }catch(e){}
+  },[img,showDrafts,draftInitTicker]);
 
   function loadFile(file){
     if(!file||!file.type.startsWith("image/"))return;
