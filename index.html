@@ -822,6 +822,7 @@ function ImageAnnotator(props){
   var refDragRef=useRef(null);    // 参照パネルのドラッグ
   var textDragRef=useRef(null);   // テキストツールで既存テキストをドラッグ移動
   var blurTimerRef=useRef(null);  // テキスト入力のblurタイマー（IIFE跨ぎ）
+  var preventBlurRef=useRef(false); // カラーバー操作中のblur抑制
   var refSlideDragRef=useRef(null); // 参照画像の縦スライドドラッグ
   var penTapRef=useRef({time:0,prevTool:null,x:0,y:0}); // ダブルタップ消しゴムトグル用
   var toolRef=useRef("pan"); // tool stateのミラー（pointerイベント用）
@@ -1452,12 +1453,23 @@ function ImageAnnotator(props){
     var pos=getPos(e); lastPosRef.current=pos;
     if(tool==="lasso"){
       var er=IS_TOUCH?20:12;
+      // テキストストロークは常に直接編集モードに（テキストツールと同じ動作）
+      var hitIdxL=findStrokeAt(strokesRef.current,pos.x,pos.y,er);
+      if(hitIdxL>=0&&strokesRef.current[hitIdxL].type==="text"){
+        var hitTextL=strokesRef.current[hitIdxL];
+        setSelIdxs(new Set()); setSelBounds(null);
+        textDragRef.current={
+          idx:hitIdxL, sx:pos.x, sy:pos.y,
+          origX:hitTextL.x, origY:hitTextL.y,
+          moved:false, stroke:hitTextL
+        };
+        return;
+      }
       if(selBounds&&pos.x>=selBounds.x&&pos.x<=selBounds.x+selBounds.w&&pos.y>=selBounds.y&&pos.y<=selBounds.y+selBounds.h){
         selDragRef.current={sx:pos.x,sy:pos.y,dx:0,dy:0}; lassoModeRef.current="dragging_sel"; return;
       }
-      var hitIdx=findStrokeAt(strokesRef.current,pos.x,pos.y,er);
-      if(hitIdx>=0){
-        var ni=new Set([hitIdx]);
+      if(hitIdxL>=0){
+        var ni=new Set([hitIdxL]);
         setSelIdxs(ni); setSelBounds(getBoundsFromStrokes(ni,strokesRef.current));
         selDragRef.current={sx:pos.x,sy:pos.y,dx:0,dy:0}; lassoModeRef.current="dragging_sel"; return;
       }
@@ -1507,7 +1519,7 @@ function ImageAnnotator(props){
     }
     var rawPos=getPos(e); lastPosRef.current=rawPos;
     // テキストツール: 既存テキストのドラッグ移動（overlay canvas でプレビュー）
-    if(tool==="text"&&textDragRef.current){
+    if((tool==="text"||tool==="lasso")&&textDragRef.current){
       var tdx=rawPos.x-textDragRef.current.sx, tdy=rawPos.y-textDragRef.current.sy;
       if(!textDragRef.current.moved&&Math.hypot(tdx,tdy)>4){
         textDragRef.current.moved=true;
@@ -1578,7 +1590,7 @@ function ImageAnnotator(props){
   var onEnd=function(e){
     if(ctrlPanRef.current){ctrlPanRef.current=false;panRef.current=null;return;}
     // テキストツール: ドラッグ移動 or クリックで編集
-    if(tool==="text"&&textDragRef.current){
+    if((tool==="text"||tool==="lasso")&&textDragRef.current){
       var td=textDragRef.current; textDragRef.current=null;
       if(td.moved){
         // ドラッグ → 移動をコミット
@@ -1592,6 +1604,7 @@ function ImageAnnotator(props){
         var tsT2=strokesRef.current[td.idx];
         var sp2=canvasToScreen(tsT2.x,tsT2.y);
         var defBW=Math.round(canvasDimRef.current.w*0.6);
+        setSelIdxs(new Set()); setSelBounds(null);
         setTextInputState({x:tsT2.x,y:tsT2.y,idx:td.idx,text:tsT2.text,
           fontSize:tsT2.fontSize||24,fontBold:tsT2.fontBold||false,
           color:tsT2.color||color,opacity:tsT2.opacity||1,
@@ -2378,8 +2391,9 @@ function ImageAnnotator(props){
 
           /* ── 上部カラーバー ── */
           ce("div",{
-            onMouseDown:function(e){e.stopPropagation();if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
-            onTouchStart:function(e){e.stopPropagation();if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
+            onMouseDown:function(e){e.preventDefault();e.stopPropagation();preventBlurRef.current=true;if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
+            onTouchStart:function(e){e.stopPropagation();preventBlurRef.current=true;if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
+            onTouchEnd:function(e){setTimeout(function(){preventBlurRef.current=false;},300);},
             style:{
               position:"fixed",
               left:Math.max(4,sx),top:Math.max(4,sy-46),
@@ -2401,8 +2415,8 @@ function ImageAnnotator(props){
               if(isA){
                 // アクティブ色: label+hidden input で直接ピッカー起動（iPad対応）
                 return ce("label",{key:qi,
-                  onMouseDown:function(e){e.stopPropagation();if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
-                  onTouchStart:function(e){e.stopPropagation();if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
+                  onMouseDown:function(e){e.preventDefault();e.stopPropagation();preventBlurRef.current=true;if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
+                  onTouchStart:function(e){e.stopPropagation();preventBlurRef.current=true;if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
                   style:Object.assign({},circleStyle,{display:"inline-block",position:"relative"})},
                   ce("input",{type:"color",value:qc,
                     onInput:function(ev){
@@ -2415,8 +2429,8 @@ function ImageAnnotator(props){
                 );
               }
               return ce("span",{key:qi,
-                onMouseDown:function(e){e.stopPropagation();if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
-                onTouchStart:function(e){e.stopPropagation();if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
+                onMouseDown:function(e){e.preventDefault();e.stopPropagation();preventBlurRef.current=true;if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
+                onTouchStart:function(e){e.stopPropagation();preventBlurRef.current=true;if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
                 onClick:function(){
                   setTextInputState(function(s){return Object.assign({},s,{color:qc});});
                   if(taRef.current)taRef.current.focus();
@@ -2425,7 +2439,7 @@ function ImageAnnotator(props){
               });
             }),
             ce("label",{
-              onMouseDown:function(e){e.stopPropagation();if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
+              onMouseDown:function(e){e.preventDefault();e.stopPropagation();preventBlurRef.current=true;if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
               style:{cursor:"pointer",position:"relative",width:IS_TOUCH?22:18,height:IS_TOUCH?22:18,
                 borderRadius:"50%",background:"conic-gradient(red,yellow,lime,cyan,blue,magenta,red)",
                 border:"1.5px solid rgba(255,255,255,.3)",display:"block",flexShrink:0}},
@@ -2437,29 +2451,29 @@ function ImageAnnotator(props){
             /* フォントサイズ */
             ce("span",{style:{fontSize:10,color:"#888",flexShrink:0}},"サイズ"),
             ce("span",{
-              onMouseDown:function(e){e.stopPropagation();if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
+              onMouseDown:function(e){e.preventDefault();e.stopPropagation();preventBlurRef.current=true;if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
               onClick:function(){setTextInputState(function(s){return Object.assign({},s,{fontSize:Math.max(1,(s.fontSize||24)-1)});});if(taRef.current)taRef.current.focus();},
               style:{padding:"2px 7px",borderRadius:4,cursor:"pointer",fontSize:12,fontWeight:700,background:"#2a2a2a",color:"#fff",userSelect:"none",flexShrink:0}},"−"),
             ce("span",{style:{fontSize:12,color:"#ccc",minWidth:22,textAlign:"center",flexShrink:0}},ti.fontSize||24),
             ce("span",{
-              onMouseDown:function(e){e.stopPropagation();if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
+              onMouseDown:function(e){e.preventDefault();e.stopPropagation();preventBlurRef.current=true;if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
               onClick:function(){setTextInputState(function(s){return Object.assign({},s,{fontSize:Math.min(200,(s.fontSize||24)+1)});});if(taRef.current)taRef.current.focus();},
               style:{padding:"2px 7px",borderRadius:4,cursor:"pointer",fontSize:12,fontWeight:700,background:"#2a2a2a",color:"#fff",userSelect:"none",flexShrink:0}},"+"),
             ce("span",{
-              onMouseDown:function(e){e.stopPropagation();if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
+              onMouseDown:function(e){e.preventDefault();e.stopPropagation();preventBlurRef.current=true;if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
               onClick:function(){setTextInputState(function(s){return Object.assign({},s,{fontBold:!s.fontBold});});if(taRef.current)taRef.current.focus();},
               style:{padding:"2px 9px",borderRadius:4,cursor:"pointer",fontSize:13,fontWeight:900,
                 background:ti.fontBold?"#D4AC0D":"#2a2a2a",color:ti.fontBold?"#1a1a1a":"#aaa",
                 border:"none",flexShrink:0,userSelect:"none"}},"B"),
             ce("div",{style:{width:1,height:16,background:"#444",margin:"0 2px"}}),
             ce("button",{
-              onMouseDown:function(e){e.stopPropagation();if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
+              onMouseDown:function(e){e.preventDefault();e.stopPropagation();preventBlurRef.current=true;if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
               onClick:confirmText,
               style:{padding:"4px 12px",fontSize:12,fontWeight:700,background:"#6366F1",
                 color:"#fff",border:"none",borderRadius:6,cursor:"pointer",flexShrink:0}},"✓ 確定"),
             /* 既存テキスト編集時のみ削除ボタンを表示 */
             ti.idx>=0&&ce("button",{
-              onMouseDown:function(e){e.stopPropagation();if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
+              onMouseDown:function(e){e.preventDefault();e.stopPropagation();preventBlurRef.current=true;if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
               onClick:function(){
                 var ns=strokesRef.current.filter(function(_,i){return i!==textInputRef.current.idx;});
                 strokesRef.current=ns; commit(ns); rebuild(ns); setTextInputState(null);
@@ -2467,7 +2481,7 @@ function ImageAnnotator(props){
               style:{padding:"4px 10px",fontSize:12,fontWeight:700,background:"#7f1d1d",color:"#fca5a5",
                 border:"none",borderRadius:6,cursor:"pointer",flexShrink:0}},"🗑 削除"),
             ce("button",{
-              onMouseDown:function(e){e.stopPropagation();if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
+              onMouseDown:function(e){e.preventDefault();e.stopPropagation();preventBlurRef.current=true;if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
               onClick:function(){rebuild(strokesRef.current);setTextInputState(null);},
               style:{padding:"4px 10px",fontSize:12,background:"#2a2a2a",color:"#aaa",
                 border:"none",borderRadius:6,cursor:"pointer",flexShrink:0}},"✕")
@@ -2503,7 +2517,7 @@ function ImageAnnotator(props){
                   var bs=si>=0?strokesRef.current.filter(function(_,i){return i!==si;}):strokesRef.current;
                   rebuild(bs);setTextInputState(null);}
               },
-              onBlur:function(){blurTimerRef.current=setTimeout(function(){confirmText();},200);},
+              onBlur:function(){if(preventBlurRef.current){preventBlurRef.current=false;if(taRef.current)taRef.current.focus();return;}blurTimerRef.current=setTimeout(function(){confirmText();},200);},
               onFocus:function(){if(blurTimerRef.current){clearTimeout(blurTimerRef.current);blurTimerRef.current=null;}},
               onInput:function(){
                 var el=taRef.current; if(!el)return;
