@@ -2956,22 +2956,27 @@ function DraftLibrary(props){
     var mi=meta.find(function(m){return m.id===id;});
     var extra={_draftId:id,_ticker:mi?mi.ticker:'',_name:mi?mi.name:'',_thumb:mi?mi.thumb:'',_savedAt:mi?mi.savedAt:0};
     var d=caLoadData(id);
-    if(d&&(d.orig_base64||d.base64)){onOpen(Object.assign({},d,extra));return;}
-    if(!fbCfg.url){alert('データが見つかりません（Firebase未設定）');return;}
+    // 同期OFFまたはFirebase未設定 → ローカルデータのみ
+    if(_fbIsPaused(fbCfg)||!fbCfg.url){
+      if(d&&(d.orig_base64||d.base64)){onOpen(Object.assign({},d,extra));return;}
+      alert('データが見つかりません（Firebase未設定または同期停止中）');return;
+    }
+    // 同期ON → 常にRTDBから最新のstrokesを取得
     var dataBase=makeDraftsDataBase();
     var oldBase=makeDraftsBase();
     setSyncStatus('loading');
     fetch(dataBase+'/'+id+'.json'+auth).then(function(r){return r.ok?r.text():null;})
       .then(function(txt){
-        if(txt)var fbData=txt?JSON.parse(txt):null;
+        var fbData=txt?JSON.parse(txt):null;
         if(!fbData){
           // 新パスにデータなし → 旧パスフォールバック
           return fetch(oldBase+'/'+id+'.json'+auth).then(function(r2){return r2.ok?r2.text():null;})
             .then(function(txt2){
               setSyncStatus(null);
-              if(txt2)var fbOld=txt2?JSON.parse(txt2):null;
+              var fbOld=txt2?JSON.parse(txt2):null;
               var od=fbOld&&fbOld.data?fbOld.data:null;
               if(od&&(od.orig_base64||od.base64)){caSaveData(id,od);onOpen(Object.assign({},od,extra));}
+              else if(d&&(d.orig_base64||d.base64)){onOpen(Object.assign({},d,extra));}
               else{alert('データが見つかりません');}
             });
         }
@@ -2980,8 +2985,16 @@ function DraftLibrary(props){
           caSaveData(id,fbData);setSyncStatus(null);
           onOpen(Object.assign({},fbData,extra));return;
         }
-        // imageUrl（Storage）から読み込み→base64変換→キャッシュ
+        // imageUrl（Storage）+ リモートstrokes
         if(fbData.imageUrl){
+          // ローカルに画像があればそれを使い、strokesだけリモートから取得（Storage DL不要）
+          if(d&&(d.orig_base64||d.base64)){
+            var merged={orig_base64:d.orig_base64||d.base64,orig_mt:d.orig_mt||d.mt||fbData.orig_mt||'image/png',
+              strokes:fbData.strokes||[],name:fbData.name||''};
+            caSaveData(id,merged);setSyncStatus(null);
+            onOpen(Object.assign({},merged,extra));return;
+          }
+          // ローカルに画像なし → Storageからダウンロード
           return storageUrlToBase64(fbData.imageUrl).then(function(res){
             var localData={orig_base64:res.base64,orig_mt:res.mt||fbData.orig_mt||'image/png',
               strokes:fbData.strokes||[],name:fbData.name||''};
