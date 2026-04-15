@@ -919,7 +919,6 @@ function ImageAnnotator(props){
   var textInputRef=useRef(null);  // textInputState のミラー(stale closure回避)
   var refDragRef=useRef(null);    // 参照パネルのドラッグ
   var textDragRef=useRef(null);   // テキストツールで既存テキストをドラッグ移動
-  var colorDblRef=useRef({i:null,t:0}); // テキスト編集カラーの二度クリック検出
   var refSlideDragRef=useRef(null); // 参照画像の縦スライドドラッグ
   useEffect(function(){zoomRef.current=zoom;},[zoom]);
 
@@ -2317,7 +2316,6 @@ function ImageAnnotator(props){
           document.addEventListener("touchend",up);
         }
 
-        var COLORS=["#000000","#ffffff","#AB47BC","#FF0000","#FF69B4","#FF6D00","#FFEB3B","#2196F3","#4CAF50","#C8860B"];
         var handleStyle={
           position:"absolute",width:HSZ,height:HSZ,
           background:"#fff",border:"1.5px solid #007AFF",borderRadius:2,cursor:"ew-resize",
@@ -2345,18 +2343,21 @@ function ImageAnnotator(props){
             }
           },
             ce("span",{style:{fontSize:10,color:"#888",flexShrink:0}},"色"),
-            COLORS.map(function(c,ci){
-              return ce("span",{key:c,
+            quickColors.map(function(qc,qi){
+              var isA=ti.color===qc;
+              var QS=IS_TOUCH?24:20;
+              return ce("span",{key:qi,
                 onMouseDown:function(e){e.stopPropagation();if(blurTimer)clearTimeout(blurTimer);},
                 onClick:function(){
-                  var dr=colorDblRef.current;
-                  if(dr.i===ci&&Date.now()-dr.t<400){
-                    colorDblRef.current={i:null,t:0};
-                    var inp=document.createElement('input');inp.type='color';inp.value=c;
+                  if(isA){
+                    // 同じ色を再クリック → ネイティブカラーピッカーでスロットの色を変更
+                    var inp=document.createElement('input');inp.type='color';inp.value=qc;
                     inp.style.cssText='position:fixed;top:-9999px;left:-9999px;opacity:0;';
                     document.body.appendChild(inp);
                     inp.addEventListener('input',function(ev){
-                      setTextInputState(function(s){return Object.assign({},s,{color:ev.target.value});});
+                      var nc=ev.target.value;
+                      setTextInputState(function(s){return Object.assign({},s,{color:nc});});
+                      var nq=quickColors.slice();nq[qi]=nc;setQuickColorsAndSave(nq);
                     });
                     inp.addEventListener('change',function(){
                       if(taRef.current)taRef.current.focus();
@@ -2364,14 +2365,14 @@ function ImageAnnotator(props){
                     });
                     inp.click();
                   } else {
-                    colorDblRef.current={i:ci,t:Date.now()};
-                    setTextInputState(function(s){return Object.assign({},s,{color:c});});
+                    setTextInputState(function(s){return Object.assign({},s,{color:qc});});
                     if(taRef.current)taRef.current.focus();
                   }
                 },
-                style:{width:IS_TOUCH?22:18,height:IS_TOUCH?22:18,borderRadius:"50%",background:c,
-                  cursor:"pointer",border:ti.color===c?"3px solid #007AFF":"1.5px solid rgba(255,255,255,.3)",
-                  flexShrink:0}
+                style:{width:QS,height:QS,borderRadius:"50%",background:qc,cursor:"pointer",flexShrink:0,
+                  boxShadow:isA?"0 0 0 2px #111,0 0 0 3.5px #6366F1":"0 1px 3px rgba(0,0,0,.4)",
+                  border:"1.5px solid rgba(255,255,255,.4)",
+                  transform:isA?"scale(1.15)":"scale(1)",transition:"transform .1s"}
               });
             }),
             ce("label",{
