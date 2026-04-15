@@ -729,7 +729,7 @@ function RefChartPicker(props){
   var s2=useState(caLoadMeta);    var meta=s2[0];
   var BT2={border:"none",cursor:"pointer",fontFamily:"inherit"};
 
-  var charts=selTicker?meta.filter(function(m){return m.ticker===selTicker;}).sort(function(a,b){return(b.savedAt||0)-(a.savedAt||0);}):[];
+  var charts=selTicker?meta.filter(function(m){return m.ticker===selTicker;}).sort(function(a,b){return(b.name||'').localeCompare(a.name||'');}):[];
 
   function pickChart(id){
     var d=caLoadData(id);
@@ -1056,18 +1056,44 @@ function ImageAnnotator(props){
     bImg.src="data:"+(imgData.orig_mt||imgData.mt)+";base64,"+(imgData.orig_base64||imgData.base64);
   }
 
+  // ── DPR動的変更（参照画像追加/削除時にメモリ調整）──
+  function adjustDPR(newDPR){
+    var c=canvasRef.current; if(!c||!baseRef.current)return;
+    var dim=canvasDimRef.current; if(!dim||!dim.w)return;
+    var nw=dim.w, nh=dim.h;
+    var oldDPR=dprRef.current||1;
+    if(Math.abs(newDPR-oldDPR)<0.01)return;
+    // 原画からフル再描画
+    var d=imgDataRef.current; if(!d)return;
+    var bImg=new Image();
+    bImg.onload=function(){
+      dprRef.current=newDPR;
+      c.width=Math.round(nw*newDPR); c.height=Math.round(nh*newDPR);
+      var ctx=c.getContext("2d");
+      ctx.setTransform(newDPR,0,0,newDPR,0,0);
+      if(overlayCanvasRef.current){
+        overlayCanvasRef.current.width=c.width;
+        overlayCanvasRef.current.height=c.height;
+        overlayCanvasRef.current.getContext("2d").setTransform(newDPR,0,0,newDPR,0,0);
+      }
+      ctx.drawImage(bImg,0,0,nw,nh);
+      baseRef.current=ctx.getImageData(0,0,c.width,c.height);
+      strokesRef.current.forEach(function(s){drawStroke(ctx,s);});
+    };
+    bImg.src="data:"+(d.orig_mt||d.mt)+";base64,"+(d.orig_base64||d.base64);
+  }
+
   // 初回ロード
   useEffect(function(){initCanvas(img);},[]);// eslint-disable-line
 
   var cZ=function(z){return Math.min(Math.max(z,0.1),20);};
 
-  // 参照画像のサイズを取得 + dispW/dispH再計算
+  // 参照画像のサイズを取得 + dispW/dispH再計算 + iPad DPR調整
   useEffect(function(){
     if(!refPanel||!refPanel.url){setRefImgDim(null);return;}
     var ri=new Image();
     ri.onload=function(){
       setRefImgDim({w:ri.naturalWidth,h:ri.naturalHeight});
-      // 参照画像追加時にメインキャンバスの表示サイズを再計算
       var dim=canvasDimRef.current;
       if(!dim||!dim.w)return;
       var aw=window.innerWidth*0.45*0.96;
@@ -1076,11 +1102,22 @@ function ImageAnnotator(props){
       setDispW(Math.round(dim.w*sc));
       setDispH(Math.round(dim.h*sc));
       setPan({x:0,y:0});
+      // iPad: 参照画像追加時にDPRを下げてメモリ節約
+      if(IS_TOUCH){
+        var devDPR=window.devicePixelRatio||1;
+        var reducedDPR=Math.min(devDPR,1.5);
+        var MAX_PX=8388608; // 8M for touch with ref
+        if(dim.w*reducedDPR*dim.h*reducedDPR>MAX_PX){
+          reducedDPR=Math.sqrt(MAX_PX/(dim.w*dim.h));
+        }
+        reducedDPR=Math.max(1,reducedDPR);
+        adjustDPR(reducedDPR);
+      }
     };
     ri.src=refPanel.url;
   },[refPanel&&refPanel.url]);
 
-  // 参照パネル削除時もdispW/dispHをリセット
+  // 参照パネル削除時: dispW/dispHリセット + iPad DPR復元
   useEffect(function(){
     if(refPanel)return;
     var dim=canvasDimRef.current;
@@ -1091,6 +1128,17 @@ function ImageAnnotator(props){
     setDispW(Math.round(dim.w*sc));
     setDispH(Math.round(dim.h*sc));
     setPan({x:0,y:0});
+    // iPad: DPRを元に戻す
+    if(IS_TOUCH){
+      var devDPR=window.devicePixelRatio||1;
+      var MAX_PX=16777216;
+      var fullDPR=devDPR;
+      if(dim.w*fullDPR*dim.h*fullDPR>MAX_PX){
+        fullDPR=Math.sqrt(MAX_PX/(dim.w*dim.h));
+      }
+      fullDPR=Math.max(1,fullDPR);
+      adjustDPR(fullDPR);
+    }
   },[refPanel]);
 
   // キャンバス座標 → 画面(viewport)座標（参照画像が左に連結されても正確）
@@ -2070,21 +2118,13 @@ function ImageAnnotator(props){
           var sc=dispH/mNatH;
           var rDispW=Math.round(refImgDim.w*sc);
           var rDispH=Math.round(refImgDim.h*sc);
-          return ce("canvas",{
-            ref:function(el){
-              if(!el||el._drawn===refPanel.url+'_'+rDispW+'x'+rDispH)return;
-              var dpr=Math.min(window.devicePixelRatio||1,2);
-              el.width=rDispW*dpr; el.height=rDispH*dpr;
-              var ctx=el.getContext("2d");
-              ctx.setTransform(dpr,0,0,dpr,0,0);
-              var ri=new Image();
-              ri.onload=function(){ctx.drawImage(ri,0,0,rDispW,rDispH);el._drawn=refPanel.url+'_'+rDispW+'x'+rDispH;};
-              ri.src=refPanel.url;
-            },
+          return ce("img",{
+            src:refPanel.url, draggable:false,
             onMouseDown:onRefSlideStart,
             onTouchStart:onRefSlideStart,
             style:{
               width:rDispW,height:rDispH,display:"block",flexShrink:0,
+              objectFit:"contain",
               pointerEvents:refSlideMode?"auto":"none",
               userSelect:"none",
               transform:refOffsetY?"translateY("+refOffsetY+"px)":"none",
