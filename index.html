@@ -387,11 +387,11 @@ function drawStroke(ctx,s){
     case"line": case"dotted": case"marker":
       ctx.beginPath(); ctx.moveTo(s.x1,s.y1); ctx.lineTo(s.x2,s.y2); ctx.stroke(); break;
     case"arrow":{
-      var ang=Math.atan2(s.y2-s.y1,s.x2-s.x1),len=Math.hypot(s.x2-s.x1,s.y2-s.y1),hl=Math.min(len*.3,s.lineW*9);
+      var ang=Math.atan2(s.y1-s.y2,s.x1-s.x2),len=Math.hypot(s.x2-s.x1,s.y2-s.y1),hl=Math.min(len*.3,s.lineW*9);
       ctx.setLineDash([]); ctx.beginPath(); ctx.moveTo(s.x1,s.y1); ctx.lineTo(s.x2,s.y2); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(s.x2,s.y2);
-      ctx.lineTo(s.x2-hl*Math.cos(ang-Math.PI/7),s.y2-hl*Math.sin(ang-Math.PI/7));
-      ctx.lineTo(s.x2-hl*Math.cos(ang+Math.PI/7),s.y2-hl*Math.sin(ang+Math.PI/7));
+      ctx.beginPath(); ctx.moveTo(s.x1,s.y1);
+      ctx.lineTo(s.x1-hl*Math.cos(ang-Math.PI/7),s.y1-hl*Math.sin(ang-Math.PI/7));
+      ctx.lineTo(s.x1-hl*Math.cos(ang+Math.PI/7),s.y1-hl*Math.sin(ang+Math.PI/7));
       ctx.closePath(); ctx.fill(); break;
     }
     case"rect": ctx.strokeRect(s.x1,s.y1,s.x2-s.x1,s.y2-s.y1); break;
@@ -821,6 +821,7 @@ function ImageAnnotator(props){
   var textInputRef=useRef(null);  // textInputState のミラー(stale closure回避)
   var refDragRef=useRef(null);    // 参照パネルのドラッグ
   var textDragRef=useRef(null);   // テキストツールで既存テキストをドラッグ移動
+  var blurTimerRef=useRef(null);  // テキスト入力のblurタイマー（IIFE跨ぎ）
   var refSlideDragRef=useRef(null); // 参照画像の縦スライドドラッグ
   var penTapRef=useRef({time:0,prevTool:null,x:0,y:0}); // ダブルタップ消しゴムトグル用
   var toolRef=useRef("pan"); // tool stateのミラー（pointerイベント用）
@@ -1358,10 +1359,55 @@ function ImageAnnotator(props){
     window.addEventListener("touchend",onUp);
   }
 
+  // ── 線系ストロークの端点ドラッグ ──
+  function isLineTypeSelection(){
+    if(selIdxs.size!==1)return null;
+    var idx=Array.from(selIdxs)[0];
+    var s=strokesRef.current[idx];
+    if(s&&(s.type==='line'||s.type==='dotted'||s.type==='arrow'))return{idx:idx,stroke:s};
+    return null;
+  }
+  function startEndpointDrag(which,e){
+    e.stopPropagation(); e.preventDefault();
+    var lt=isLineTypeSelection(); if(!lt||!canvasRef.current)return;
+    var idx=lt.idx;
+    var origStroke=JSON.parse(JSON.stringify(lt.stroke));
+    var startX=e.clientX||(e.touches&&e.touches[0].clientX)||0;
+    var startY=e.clientY||(e.touches&&e.touches[0].clientY)||0;
+    var rect0=canvasRef.current.getBoundingClientRect();
+    var sw0=canvasRef.current.width/rect0.width/(dprRef.current||1);
+    var sh0=canvasRef.current.height/rect0.height/(dprRef.current||1);
+    function onMov(ev){
+      ev.preventDefault&&ev.preventDefault();
+      var cx=ev.clientX||(ev.touches&&ev.touches[0].clientX)||0;
+      var cy=ev.clientY||(ev.touches&&ev.touches[0].clientY)||0;
+      var ddx=(cx-startX)*sw0, ddy=(cy-startY)*sh0;
+      var ns=strokesRef.current.slice();
+      var updated=Object.assign({},origStroke);
+      if(which==='p1'){updated.x1=origStroke.x1+ddx;updated.y1=origStroke.y1+ddy;}
+      else{updated.x2=origStroke.x2+ddx;updated.y2=origStroke.y2+ddy;}
+      ns[idx]=updated;
+      strokesRef.current=ns; rebuild(ns);
+      setSelBounds(getBoundsFromStrokes(selIdxs,ns));
+    }
+    function onUp(){
+      commit(strokesRef.current);
+      window.removeEventListener("mousemove",onMov);
+      window.removeEventListener("mouseup",onUp);
+      window.removeEventListener("touchmove",onMov);
+      window.removeEventListener("touchend",onUp);
+    }
+    window.addEventListener("mousemove",onMov);
+    window.addEventListener("mouseup",onUp);
+    window.addEventListener("touchmove",onMov,{passive:false});
+    window.addEventListener("touchend",onUp);
+  }
+
   // ── Text confirm ──
   function confirmText(){
-    if(!textInputState)return;
-    var ti=Object.assign({},textInputState,{text:taRef.current?taRef.current.value:textInputState.text});
+    var tis=textInputRef.current;
+    if(!tis)return;
+    var ti=Object.assign({},tis,{text:taRef.current?taRef.current.value:tis.text});
     if(!ti.text.trim()){rebuild(strokesRef.current);setTextInputState(null);return;}
     var tmpCtx=document.createElement("canvas").getContext("2d");
     tmpCtx.font=(ti.fontBold?"bold ":"")+ti.fontSize+"px -apple-system,sans-serif";
@@ -1833,27 +1879,37 @@ function ImageAnnotator(props){
 
   // ── Selection UI (screen coords) ──
   var selUI=null;
+  var lineUI=null; // 線系ストロークの端点UI
   if(selBounds&&canvasRef.current&&!textInputState){
     try{
       var rect2=canvasRef.current.getBoundingClientRect();
       if(rect2&&rect2.width){
         var sw2=rect2.width/(canvasRef.current.width/dprRef.current), sh2=rect2.height/(canvasRef.current.height/dprRef.current);
         function ts2(cx,cy){return{x:rect2.left+cx*sw2,y:rect2.top+cy*sh2};}
-        var tl=ts2(selBounds.x,selBounds.y), tr=ts2(selBounds.x+selBounds.w,selBounds.y);
-        var bl=ts2(selBounds.x,selBounds.y+selBounds.h), br=ts2(selBounds.x+selBounds.w,selBounds.y+selBounds.h);
-        var tm=ts2(selBounds.x+selBounds.w/2,selBounds.y), bm=ts2(selBounds.x+selBounds.w/2,selBounds.y+selBounds.h);
-        var ml=ts2(selBounds.x,selBounds.y+selBounds.h/2), mr=ts2(selBounds.x+selBounds.w,selBounds.y+selBounds.h/2);
-        var HS=IS_TOUCH?14:10;
-        var HNDLS=[
-          {id:"tl",x:tl.x,y:tl.y,cur:"nwse-resize"},{id:"tm",x:tm.x,y:tm.y,cur:"ns-resize"},
-          {id:"tr",x:tr.x,y:tr.y,cur:"nesw-resize"},{id:"ml",x:ml.x,y:ml.y,cur:"ew-resize"},
-          {id:"mr",x:mr.x,y:mr.y,cur:"ew-resize"},{id:"bl",x:bl.x,y:bl.y,cur:"nesw-resize"},
-          {id:"bm",x:bm.x,y:bm.y,cur:"s-resize"},{id:"br",x:br.x,y:br.y,cur:"nwse-resize"}
-        ];
-        var bwS=tr.x-tl.x, bhS=bl.y-tl.y;
-        var barT=Math.max(66,tl.y-56);
+        var barT=Math.max(66,ts2(selBounds.x,selBounds.y).y-56);
         var CC=["#E53935","#FF6F00","#F9A825","#2E7D32","#1565C0","#6A1B9A","#ffffff","#000000"];
-        selUI={tl:tl,tr:tr,bl:bl,br:br,tm:tm,bm:bm,ml:ml,mr:mr,HS:HS,HNDLS:HNDLS,bwS:bwS,bhS:bhS,barT:barT,CC:CC};
+        // 線系ストローク判定
+        var lt=isLineTypeSelection();
+        if(lt){
+          var p1s=ts2(lt.stroke.x1,lt.stroke.y1);
+          var p2s=ts2(lt.stroke.x2,lt.stroke.y2);
+          var HS=IS_TOUCH?16:12;
+          lineUI={p1:p1s,p2:p2s,HS:HS,barT:barT,CC:CC};
+        }else{
+          var tl=ts2(selBounds.x,selBounds.y), tr=ts2(selBounds.x+selBounds.w,selBounds.y);
+          var bl=ts2(selBounds.x,selBounds.y+selBounds.h), br=ts2(selBounds.x+selBounds.w,selBounds.y+selBounds.h);
+          var tm=ts2(selBounds.x+selBounds.w/2,selBounds.y), bm=ts2(selBounds.x+selBounds.w/2,selBounds.y+selBounds.h);
+          var ml=ts2(selBounds.x,selBounds.y+selBounds.h/2), mr=ts2(selBounds.x+selBounds.w,selBounds.y+selBounds.h/2);
+          var HS=IS_TOUCH?14:10;
+          var HNDLS=[
+            {id:"tl",x:tl.x,y:tl.y,cur:"nwse-resize"},{id:"tm",x:tm.x,y:tm.y,cur:"ns-resize"},
+            {id:"tr",x:tr.x,y:tr.y,cur:"nesw-resize"},{id:"ml",x:ml.x,y:ml.y,cur:"ew-resize"},
+            {id:"mr",x:mr.x,y:mr.y,cur:"ew-resize"},{id:"bl",x:bl.x,y:bl.y,cur:"nesw-resize"},
+            {id:"bm",x:bm.x,y:bm.y,cur:"s-resize"},{id:"br",x:br.x,y:br.y,cur:"nwse-resize"}
+          ];
+          var bwS=tr.x-tl.x, bhS=bl.y-tl.y;
+          selUI={tl:tl,tr:tr,bl:bl,br:br,tm:tm,bm:bm,ml:ml,mr:mr,HS:HS,HNDLS:HNDLS,bwS:bwS,bhS:bhS,barT:barT,CC:CC};
+        }
       }
     }catch(e2){}
   }
@@ -2193,6 +2249,68 @@ function ImageAnnotator(props){
       document.body
     ),
 
+    /* ── 線系ストローク端点UI ── */
+    lineUI&&ReactDOM.createPortal(
+      ce(Fragment,null,
+        ce("svg",{style:{position:"fixed",inset:0,width:"100%",height:"100%",pointerEvents:"none",zIndex:10002,overflow:"visible"}},
+          /* 線を表示 */
+          ce("line",{x1:lineUI.p1.x,y1:lineUI.p1.y,x2:lineUI.p2.x,y2:lineUI.p2.y,
+            stroke:"#007AFF",strokeWidth:1.5,strokeDasharray:"5 3"}),
+          /* 端点1（起点）*/
+          ce("circle",{cx:lineUI.p1.x,cy:lineUI.p1.y,r:lineUI.HS/2,
+            fill:"#007AFF",stroke:"white",strokeWidth:2,
+            style:{cursor:"move",pointerEvents:"all"},
+            onMouseDown:function(ev){startEndpointDrag('p1',ev);},
+            onTouchStart:function(ev){startEndpointDrag('p1',ev);}}),
+          /* 端点2（終点）*/
+          ce("circle",{cx:lineUI.p2.x,cy:lineUI.p2.y,r:lineUI.HS/2,
+            fill:"white",stroke:"#007AFF",strokeWidth:2,
+            style:{cursor:"move",pointerEvents:"all"},
+            onMouseDown:function(ev){startEndpointDrag('p2',ev);},
+            onTouchStart:function(ev){startEndpointDrag('p2',ev);}}),
+          /* 削除ボタン */
+          ce("foreignObject",{x:Math.max(lineUI.p1.x,lineUI.p2.x)+8,
+            y:Math.min(lineUI.p1.y,lineUI.p2.y)-14,width:30,height:30,style:{overflow:"visible",pointerEvents:"all"}},
+            ce("div",{
+              xmlns:"http://www.w3.org/1999/xhtml",
+              onMouseDown:function(e){e.stopPropagation();},
+              onTouchStart:function(e){e.stopPropagation();},
+              onClick:deleteSelected,
+              style:{width:26,height:26,borderRadius:"50%",background:"#ff3b30",color:"#fff",
+                fontSize:14,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",
+                cursor:"pointer",border:"2px solid #fff",boxSizing:"border-box",userSelect:"none",lineHeight:1}
+            },"✕")
+          )
+        ),
+        /* color/action bar */
+        ReactDOM.createPortal(
+          ce("div",{style:{position:"fixed",left:"50%",transform:"translateX(-50%)",top:lineUI.barT,
+            zIndex:10003,display:"flex",gap:5,alignItems:"center",
+            background:"rgba(18,18,18,.96)",borderRadius:12,padding:"7px 10px",
+            boxShadow:"0 6px 28px rgba(0,0,0,.7)",backdropFilter:"blur(10px)",
+            maxWidth:"calc(100vw - 16px)",overflowX:"auto",overflowY:"hidden",WebkitOverflowScrolling:"touch"}},
+            ce("span",{style:{fontSize:10,color:"#888",marginRight:1}},"色"),
+            lineUI.CC.map(function(c6){
+              return ce("span",{key:c6,
+                onMouseDown:function(e){e.stopPropagation();},onTouchStart:function(e){e.stopPropagation();},
+                onClick:function(){changeSelectedColor(c6);},
+                style:{width:IS_TOUCH?24:20,height:IS_TOUCH?24:20,borderRadius:"50%",background:c6,cursor:"pointer",
+                  border:"1.5px solid rgba(255,255,255,.2)",flexShrink:0}});
+            }),
+            ce("div",{style:{width:1,height:16,background:"#444",margin:"0 3px"}}),
+            ce("button",{onClick:duplicateSelected,
+              onMouseDown:function(e){e.stopPropagation();},onTouchStart:function(e){e.stopPropagation();},
+              style:{padding:"3px 9px",fontSize:11,background:"#2a2a2a",color:"#aaa",border:"none",borderRadius:6,cursor:"pointer"}},"複製"),
+            ce("button",{onClick:deleteSelected,
+              onMouseDown:function(e){e.stopPropagation();},onTouchStart:function(e){e.stopPropagation();},
+              style:{padding:"3px 9px",fontSize:11,background:"#c0392b",color:"#fff",border:"none",borderRadius:6,cursor:"pointer"}},"削除")
+          ),
+          document.body
+        )
+      ),
+      document.body
+    ),
+
     /* ── 参照チャートパネル削除済み（左半分レイアウトに移行） ── */
 
     /* ── Text input overlay ── */
@@ -2207,11 +2325,11 @@ function ImageAnnotator(props){
         var sx=ti.screenX||0, sy=ti.screenY||0;
         var maxW=window.innerWidth-sx-20;
         var HSZ=10; // ハンドルサイズ px
-        var blurTimer=null;
+        // blurTimerRef.current used instead of local var
 
         function startBoxResize(side,e){
           e.stopPropagation(); e.preventDefault();
-          if(blurTimer)clearTimeout(blurTimer);
+          if(blurTimerRef.current)clearTimeout(blurTimerRef.current);
           var startX=e.clientX||(e.touches&&e.touches[0].clientX)||0;
           var origBoxW=textInputRef.current?textInputRef.current.boxW||400:400;
           var origX=textInputRef.current?textInputRef.current.x:0;
@@ -2254,12 +2372,14 @@ function ImageAnnotator(props){
           /* 全画面クリックで確定 */
           ce("div",{
             onMouseDown:function(e){if(e.target===e.currentTarget)confirmText();},
+            onTouchStart:function(e){if(e.target===e.currentTarget){if(blurTimerRef.current)clearTimeout(blurTimerRef.current);confirmText();}},
             style:{position:"fixed",inset:0,zIndex:10998}
           }),
 
           /* ── 上部カラーバー ── */
           ce("div",{
-            onMouseDown:function(e){e.stopPropagation();},
+            onMouseDown:function(e){e.stopPropagation();if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
+            onTouchStart:function(e){e.stopPropagation();if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
             style:{
               position:"fixed",
               left:Math.max(4,sx),top:Math.max(4,sy-46),
@@ -2281,7 +2401,8 @@ function ImageAnnotator(props){
               if(isA){
                 // アクティブ色: label+hidden input で直接ピッカー起動（iPad対応）
                 return ce("label",{key:qi,
-                  onMouseDown:function(e){e.stopPropagation();if(blurTimer)clearTimeout(blurTimer);},
+                  onMouseDown:function(e){e.stopPropagation();if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
+                  onTouchStart:function(e){e.stopPropagation();if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
                   style:Object.assign({},circleStyle,{display:"inline-block",position:"relative"})},
                   ce("input",{type:"color",value:qc,
                     onInput:function(ev){
@@ -2294,7 +2415,8 @@ function ImageAnnotator(props){
                 );
               }
               return ce("span",{key:qi,
-                onMouseDown:function(e){e.stopPropagation();if(blurTimer)clearTimeout(blurTimer);},
+                onMouseDown:function(e){e.stopPropagation();if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
+                onTouchStart:function(e){e.stopPropagation();if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
                 onClick:function(){
                   setTextInputState(function(s){return Object.assign({},s,{color:qc});});
                   if(taRef.current)taRef.current.focus();
@@ -2303,7 +2425,7 @@ function ImageAnnotator(props){
               });
             }),
             ce("label",{
-              onMouseDown:function(e){e.stopPropagation();if(blurTimer)clearTimeout(blurTimer);},
+              onMouseDown:function(e){e.stopPropagation();if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
               style:{cursor:"pointer",position:"relative",width:IS_TOUCH?22:18,height:IS_TOUCH?22:18,
                 borderRadius:"50%",background:"conic-gradient(red,yellow,lime,cyan,blue,magenta,red)",
                 border:"1.5px solid rgba(255,255,255,.3)",display:"block",flexShrink:0}},
@@ -2315,29 +2437,29 @@ function ImageAnnotator(props){
             /* フォントサイズ */
             ce("span",{style:{fontSize:10,color:"#888",flexShrink:0}},"サイズ"),
             ce("span",{
-              onMouseDown:function(e){e.stopPropagation();if(blurTimer)clearTimeout(blurTimer);},
+              onMouseDown:function(e){e.stopPropagation();if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
               onClick:function(){setTextInputState(function(s){return Object.assign({},s,{fontSize:Math.max(1,(s.fontSize||24)-1)});});if(taRef.current)taRef.current.focus();},
               style:{padding:"2px 7px",borderRadius:4,cursor:"pointer",fontSize:12,fontWeight:700,background:"#2a2a2a",color:"#fff",userSelect:"none",flexShrink:0}},"−"),
             ce("span",{style:{fontSize:12,color:"#ccc",minWidth:22,textAlign:"center",flexShrink:0}},ti.fontSize||24),
             ce("span",{
-              onMouseDown:function(e){e.stopPropagation();if(blurTimer)clearTimeout(blurTimer);},
+              onMouseDown:function(e){e.stopPropagation();if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
               onClick:function(){setTextInputState(function(s){return Object.assign({},s,{fontSize:Math.min(200,(s.fontSize||24)+1)});});if(taRef.current)taRef.current.focus();},
               style:{padding:"2px 7px",borderRadius:4,cursor:"pointer",fontSize:12,fontWeight:700,background:"#2a2a2a",color:"#fff",userSelect:"none",flexShrink:0}},"+"),
             ce("span",{
-              onMouseDown:function(e){e.stopPropagation();if(blurTimer)clearTimeout(blurTimer);},
+              onMouseDown:function(e){e.stopPropagation();if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
               onClick:function(){setTextInputState(function(s){return Object.assign({},s,{fontBold:!s.fontBold});});if(taRef.current)taRef.current.focus();},
               style:{padding:"2px 9px",borderRadius:4,cursor:"pointer",fontSize:13,fontWeight:900,
                 background:ti.fontBold?"#D4AC0D":"#2a2a2a",color:ti.fontBold?"#1a1a1a":"#aaa",
                 border:"none",flexShrink:0,userSelect:"none"}},"B"),
             ce("div",{style:{width:1,height:16,background:"#444",margin:"0 2px"}}),
             ce("button",{
-              onMouseDown:function(e){e.stopPropagation();if(blurTimer)clearTimeout(blurTimer);},
+              onMouseDown:function(e){e.stopPropagation();if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
               onClick:confirmText,
               style:{padding:"4px 12px",fontSize:12,fontWeight:700,background:"#6366F1",
                 color:"#fff",border:"none",borderRadius:6,cursor:"pointer",flexShrink:0}},"✓ 確定"),
             /* 既存テキスト編集時のみ削除ボタンを表示 */
             ti.idx>=0&&ce("button",{
-              onMouseDown:function(e){e.stopPropagation();if(blurTimer)clearTimeout(blurTimer);},
+              onMouseDown:function(e){e.stopPropagation();if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
               onClick:function(){
                 var ns=strokesRef.current.filter(function(_,i){return i!==textInputRef.current.idx;});
                 strokesRef.current=ns; commit(ns); rebuild(ns); setTextInputState(null);
@@ -2345,7 +2467,7 @@ function ImageAnnotator(props){
               style:{padding:"4px 10px",fontSize:12,fontWeight:700,background:"#7f1d1d",color:"#fca5a5",
                 border:"none",borderRadius:6,cursor:"pointer",flexShrink:0}},"🗑 削除"),
             ce("button",{
-              onMouseDown:function(e){e.stopPropagation();if(blurTimer)clearTimeout(blurTimer);},
+              onMouseDown:function(e){e.stopPropagation();if(blurTimerRef.current)clearTimeout(blurTimerRef.current);},
               onClick:function(){rebuild(strokesRef.current);setTextInputState(null);},
               style:{padding:"4px 10px",fontSize:12,background:"#2a2a2a",color:"#aaa",
                 border:"none",borderRadius:6,cursor:"pointer",flexShrink:0}},"✕")
@@ -2381,8 +2503,8 @@ function ImageAnnotator(props){
                   var bs=si>=0?strokesRef.current.filter(function(_,i){return i!==si;}):strokesRef.current;
                   rebuild(bs);setTextInputState(null);}
               },
-              onBlur:function(){blurTimer=setTimeout(function(){confirmText();},200);},
-              onFocus:function(){if(blurTimer){clearTimeout(blurTimer);blurTimer=null;}},
+              onBlur:function(){blurTimerRef.current=setTimeout(function(){confirmText();},200);},
+              onFocus:function(){if(blurTimerRef.current){clearTimeout(blurTimerRef.current);blurTimerRef.current=null;}},
               onInput:function(){
                 var el=taRef.current; if(!el)return;
                 el.style.height="auto";
