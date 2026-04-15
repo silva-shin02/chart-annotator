@@ -2693,12 +2693,11 @@ function DraftLibrary(props){
     var current=caLoadMeta();
     var missing=current.filter(function(m){return !caLoadThumb(m.id)&&!m.thumbUrl&&!(m.thumb&&m.thumb.length>100);});
     if(!missing.length)return;
+    var auth=fbCfg.secret?'?auth='+fbCfg.secret:'';
+    var dataBase=fbCfg.url?fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data':'';
     var idx=0;
-    function processNext(){
-      if(idx>=missing.length)return;
-      var m=missing[idx]; idx++;
-      var d=caLoadData(m.id);
-      if(!d||!(d.orig_base64||d.base64)){processNext();return;}
+
+    function genThumb(m,src){
       var tImg=new Image();
       tImg.onload=function(){
         var W=Math.min(tImg.width,800),ratio=W/tImg.width,H=Math.round(tImg.height*ratio);
@@ -2707,12 +2706,36 @@ function DraftLibrary(props){
         tctx.drawImage(tImg,0,0,W,H);
         var thumb=tc.toDataURL('image/png');
         caSaveThumb(m.id,thumb);
-        // React state更新
         setMeta(function(prev){return prev.map(function(x){return x.id===m.id?Object.assign({},x,{thumb:thumb}):x;});});
         setTimeout(processNext,50);
       };
-      tImg.onerror=function(){processNext();};
-      tImg.src='data:'+(d.orig_mt||d.mt||'image/png')+';base64,'+(d.orig_base64||d.base64);
+      tImg.onerror=function(){setTimeout(processNext,50);};
+      tImg.src=src;
+    }
+
+    function processNext(){
+      if(idx>=missing.length)return;
+      var m=missing[idx]; idx++;
+      // 1. ローカルデータから生成
+      var d=caLoadData(m.id);
+      if(d&&(d.orig_base64||d.base64)){
+        genThumb(m,'data:'+(d.orig_mt||d.mt||'image/png')+';base64,'+(d.orig_base64||d.base64));
+        return;
+      }
+      // 2. Firebaseからフェッチして生成
+      if(dataBase&&!_fbIsPaused(fbCfg)){
+        fetch(dataBase+'/'+m.id+'.json'+auth).then(function(r){return r.ok?r.json():null;})
+        .then(function(fbData){
+          if(!fbData){processNext();return;}
+          if(fbData.orig_base64||fbData.base64){
+            genThumb(m,'data:'+(fbData.orig_mt||fbData.mt||'image/png')+';base64,'+(fbData.orig_base64||fbData.base64));
+          } else if(fbData.imageUrl){
+            genThumb(m,fbData.imageUrl);
+          } else {processNext();}
+        })["catch"](function(){processNext();});
+        return;
+      }
+      processNext();
     }
     processNext();
   },[]);
