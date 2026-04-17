@@ -917,12 +917,7 @@ function ImageAnnotator(props){
       var nw=bImg.naturalWidth, nh=bImg.naturalHeight;
       var devDPR=window.devicePixelRatio||1;
       var MAX_CANVAS_PX=16777216;
-      // 表示スケールを先に計算し、canvasバッファを表示サイズに合わせる
-      var split=refPanel;
-      var aw=(split?window.innerWidth*0.5:window.innerWidth)*0.96;
-      var ah=(window.innerHeight-130)*0.96;
-      var sc=Math.min(1,aw/nw,ah/nh);
-      var DPR=Math.max(1, sc*devDPR);
+      var DPR=devDPR;
       if(nw*DPR*nh*DPR>MAX_CANVAS_PX){
         DPR=Math.sqrt(MAX_CANVAS_PX/(nw*nh));
       }
@@ -935,7 +930,6 @@ function ImageAnnotator(props){
         overlayCanvasRef.current.height=c.height;
         overlayCanvasRef.current.getContext("2d").setTransform(DPR,0,0,DPR,0,0);
       }
-      ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
       ctx.drawImage(bImg,0,0,nw,nh);
       baseImgRef.current=bImg;
       baseDimRef.current={w:nw,h:nh};
@@ -948,6 +942,10 @@ function ImageAnnotator(props){
       setCanUndo(false); setCanRedo(false);
       setSelIdxs(new Set()); setSelBounds(null);
       canvasDimRef.current={w:nw,h:nh};
+      var split=refPanel;
+      var aw=(split?window.innerWidth*0.5:window.innerWidth)*0.96;
+      var ah=(window.innerHeight-130)*0.96;
+      var sc=Math.min(1,aw/nw,ah/nh);
       setDispW(Math.round(nw*sc));
       setDispH(Math.round(nh*sc));
       setZoom(1); setPan({x:0,y:0});
@@ -1000,7 +998,6 @@ function ImageAnnotator(props){
         overlayCanvasRef.current.height=c.height;
         overlayCanvasRef.current.getContext("2d").setTransform(newDPR,0,0,newDPR,0,0);
       }
-      ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
       ctx.drawImage(bi,0,0,nw,nh);
       baseImgRef.current=bi;
       try{baseRef.current=ctx.getImageData(0,0,c.width,c.height);}catch(e){baseRef.current=null;}
@@ -1034,15 +1031,17 @@ function ImageAnnotator(props){
       setDispW(Math.round(dim.w*sc));
       setDispH(Math.round(dim.h*sc));
       setPan({x:0,y:0});
-      // DPRを表示サイズに合わせて調整（全デバイス共通）
-      var devDPR=window.devicePixelRatio||1;
-      var newDPR=Math.max(1, sc*devDPR);
-      var MAX_PX=IS_TOUCH?8388608:16777216;
-      if(dim.w*newDPR*dim.h*newDPR>MAX_PX){
-        newDPR=Math.sqrt(MAX_PX/(dim.w*dim.h));
+      // iPad: 参照画像追加時にDPRを下げてメモリ節約
+      if(IS_TOUCH){
+        var devDPR=window.devicePixelRatio||1;
+        var reducedDPR=Math.min(devDPR,1.5);
+        var MAX_PX=8388608; // 8M for touch with ref
+        if(dim.w*reducedDPR*dim.h*reducedDPR>MAX_PX){
+          reducedDPR=Math.sqrt(MAX_PX/(dim.w*dim.h));
+        }
+        reducedDPR=Math.max(1,reducedDPR);
+        adjustDPR(reducedDPR);
       }
-      newDPR=Math.max(1,newDPR);
-      adjustDPR(newDPR);
     };
     ri.src=refPanel.url;
   },[refPanel&&refPanel.url]);
@@ -1058,15 +1057,17 @@ function ImageAnnotator(props){
     setDispW(Math.round(dim.w*sc));
     setDispH(Math.round(dim.h*sc));
     setPan({x:0,y:0});
-    // DPRを表示サイズに合わせて復元（全デバイス共通）
-    var devDPR=window.devicePixelRatio||1;
-    var newDPR=Math.max(1, sc*devDPR);
-    var MAX_PX=16777216;
-    if(dim.w*newDPR*dim.h*newDPR>MAX_PX){
-      newDPR=Math.sqrt(MAX_PX/(dim.w*dim.h));
+    // iPad: DPRを元に戻す
+    if(IS_TOUCH){
+      var devDPR=window.devicePixelRatio||1;
+      var MAX_PX=16777216;
+      var fullDPR=devDPR;
+      if(dim.w*fullDPR*dim.h*fullDPR>MAX_PX){
+        fullDPR=Math.sqrt(MAX_PX/(dim.w*dim.h));
+      }
+      fullDPR=Math.max(1,fullDPR);
+      adjustDPR(fullDPR);
     }
-    newDPR=Math.max(1,newDPR);
-    adjustDPR(newDPR);
   },[refPanel]);
 
   // キャンバス座標 → 画面(viewport)座標（参照画像が左に連結されても正確）
@@ -1087,7 +1088,6 @@ function ImageAnnotator(props){
     }else if(baseImgRef.current&&baseDimRef.current){
       ctx.clearRect(0,0,c.width,c.height);
       ctx.setTransform(dprRef.current||1,0,0,dprRef.current||1,0,0);
-      ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
       ctx.drawImage(baseImgRef.current,0,0,baseDimRef.current.w,baseDimRef.current.h);
     }
     ctx.setTransform(dprRef.current||1,0,0,dprRef.current||1,0,0);
