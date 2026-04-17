@@ -2520,8 +2520,8 @@ function ImageAnnotator(props){
             style:{
               position:"fixed",
               left:sx, top:sy,
-              /* 既存: 固定幅 / 新規: auto幅 */
-              width:isNew?"auto":(screenBoxW||200)+"px",
+              /* 既存: 固定幅 / 新規: 残り画面幅 */
+              width:isNew?maxW+"px":(screenBoxW||200)+"px",
               minWidth:"4px",
               maxWidth:maxW+"px",
               /* 既存のみ点線枠 */
@@ -2567,8 +2567,7 @@ function ImageAnnotator(props){
               },
               style:{
                 display:"block",
-                width:isNew?"auto":"100%",
-                minWidth:"4px",
+                width:"100%",
                 background:"transparent",
                 border:"none",outline:"none",boxShadow:"none",
                 color:ti.color||"#E53935",
@@ -2579,7 +2578,7 @@ function ImageAnnotator(props){
                 fontFamily:"-apple-system,'Helvetica Neue',sans-serif",
                 lineHeight:1.45,
                 resize:"none",overflow:"hidden",
-                padding:"0 2px",margin:0,
+                padding:0,margin:0,
                 textAlign:"left",
                 zIndex:1,pointerEvents:"auto",
                 whiteSpace:isNew?"pre":"pre-wrap",
