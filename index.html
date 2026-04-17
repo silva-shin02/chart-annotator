@@ -638,7 +638,7 @@ function RefChartPicker(props){
     if(d&&(d.orig_base64||d.base64)){
       var b=d.orig_base64||d.base64;
       var mt=d.orig_mt||d.mt||'image/png';
-      onSelect('data:'+mt+';base64,'+b);
+      onSelect('data:'+mt+';base64,'+b, d.strokes||[]);
       return;
     }
     if(fbCfg.url){
@@ -654,14 +654,14 @@ function RefChartPicker(props){
                 if(txt2)var fbOld=txt2?JSON.parse(txt2):null;
                 if(fbOld&&fbOld.data&&(fbOld.data.orig_base64||fbOld.data.base64)){
                   caSaveData(id,fbOld.data);
-                  onSelect('data:'+(fbOld.data.orig_mt||fbOld.data.mt||'image/png')+';base64,'+(fbOld.data.orig_base64||fbOld.data.base64));
+                  onSelect('data:'+(fbOld.data.orig_mt||fbOld.data.mt||'image/png')+';base64,'+(fbOld.data.orig_base64||fbOld.data.base64), fbOld.data.strokes||[]);
                 }else{alert('画像データが見つかりません');}
               });
           }
           // base64が直接ある場合
           if(fbData.orig_base64||fbData.base64){
             caSaveData(id,fbData);
-            onSelect('data:'+(fbData.orig_mt||fbData.mt||'image/png')+';base64,'+(fbData.orig_base64||fbData.base64));
+            onSelect('data:'+(fbData.orig_mt||fbData.mt||'image/png')+';base64,'+(fbData.orig_base64||fbData.base64), fbData.strokes||[]);
             return;
           }
           // imageUrl（Storage）→ base64変換
@@ -670,7 +670,7 @@ function RefChartPicker(props){
               var localData={orig_base64:res.base64,orig_mt:res.mt||fbData.orig_mt||'image/png',
                 strokes:fbData.strokes||[],name:fbData.name||''};
               caSaveData(id,localData);
-              onSelect('data:'+(localData.orig_mt)+';base64,'+res.base64);
+              onSelect('data:'+(localData.orig_mt)+';base64,'+res.base64, localData.strokes||[]);
             });
           }
           alert('画像データが見つかりません');
@@ -2703,20 +2703,34 @@ function ImageAnnotator(props){
     /* ── 参照画像ピッカー ── */
     showRefPicker&&ce(RefChartPicker,{
       fbCfg:props.fbCfg,
-      onSelect:function(dataUrl){
-        // data URL → blob URL 変換（Safari/iPadのメモリ効率改善＝画質維持）
-        var refUrl=dataUrl;
-        try{
-          var rParts=dataUrl.split(',');
-          var rMime=rParts[0].match(/data:([^;]+)/)[1];
-          var rRaw=atob(rParts[1]);
-          var rArr=new Uint8Array(rRaw.length);
-          for(var ri=0;ri<rRaw.length;ri++)rArr[ri]=rRaw.charCodeAt(ri);
-          refUrl=URL.createObjectURL(new Blob([rArr],{type:rMime}));
-        }catch(e2){}
-        setRefPanel({url:refUrl,_dataUrl:dataUrl,_isBlob:refUrl!==dataUrl});
-        setRefSlideMode(false);setRefOffsetY(0);
-        setShowRefPicker(false);
+      onSelect:function(dataUrl, strokes){
+        function applyRef(finalUrl){
+          // data URL → blob URL 変換（Safari/iPadのメモリ効率改善＝画質維持）
+          var refUrl=finalUrl;
+          try{
+            var rParts=finalUrl.split(',');
+            var rMime=rParts[0].match(/data:([^;]+)/)[1];
+            var rRaw=atob(rParts[1]);
+            var rArr=new Uint8Array(rRaw.length);
+            for(var ri=0;ri<rRaw.length;ri++)rArr[ri]=rRaw.charCodeAt(ri);
+            refUrl=URL.createObjectURL(new Blob([rArr],{type:rMime}));
+          }catch(e2){}
+          setRefPanel({url:refUrl,_dataUrl:finalUrl,_isBlob:refUrl!==finalUrl});
+          setRefSlideMode(false);setRefOffsetY(0);
+          setShowRefPicker(false);
+        }
+        if(!strokes||!strokes.length){applyRef(dataUrl);return;}
+        // ストロークを原寸で合成
+        var compImg=new Image();
+        compImg.onload=function(){
+          var tc=document.createElement('canvas');
+          tc.width=compImg.naturalWidth; tc.height=compImg.naturalHeight;
+          var ctx=tc.getContext('2d');
+          ctx.drawImage(compImg,0,0);
+          strokes.forEach(function(s){drawStroke(ctx,s);});
+          applyRef(tc.toDataURL('image/png'));
+        };
+        compImg.src=dataUrl;
       },
       onClose:function(){setShowRefPicker(false);}
     })
