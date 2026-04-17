@@ -832,7 +832,7 @@ function ImageAnnotator(props){
   // textInputRef を最新の textInputState に同期 + ライブプレビュー描画
   useEffect(function(){
     textInputRef.current=textInputState;
-    if(!textInputState||!canvasRef.current||(!baseRef.current&&!baseImgRef.current))return;
+    if(!textInputState||!canvasRef.current||!baseImgRef.current)return;
     var txt=taRef.current?taRef.current.value:(textInputState.text||"");
     // 編集中の元ストロークは除外して rebuild（二重描画防止）
     var skipIdx=textInputState.idx;
@@ -930,11 +930,10 @@ function ImageAnnotator(props){
         overlayCanvasRef.current.height=c.height;
         overlayCanvasRef.current.getContext("2d").setTransform(DPR,0,0,DPR,0,0);
       }
-      ctx.drawImage(bImg,0,0,nw,nh);
+      // canvas はストローク専用（透明）。画像は <img> で表示
       baseImgRef.current=bImg;
       baseDimRef.current={w:nw,h:nh};
-      try{baseRef.current=ctx.getImageData(0,0,c.width,c.height);}
-      catch(e){baseRef.current=null;console.warn('getImageData failed (tainted canvas), using Image fallback');}
+      baseRef.current=null;
       var saved=imgData.strokes||[];
       strokesRef.current=saved.slice();
       saved.forEach(function(s){drawStroke(ctx,s);});
@@ -982,34 +981,21 @@ function ImageAnnotator(props){
 
   // ── DPR動的変更（参照画像追加/削除時にメモリ調整）──
   function adjustDPR(newDPR){
-    var c=canvasRef.current; if(!c||(!baseRef.current&&!baseImgRef.current))return;
+    var c=canvasRef.current; if(!c||!baseDimRef.current)return;
     var dim=canvasDimRef.current; if(!dim||!dim.w)return;
     var nw=dim.w, nh=dim.h;
     var oldDPR=dprRef.current||1;
     if(Math.abs(newDPR-oldDPR)<0.01)return;
-    var d=imgDataRef.current; if(!d)return;
-    function redraw(bi){
-      dprRef.current=newDPR;
-      c.width=Math.round(nw*newDPR); c.height=Math.round(nh*newDPR);
-      var ctx=c.getContext("2d");
-      ctx.setTransform(newDPR,0,0,newDPR,0,0);
-      if(overlayCanvasRef.current){
-        overlayCanvasRef.current.width=c.width;
-        overlayCanvasRef.current.height=c.height;
-        overlayCanvasRef.current.getContext("2d").setTransform(newDPR,0,0,newDPR,0,0);
-      }
-      ctx.drawImage(bi,0,0,nw,nh);
-      baseImgRef.current=bi;
-      try{baseRef.current=ctx.getImageData(0,0,c.width,c.height);}catch(e){baseRef.current=null;}
-      strokesRef.current.forEach(function(s){drawStroke(ctx,s);});
+    dprRef.current=newDPR;
+    c.width=Math.round(nw*newDPR); c.height=Math.round(nh*newDPR);
+    var ctx=c.getContext("2d");
+    ctx.setTransform(newDPR,0,0,newDPR,0,0);
+    if(overlayCanvasRef.current){
+      overlayCanvasRef.current.width=c.width;
+      overlayCanvasRef.current.height=c.height;
+      overlayCanvasRef.current.getContext("2d").setTransform(newDPR,0,0,newDPR,0,0);
     }
-    if(d.orig_base64||d.base64){
-      var bImg=new Image();
-      bImg.onload=function(){redraw(bImg);};
-      bImg.src="data:"+(d.orig_mt||d.mt)+";base64,"+(d.orig_base64||d.base64);
-    }else if(baseImgRef.current){
-      redraw(baseImgRef.current);
-    }
+    strokesRef.current.forEach(function(s){drawStroke(ctx,s);});
   }
 
   // 初回ロード
@@ -1080,16 +1066,10 @@ function ImageAnnotator(props){
   }
 
   function rebuild(strokes){
-    var c=canvasRef.current; if(!c||(!baseRef.current&&!baseImgRef.current))return;
+    var c=canvasRef.current; if(!c||(!baseImgRef.current&&!baseDimRef.current))return;
     var ctx=c.getContext("2d");
     ctx.setTransform(1,0,0,1,0,0);
-    if(baseRef.current){
-      ctx.putImageData(baseRef.current,0,0);
-    }else if(baseImgRef.current&&baseDimRef.current){
-      ctx.clearRect(0,0,c.width,c.height);
-      ctx.setTransform(dprRef.current||1,0,0,dprRef.current||1,0,0);
-      ctx.drawImage(baseImgRef.current,0,0,baseDimRef.current.w,baseDimRef.current.h);
-    }
+    ctx.clearRect(0,0,c.width,c.height);
     ctx.setTransform(dprRef.current||1,0,0,dprRef.current||1,0,0);
     strokes.forEach(function(s){drawStroke(ctx,s);});
   }
@@ -1105,6 +1085,20 @@ function ImageAnnotator(props){
     var ctx=oc.getContext("2d");
     ctx.setTransform(dprRef.current||1,0,0,dprRef.current||1,0,0);
     return ctx;
+  }
+  // 画像+ストロークを合成した一時canvasを返す（サムネイル・プレビュー用）
+  function compositeCanvas(){
+    var c=canvasRef.current;
+    if(!c||!baseImgRef.current||!baseDimRef.current)return c;
+    var tc=document.createElement('canvas');
+    tc.width=c.width; tc.height=c.height;
+    var ctx=tc.getContext('2d');
+    ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
+    ctx.setTransform(dprRef.current||1,0,0,dprRef.current||1,0,0);
+    ctx.drawImage(baseImgRef.current,0,0,baseDimRef.current.w,baseDimRef.current.h);
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.drawImage(c,0,0);
+    return tc;
   }
   function triggerAutoSave(){
     var cfg=props.fbCfg; if(_fbIsPaused(cfg))return;
@@ -1139,7 +1133,7 @@ function ImageAnnotator(props){
       urlPromise.then(function(imageUrl){
         var draftBase=cfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts';
         var draftDataBase=cfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
-        var thumb=canvasRef.current?caGenThumb(canvasRef.current):(img._thumb||'');
+        var thumb=canvasRef.current?caGenThumb(compositeCanvas()):(img._thumb||'');
         // meta
         uploadThumbToStorage(cfg2,draftId,thumb).then(function(thumbUrl){
           var metaDb={ticker:img._ticker||'',name:img._name||img.name||'chart',savedAt:savedAt};
@@ -1799,7 +1793,7 @@ function ImageAnnotator(props){
   }
   function saveDraftSilent(){
     rebuild(strokesRef.current);
-    var thumb=caGenThumb(canvasRef.current);
+    var thumb=caGenThumb(compositeCanvas());
     var d=imgDataRef.current;
     var id=savedDraftIdRef.current;
     var ticker=savedTickerRef.current;
@@ -2132,6 +2126,17 @@ function ImageAnnotator(props){
         })(),
         /* メインキャンバス + オーバーレイキャンバス */
         ce("div",{style:{position:"relative",width:dispW,height:dispH,flexShrink:0}},
+          /* ベース画像（ブラウザ高品質リサンプリングで表示） */
+          (function(){
+            var src=(img.orig_base64||img.base64)
+              ?"data:"+(img.orig_mt||img.mt)+";base64,"+(img.orig_base64||img.base64)
+              :img._imageUrl||null;
+            return src?ce("img",{src:src,draggable:false,
+              style:{position:"absolute",inset:0,width:dispW,height:dispH,
+                display:"block",pointerEvents:"none",userSelect:"none",
+                borderRadius:refPanel&&refPanel.url?0:4}
+            }):null;
+          })(),
           ce("canvas",{
             ref:canvasRef,
             style:{position:"absolute",inset:0,width:dispW,height:dispH,
@@ -2525,7 +2530,7 @@ function ImageAnnotator(props){
                 el.style.height=el.scrollHeight+"px";
                 // ライブプレビュー（元ストロークを除外して二重防止）
                 var ti2=textInputRef.current;
-                if(!ti2||!canvasRef.current||(!baseRef.current&&!baseImgRef.current))return;
+                if(!ti2||!canvasRef.current||!baseImgRef.current)return;
                 var si2=ti2.idx;
                 var bs2=si2>=0?strokesRef.current.filter(function(_,i){return i!==si2;}):strokesRef.current;
                 rebuild(bs2);
@@ -2591,7 +2596,7 @@ function ImageAnnotator(props){
           caSaveData(id,data);
           // メタも更新（サムネイル + 名前 + 保存日時）
           rebuild(strokesRef.current);
-          var thumb=canvasRef.current?caGenThumb(canvasRef.current):(img._thumb||'');
+          var thumb=canvasRef.current?caGenThumb(compositeCanvas()):(img._thumb||'');
           var now=Date.now();
           var localMeta=caLoadMeta();
           var found=false;
@@ -2616,7 +2621,7 @@ function ImageAnnotator(props){
       defaultName:img._name||img.name||'chart',
       onSave:function(ticker,name){
         rebuild(strokesRef.current);
-        var thumb=caGenThumb(canvasRef.current);
+        var thumb=caGenThumb(compositeCanvas());
         var d=imgDataRef.current;
         var data={orig_base64:d.orig_base64||d.base64,orig_mt:d.orig_mt||d.mt,
           strokes:strokesRef.current,name:name};
