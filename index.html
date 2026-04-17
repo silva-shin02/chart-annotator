@@ -921,7 +921,9 @@ function ImageAnnotator(props){
       if(nw*DPR*nh*DPR>MAX_CANVAS_PX){
         DPR=Math.sqrt(MAX_CANVAS_PX/(nw*nh));
       }
-      DPR=Math.max(1,DPR);
+      DPR=Math.max(0.25,DPR);
+      // 丸め後もcanvas上限を超えないよう調整
+      while(Math.round(nw*DPR)*Math.round(nh*DPR)>MAX_CANVAS_PX&&DPR>0.25){DPR*=0.98;}
       dprRef.current=DPR;
       c.width=Math.round(nw*DPR); c.height=Math.round(nh*DPR);
       ctx.setTransform(DPR,0,0,DPR,0,0);
@@ -1025,7 +1027,7 @@ function ImageAnnotator(props){
         if(dim.w*reducedDPR*dim.h*reducedDPR>MAX_PX){
           reducedDPR=Math.sqrt(MAX_PX/(dim.w*dim.h));
         }
-        reducedDPR=Math.max(1,reducedDPR);
+        reducedDPR=Math.max(0.25,reducedDPR);
         adjustDPR(reducedDPR);
       }
     };
@@ -1051,7 +1053,7 @@ function ImageAnnotator(props){
       if(dim.w*fullDPR*dim.h*fullDPR>MAX_PX){
         fullDPR=Math.sqrt(MAX_PX/(dim.w*dim.h));
       }
-      fullDPR=Math.max(1,fullDPR);
+      fullDPR=Math.max(0.25,fullDPR);
       adjustDPR(fullDPR);
     }
   },[refPanel]);
