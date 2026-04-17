@@ -7,6 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-title" content="チャート分析ツール 完全版"/>
 <meta name="theme-color" content="#111111"/>
+<link rel="manifest" href="manifest.json"/>
 <title>チャート分析ツール 完全版</title>
 <style>
 *,*::before,*::after{box-sizing:border-box}
@@ -762,8 +763,8 @@ function ImageAnnotator(props){
   var st4=useState(3);       var lineW=st4[0],setLineW=st4[1];
   var st5=useState(1);       var opacity=st5[0],setOpacity=st5[1];
   var st6=useState(false);    var horiz=st6[0],setHoriz=st6[1];
-  var st7=useState(24);      var fontSize=st7[0],setFontSize=st7[1];
-  var st8=useState("24");    var fontSizeStr=st8[0],setFontSizeStr=st8[1];
+  var st7=useState(18);      var fontSize=st7[0],setFontSize=st7[1];
+  var st8=useState("18");    var fontSizeStr=st8[0],setFontSizeStr=st8[1];
   var st9=useState(false);   var fontBold=st9[0],setFontBold=st9[1];
   var stTI=useState(null);   var textInputState=stTI[0],setTextInputState=stTI[1];
   var stFP=useState(null);   var floatPos=stFP[0],setFloatPos=stFP[1];
@@ -826,6 +827,8 @@ function ImageAnnotator(props){
   var refSlideDragRef=useRef(null); // 参照画像の縦スライドドラッグ
   var penTapRef=useRef({time:0,prevTool:null,x:0,y:0}); // ダブルタップ消しゴムトグル用
   var toolRef=useRef("pan"); // tool stateのミラー（pointerイベント用）
+  var toolMemRef=useRef({}); // ツール別の色・線幅・透明度を記憶
+  var prevHorizRef=useRef(false); // dotted切替前の水平スナップ状態
   useEffect(function(){toolRef.current=tool;},[tool]);
   useEffect(function(){zoomRef.current=zoom;},[zoom]);
 
@@ -1880,10 +1883,28 @@ function ImageAnnotator(props){
 
   // ── switchTool ──
   function switchTool(t){
+    // 現ツールの設定を保存
+    var noSave=["pan","eraser","lasso"];
+    if(noSave.indexOf(tool)<0){
+      toolMemRef.current[tool]={color:color,lineW:lineW,opacity:opacity,fontSize:fontSize,fontBold:fontBold};
+    }
+    // marker離脱時のリセット
     if(tool==="marker"&&t!=="marker"){setLineW(2);setOpacity(1);}
+    // dotted離脱時: 水平スナップを元に戻す
+    if(tool==="dotted"&&t!=="dotted"){setHoriz(prevHorizRef.current);}
     setTool(t);
     if(t!=="lasso"){setSelIdxs(new Set());setSelBounds(null);rebuild(strokesRef.current);}
+    // marker進入時の固定設定
     if(t==="marker"){setLineW(3);setOpacity(0.7);}
+    // dotted進入時: 水平スナップ自動ON
+    if(t==="dotted"&&tool!=="dotted"){prevHorizRef.current=horiz;setHoriz(true);}
+    // 保存済み設定の復元
+    var mem=toolMemRef.current[t];
+    if(mem&&noSave.indexOf(t)<0){
+      setColor(mem.color);
+      if(t!=="marker"){setLineW(mem.lineW);setOpacity(mem.opacity);}
+      if(t==="text"){setFontSize(mem.fontSize);setFontSizeStr(String(mem.fontSize));}
+    }
   }
 
   // ── Selection UI (screen coords) ──
@@ -2548,7 +2569,8 @@ function ImageAnnotator(props){
                 minWidth:"4px",
                 background:"transparent",
                 border:"none",outline:"none",boxShadow:"none",
-                color:"transparent",
+                color:ti.color||"#E53935",
+                WebkitTextFillColor:"transparent",
                 caretColor:ti.color||"#E53935",
                 fontSize:screenFS+"px",
                 fontWeight:ti.fontBold?"700":"400",
@@ -2556,6 +2578,7 @@ function ImageAnnotator(props){
                 lineHeight:1.45,
                 resize:"none",overflow:"hidden",
                 padding:"0 2px",margin:0,
+                textAlign:"left",
                 zIndex:1,pointerEvents:"auto",
                 whiteSpace:isNew?"pre":"pre-wrap",
                 wordBreak:isNew?"normal":"break-all"
@@ -3794,6 +3817,11 @@ document.addEventListener('touchstart',function(e){
 
 ReactDOM.createRoot(document.getElementById('root')).render(ce(App,null));
 })();
+</script>
+<script>
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('sw.js').catch(function(e){console.warn('SW registration failed:',e);});
+}
 </script>
 </body>
 </html>
