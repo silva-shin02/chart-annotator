@@ -2551,16 +2551,18 @@ function ImageAnnotator(props){
                 var el=taRef.current; if(!el)return;
                 el.style.height="auto";
                 el.style.height=el.scrollHeight+"px";
-                // ライブプレビュー（元ストロークを除外して二重防止）
-                var ti2=textInputRef.current;
-                if(!ti2||!canvasRef.current||!baseImgRef.current)return;
-                var si2=ti2.idx;
-                var bs2=si2>=0?strokesRef.current.filter(function(_,i){return i!==si2;}):strokesRef.current;
-                rebuild(bs2);
-                drawStroke(canvasRef.current.getContext("2d"),{
-                  type:"text",x:ti2.x,y:ti2.y,text:el.value,
-                  fontSize:ti2.fontSize,fontBold:ti2.fontBold,color:ti2.color,
-                  opacity:ti2.opacity,lineW:1,boxW:ti2.boxW||undefined
+                // ライブプレビュー（rAFで非同期化しカーソル追従を優先）
+                requestAnimationFrame(function(){
+                  var ti2=textInputRef.current;
+                  if(!ti2||!canvasRef.current||!baseImgRef.current)return;
+                  var si2=ti2.idx;
+                  var bs2=si2>=0?strokesRef.current.filter(function(_,i){return i!==si2;}):strokesRef.current;
+                  rebuild(bs2);
+                  drawStroke(canvasRef.current.getContext("2d"),{
+                    type:"text",x:ti2.x,y:ti2.y,text:el.value,
+                    fontSize:ti2.fontSize,fontBold:ti2.fontBold,color:ti2.color,
+                    opacity:ti2.opacity,lineW:1,boxW:ti2.boxW||undefined
+                  });
                 });
               },
               style:{
