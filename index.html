@@ -922,11 +922,11 @@ function ImageAnnotator(props){
       var aw=(split?window.innerWidth*0.5:window.innerWidth)*0.96;
       var ah=(window.innerHeight-130)*0.96;
       var sc=Math.min(1,aw/nw,ah/nh);
-      var DPR=Math.max(1, sc*devDPR);
+      var DPR=sc*devDPR;
       if(nw*DPR*nh*DPR>MAX_CANVAS_PX){
         DPR=Math.sqrt(MAX_CANVAS_PX/(nw*nh));
       }
-      DPR=Math.max(1,DPR);
+      DPR=Math.max(0.25,DPR);
       dprRef.current=DPR;
       c.width=Math.round(nw*DPR); c.height=Math.round(nh*DPR);
       ctx.setTransform(DPR,0,0,DPR,0,0);
@@ -1036,12 +1036,12 @@ function ImageAnnotator(props){
       setPan({x:0,y:0});
       // DPRを表示サイズに合わせて調整（全デバイス共通）
       var devDPR=window.devicePixelRatio||1;
-      var newDPR=Math.max(1, sc*devDPR);
+      var newDPR=sc*devDPR;
       var MAX_PX=IS_TOUCH?8388608:16777216;
       if(dim.w*newDPR*dim.h*newDPR>MAX_PX){
         newDPR=Math.sqrt(MAX_PX/(dim.w*dim.h));
       }
-      newDPR=Math.max(1,newDPR);
+      newDPR=Math.max(0.25,newDPR);
       adjustDPR(newDPR);
     };
     ri.src=refPanel.url;
@@ -1060,12 +1060,12 @@ function ImageAnnotator(props){
     setPan({x:0,y:0});
     // DPRを表示サイズに合わせて復元（全デバイス共通）
     var devDPR=window.devicePixelRatio||1;
-    var newDPR=Math.max(1, sc*devDPR);
-    var MAX_PX=IS_TOUCH?16777216:16777216;
+    var newDPR=sc*devDPR;
+    var MAX_PX=16777216;
     if(dim.w*newDPR*dim.h*newDPR>MAX_PX){
       newDPR=Math.sqrt(MAX_PX/(dim.w*dim.h));
     }
-    newDPR=Math.max(1,newDPR);
+    newDPR=Math.max(0.25,newDPR);
     adjustDPR(newDPR);
   },[refPanel]);
 
