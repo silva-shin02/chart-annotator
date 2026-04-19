@@ -1087,6 +1087,7 @@ function DataChart(props){
   // メインチャート描画
   useEffect(function(){
     var canvas=canvasRef.current; if(!canvas||!bars.length||!priceRange)return;
+    console.log('[drawDataChart effect] strokes:', strokes&&strokes.length, 'refStrokes:', refStrokes&&refStrokes.length, 'hasRef-via-refBars:', !!(refBars&&refBars.length));
     drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx,refBars,refData,getCandleGap(tf),refStrokes);
     // 描画直後に十字カーソルも再描画 (リサイズ・ズーム等でレイアウト変わった時)
     drawCrosshair();
@@ -4152,16 +4153,28 @@ function ImageAnnotator(props){
           /* C6: onStrokeAdd - s.side で cur/ref 分岐 */
           onStrokeAdd:function(s){
             var side=s.side||'cur';
+            console.log('[onStrokeAdd]', 'side:', side, 'tf:', analysisTf, 'stroke:', s);
             if(side==='ref'){
               var ra=refAnalysisRef.current;
+              console.log('[onStrokeAdd ref] ra exists:', !!ra, 'ra.id:', ra&&ra.id, 'current strokes:', ra&&ra.analysisStrokes);
               if(!ra)return;
               var rObj=ra.analysisStrokes||{'1m':[],'5m':[]};
               var rArr=(rObj[analysisTf]||[]).slice();
               rArr.push(s);
               var nextRef=Object.assign({},rObj,(function(){var o={};o[analysisTf]=rArr;return o;})());
+              console.log('[onStrokeAdd ref] new strokes:', nextRef);
               setRefAnalysis(Object.assign({},ra,{analysisStrokes:nextRef}));
               triggerRefAutoSave();
               analysisCommit(analysisStrokesRef.current, nextRef);
+              /* 次renderでrefStrokes propが新配列で渡るか確認 */
+              setTimeout(function(){
+                var ra2=refAnalysisRef.current;
+                console.log('[onStrokeAdd ref +0ms] refAnalysisRef:', ra2&&ra2.analysisStrokes);
+              },0);
+              setTimeout(function(){
+                var ra3=refAnalysisRef.current;
+                console.log('[onStrokeAdd ref +500ms] refAnalysisRef:', ra3&&ra3.analysisStrokes);
+              },500);
             }else{
               var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
               var curArr=(curObj[analysisTf]||[]).slice();
