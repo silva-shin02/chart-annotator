@@ -2175,14 +2175,11 @@ function ImageAnnotator(props){
         transform:"translate("+pan.x+"px,"+pan.y+"px) scale("+zoom+")",
         transformOrigin:"center center"
       }},
-        /* 参照画像（左に連結・独自サイズ） */
+        /* 参照画像（左に連結・メインと横幅を揃える） */
         refPanel&&refPanel.url&&refImgDim&&(function(){
-          // 参照画像は右半分(45%)の幅と利用可能な高さに独自フィット
-          var refAw=window.innerWidth*0.45*0.96;
-          var refAh=(window.innerHeight-130)*0.96;
-          var refSc=Math.min(1,refAw/refImgDim.w,refAh/refImgDim.h);
-          var rDispW=Math.round(refImgDim.w*refSc);
-          var rDispH=Math.round(refImgDim.h*refSc);
+          // メイン画像の表示幅に合わせ、高さはアスペクト比で算出
+          var rDispW=dispW;
+          var rDispH=Math.round(refImgDim.h*(dispW/refImgDim.w));
           return ce("img",{
             src:refPanel.url, draggable:false,
             onMouseDown:onRefSlideStart,
