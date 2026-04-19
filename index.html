@@ -800,13 +800,16 @@ function DataChart(props){
   var data=props.data;
   var tf=props.tf||'1m';
   var showCrosshair=props.showCrosshair;  // 親からの ON/OFF のみで判定
-  var drawTool=props.drawTool||'pan';     // 'pan'|'horizontal'|'line'|'eraser'
+  var drawTool=props.drawTool||'pan';     // 'pan'|'line'|'dotted'|'arrow'|'rect'|'circle'|'marker'|'freehand'|'text'|'lasso'|'eraser'
   var drawColor=props.drawColor||'#ff3b30';
   var drawWidth=props.drawWidth||2;
   var drawOpacity=props.drawOpacity!=null?props.drawOpacity:1;
+  var drawFontSize=props.drawFontSize||18;
+  var drawFontBold=!!props.drawFontBold;
   var strokes=props.strokes||[];
   var onStrokeAdd=props.onStrokeAdd;
   var onStrokeDelete=props.onStrokeDelete;
+  var onStrokeUpdate=props.onStrokeUpdate;  // (idx, newStroke) → 選択ストローク更新用
   var barsKey=tf==='5m'?'bars_5m':'bars_1m';
   var bars=(data&&data[barsKey])||[];
 
@@ -815,7 +818,9 @@ function DataChart(props){
   var layoutRef=useRef(null);      // drawDataChart が書き込むレイアウト情報
   var cursorRef=useRef(null);      // {x,y} or null
   var rafRef=useRef(null);
-  var drawStartRef=useRef(null);   // 描画開始点 {tm, p} (2点ツール用)
+  var drawRef=useRef({on:false});  // ドラッグ式描画状態 {on, sTM, sP, cTM, cP, pts(freehand用)}
+  var ctrlPanRef=useRef(false);    // Ctrl+drag パン状態
+  var moveRef=useRef(null);        // lasso: 選択ストローク移動状態 {idx, startTM, startP, origAnchors}
   var containerRef=useRef(null);
   var sD=useState({w:800,h:520}); var dim=sD[0],setDim=sD[1];
   /* 時間軸ビューレンジ (分, 540=09:00, 930=15:30) */
@@ -825,6 +830,8 @@ function DataChart(props){
   var sPY=useState(0); var pShift=sPY[0],setPShift=sPY[1];
   /* 価格レンジ (全バーから算出、タイム軸ズーム・パンに影響されない固定値) */
   var sPR=useState(null); var priceRange=sPR[0],setPriceRange=sPR[1];
+  /* 選択ストロークの index (lasso用) */
+  var sSI=useState(null); var selectedIdx=sSI[0],setSelectedIdx=sSI[1];
 
   // データロード時: 全バーから priceRange を算出 (10円境界に丸める)
   useEffect(function(){
@@ -876,17 +883,17 @@ function DataChart(props){
   // メインチャート描画
   useEffect(function(){
     var canvas=canvasRef.current; if(!canvas||!bars.length||!priceRange)return;
-    drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes);
+    drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx);
     // 描画直後に十字カーソルも再描画 (リサイズ・ズーム等でレイアウト変わった時)
     drawCrosshair();
-  },[data,bars,dim,tf,view,pShift,priceRange,strokes]);
+  },[data,bars,dim,tf,view,pShift,priceRange,strokes,selectedIdx]);
 
   // showCrosshair 切替時: OFFなら消す、ONなら再描画
   useEffect(function(){
     drawCrosshair();
   },[showCrosshair]);
 
-  // 十字カーソル描画 (オーバーレイCanvas)
+  // 十字カーソル + 描画プレビュー (オーバーレイCanvas)
   function drawCrosshair(){
     var overlay=overlayRef.current; if(!overlay)return;
     var dpr=window.devicePixelRatio||1;
@@ -896,22 +903,59 @@ function DataChart(props){
     var ctx=overlay.getContext('2d');
     ctx.setTransform(dpr,0,0,dpr,0,0);
     ctx.clearRect(0,0,W,H);
-    if(!showCrosshair)return;
-    var L=layoutRef.current; if(!L)return;
+
+    var L=layoutRef.current;
+
+    /* 描画中プレビュー (最優先で描く — 背面) */
+    if(L&&drawRef.current&&drawRef.current.on){
+      var d=drawRef.current;
+      function minToXloc(m){return L.padL+((m-L.vS)/(L.vE-L.vS))*L.chartW;}
+      function pToYloc(p){return L.priceTop+(1-(p-L.pmin)/(L.pmax-L.pmin))*L.priceH;}
+      if(d.freehand&&d.pts&&d.pts.length){
+        // freehand: 多点プレビュー
+        var preview={type:'freehand',anchors:d.pts,
+          color:drawColor,width:drawWidth,opacity:drawOpacity};
+        drawAnalysisStrokeExt(ctx,preview,minToXloc,pToYloc,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
+      } else {
+        // 2点ツール: line/dotted/arrow/rect/circle/marker
+        var preview2={type:drawTool,
+          anchors:[{tm:d.sTM,p:d.sP},{tm:d.cTM,p:d.cP}],
+          color:drawColor,width:drawWidth,opacity:drawOpacity};
+        drawAnalysisStroke(ctx,preview2,minToXloc,pToYloc,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
+      }
+    }
+    /* lasso 移動中プレビュー (移動後位置を点線で表示) */
+    if(L&&moveRef.current&&moveRef.current.moving){
+      var m=moveRef.current;
+      var s=strokes[m.idx];
+      if(s){
+        function minToXloc2(mm){return L.padL+((mm-L.vS)/(L.vE-L.vS))*L.chartW;}
+        function pToYloc2(pp){return L.priceTop+(1-(pp-L.pmin)/(L.pmax-L.pmin))*L.priceH;}
+        var shifted=Object.assign({},s,{
+          anchors:s.anchors.map(function(a){return {tm:a.tm+m.dtm, p:a.p+m.dp};})
+        });
+        var tp2=shifted.type||shifted.tool;
+        if(tp2==='freehand'||tp2==='text'){
+          drawAnalysisStrokeExt(ctx,shifted,minToXloc2,pToYloc2,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
+        } else {
+          drawAnalysisStroke(ctx,shifted,minToXloc2,pToYloc2,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
+        }
+        drawSelectionHighlight(ctx,shifted,minToXloc2,pToYloc2,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
+      }
+    }
+
+    /* 十字カーソル */
+    if(!showCrosshair||!L)return;
     var pos=cursorRef.current; if(!pos)return;
     var cx=pos.x, cy=pos.y;
-    // チャート領域内か
     if(cx<L.padL||cx>L.padL+L.chartW)return;
     if(cy<L.padT||cy>L.volBot)return;
-    // 色
     var CROSS='#4a9de3';
-    // 縦線 (価格~出来高 フル高)
     ctx.strokeStyle=CROSS; ctx.setLineDash([3,3]); ctx.lineWidth=1;
     ctx.beginPath();
     ctx.moveTo(Math.round(cx)+0.5,L.priceTop);
     ctx.lineTo(Math.round(cx)+0.5,L.volBot);
     ctx.stroke();
-    // 横線 (価格パネル内のみ)
     if(cy>=L.priceTop&&cy<=L.priceBot){
       ctx.beginPath();
       ctx.moveTo(L.padL,Math.round(cy)+0.5);
@@ -919,7 +963,6 @@ function DataChart(props){
       ctx.stroke();
     }
     ctx.setLineDash([]);
-    // 時刻ラベル (縦線とX軸の交点 → 出来高パネル下)
     var fracX=(cx-L.padL)/L.chartW;
     var minAt=L.vS+fracX*(L.vE-L.vS);
     var hh=Math.floor(minAt/60), mm=Math.round(minAt%60);
@@ -928,12 +971,11 @@ function DataChart(props){
     ctx.font='bold 11px -apple-system,Helvetica,sans-serif';
     ctx.textBaseline='middle'; ctx.textAlign='center';
     var tw=ctx.measureText(tStr).width+10;
-    var ty=L.priceBot+3;  // 価格と出来高の間
+    var ty=L.priceBot+3;
     ctx.fillStyle=CROSS;
     ctx.fillRect(cx-tw/2,ty,tw,14);
-    ctx.fillStyle='#fff';
+    ctx.fillStyle='#000';
     ctx.fillText(tStr,cx,ty+7);
-    // 価格ラベル (右Y軸)
     if(cy>=L.priceTop&&cy<=L.priceBot){
       var fracY=(cy-L.priceTop)/L.priceH;
       var priceAt=L.pmax-fracY*(L.pmax-L.pmin);
@@ -942,14 +984,13 @@ function DataChart(props){
       ctx.textAlign='left';
       ctx.fillStyle=CROSS;
       ctx.fillRect(L.padL+L.chartW+2,cy-8,pw,16);
-      ctx.fillStyle='#fff';
+      ctx.fillStyle='#000';
       ctx.fillText(pStr,L.padL+L.chartW+7,cy);
     }
   }
 
-  // マウスムーブハンドラ
+  // マウスムーブハンドラ (十字カーソル座標更新専用)
   function onChartMouseMove(e){
-    if(!showCrosshair)return;
     var rect=containerRef.current.getBoundingClientRect();
     cursorRef.current={x:e.clientX-rect.left,y:e.clientY-rect.top};
     if(!rafRef.current){
@@ -1003,136 +1044,336 @@ function DataChart(props){
     var L=layoutRef.current; if(!L)return null;
     var rect=containerRef.current.getBoundingClientRect();
     var cx=clientX-rect.left, cy=clientY-rect.top;
-    if(cx<L.padL||cx>L.padL+L.chartW)return null;
     var tm=L.vS+((cx-L.padL)/L.chartW)*(L.vE-L.vS);
     var price;
     if(cy>=L.priceTop&&cy<=L.priceBot){
       price=L.pmax-((cy-L.priceTop)/L.priceH)*(L.pmax-L.pmin);
     } else {
-      price=null; // 価格パネル外
+      price=null;
     }
     return {tm:tm, p:price, cx:cx, cy:cy};
   }
 
-  /* ヒットテスト: クリック位置に近いストロークを返す */
+  /* ヒットテスト: クリック位置に近いストロークを返す (全ツール対応) */
   function hitTestStroke(clientX,clientY){
     var L=layoutRef.current; if(!L||!strokes||!strokes.length)return null;
     var rect=containerRef.current.getBoundingClientRect();
     var cx=clientX-rect.left, cy=clientY-rect.top;
-    var TOL=8; // 8px tolerance
+    var TOL=8;
     function minToXloc(m){return L.padL+((m-L.vS)/(L.vE-L.vS))*L.chartW;}
     function pToYloc(p){return L.priceTop+(1-(p-L.pmin)/(L.pmax-L.pmin))*L.priceH;}
+    function distPtToSeg(px,py,x1,y1,x2,y2){
+      var dx=x2-x1, dy=y2-y1, lenSq=dx*dx+dy*dy;
+      if(lenSq===0)return Math.hypot(px-x1,py-y1);
+      var t=Math.max(0,Math.min(1,((px-x1)*dx+(py-y1)*dy)/lenSq));
+      return Math.hypot(px-(x1+t*dx),py-(y1+t*dy));
+    }
     for(var i=strokes.length-1;i>=0;i--){
       var s=strokes[i]; if(!s||!s.anchors||!s.anchors.length)continue;
-      if(s.tool==='horizontal'){
+      var tp=s.type||s.tool;  // 後方互換
+      if(tp==='horizontal'){
         var y=pToYloc(s.anchors[0].p);
         if(Math.abs(cy-y)<=TOL)return i;
-      } else if(s.tool==='line'&&s.anchors.length>=2){
+      } else if((tp==='line'||tp==='dotted'||tp==='arrow'||tp==='marker')&&s.anchors.length>=2){
         var a1=s.anchors[0], a2=s.anchors[1];
         var x1=minToXloc(a1.tm), y1=pToYloc(a1.p);
         var x2=minToXloc(a2.tm), y2=pToYloc(a2.p);
-        // 線分との距離
-        var dx=x2-x1, dy=y2-y1;
-        var lenSq=dx*dx+dy*dy; if(lenSq===0)continue;
-        var t=Math.max(0,Math.min(1,((cx-x1)*dx+(cy-y1)*dy)/lenSq));
-        var px=x1+t*dx, py=y1+t*dy;
-        if(Math.hypot(cx-px,cy-py)<=TOL)return i;
+        var tol=tp==='marker'?(s.width||2)*5+4:TOL;
+        if(distPtToSeg(cx,cy,x1,y1,x2,y2)<=tol)return i;
+      } else if(tp==='rect'&&s.anchors.length>=2){
+        var a1=s.anchors[0], a2=s.anchors[1];
+        var x1=minToXloc(a1.tm), y1=pToYloc(a1.p);
+        var x2=minToXloc(a2.tm), y2=pToYloc(a2.p);
+        var rx=Math.min(x1,x2), ry=Math.min(y1,y2);
+        var rw=Math.abs(x2-x1), rh=Math.abs(y2-y1);
+        // 4辺のいずれかに近いか
+        var d=Math.min(
+          distPtToSeg(cx,cy,rx,ry,rx+rw,ry),
+          distPtToSeg(cx,cy,rx+rw,ry,rx+rw,ry+rh),
+          distPtToSeg(cx,cy,rx+rw,ry+rh,rx,ry+rh),
+          distPtToSeg(cx,cy,rx,ry+rh,rx,ry)
+        );
+        if(d<=TOL)return i;
+      } else if(tp==='circle'&&s.anchors.length>=2){
+        var a1=s.anchors[0], a2=s.anchors[1];
+        var x1=minToXloc(a1.tm), y1=pToYloc(a1.p);
+        var x2=minToXloc(a2.tm), y2=pToYloc(a2.p);
+        var ccx=(x1+x2)/2, ccy=(y1+y2)/2;
+        var rx=Math.abs(x2-x1)/2, ry=Math.abs(y2-y1)/2;
+        if(rx<=0||ry<=0)continue;
+        // 楕円周との距離近似: ノーマライズ空間で円からの距離
+        var ndx=(cx-ccx)/rx, ndy=(cy-ccy)/ry;
+        var nd=Math.hypot(ndx,ndy);
+        // 半径1の円との距離 → 絶対距離に戻す (ざっくり)
+        var diff=Math.abs(nd-1)*Math.min(rx,ry);
+        if(diff<=TOL)return i;
+      } else if(tp==='freehand'&&s.anchors.length>=2){
+        // 各セグメントとの距離の最小値
+        var minD=Infinity;
+        for(var j=1;j<s.anchors.length;j++){
+          var pa=s.anchors[j-1], pb=s.anchors[j];
+          var xa=minToXloc(pa.tm), ya=pToYloc(pa.p);
+          var xb=minToXloc(pb.tm), yb=pToYloc(pb.p);
+          var dd=distPtToSeg(cx,cy,xa,ya,xb,yb);
+          if(dd<minD)minD=dd;
+        }
+        if(minD<=TOL)return i;
+      } else if(tp==='text'){
+        var a=s.anchors[0];
+        var tx=minToXloc(a.tm), ty=pToYloc(a.p);
+        var fs=s.fontSize||18;
+        var lines=(s.text||'').split('\n');
+        // ざっくりバウンディング (文字幅=fs*0.6想定)
+        var mW=0; lines.forEach(function(l){if(l.length*fs*0.6>mW)mW=l.length*fs*0.6;});
+        var tH=lines.length*fs*1.3;
+        if(cx>=tx-4&&cx<=tx+mW+4&&cy>=ty-4&&cy<=ty+tH+4)return i;
       }
     }
     return null;
   }
 
-  // パン: ドラッグで時間軸横スライド (drawTool='pan' 時のみ)
+  /* 水平スナップ (horizトグルON時) */
+  function applyHorizSnap(sTM,sP,cTM,cP){
+    var L=layoutRef.current; if(!L)return {tm:cTM, p:cP};
+    var sx=L.padL+((sTM-L.vS)/(L.vE-L.vS))*L.chartW;
+    var sy=L.priceTop+(1-(sP-L.pmin)/(L.pmax-L.pmin))*L.priceH;
+    var cx=L.padL+((cTM-L.vS)/(L.vE-L.vS))*L.chartW;
+    var cy=L.priceTop+(1-(cP-L.pmin)/(L.pmax-L.pmin))*L.priceH;
+    var dx=Math.abs(cx-sx), dy=Math.abs(cy-sy);
+    if(dx>dy)return {tm:cTM, p:sP};   // 水平: 価格固定
+    else return {tm:sTM, p:cP};       // 垂直: 時刻固定
+  }
+
+  /* ───── ドラッグ式 描画ハンドラ ─────
+     画像画面と同じ: 押下→ドラッグ→離すで1本のストロークを確定 */
   function onMouseDown(e){
+    // Ctrl+ドラッグ = どのツールでもパン
+    if(e.ctrlKey||e.metaKey){
+      panStartRef.current={x:e.clientX,y:e.clientY,s:view.s,e:view.e,ps:pShift};
+      ctrlPanRef.current=true;
+      return;
+    }
     if(drawTool==='pan'){
       panStartRef.current={x:e.clientX,y:e.clientY,s:view.s,e:view.e,ps:pShift};
       return;
     }
-    // 描画モード
     var tp=pxToTimePrice(e.clientX,e.clientY);
-    if(!tp)return;
-    if(drawTool==='horizontal'){
-      // 単発クリックで水平線確定
-      if(tp.p==null)return;
-      var stroke={id:'s_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),
-        tool:'horizontal',anchors:[{tm:0,p:tp.p}],
-        color:drawColor,width:drawWidth,opacity:drawOpacity};
-      if(onStrokeAdd)onStrokeAdd(stroke);
-    } else if(drawTool==='line'){
-      // 2点クリック: 1回目=始点記録、2回目=終点で確定
-      if(tp.p==null)return;
-      if(!drawStartRef.current){
-        drawStartRef.current={tm:tp.tm,p:tp.p};
-      } else {
-        var stroke={id:'s_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),
-          tool:'line',anchors:[drawStartRef.current,{tm:tp.tm,p:tp.p}],
-          color:drawColor,width:drawWidth,opacity:drawOpacity};
-        drawStartRef.current=null;
-        if(onStrokeAdd)onStrokeAdd(stroke);
-      }
-    } else if(drawTool==='eraser'){
+    if(!tp||tp.p==null)return;
+    if(drawTool==='eraser'){
       var idx=hitTestStroke(e.clientX,e.clientY);
       if(idx!=null&&onStrokeDelete)onStrokeDelete(idx);
+      return;
+    }
+    if(drawTool==='lasso'){
+      // クリック位置にストロークがあれば選択、無ければ選択解除
+      var hi=hitTestStroke(e.clientX,e.clientY);
+      if(hi==null){
+        setSelectedIdx(null);
+        return;
+      }
+      setSelectedIdx(hi);
+      // 選択したストロークをドラッグで移動 → moveRef開始
+      moveRef.current={idx:hi, startTM:tp.tm, startP:tp.p, dtm:0, dp:0, moving:false};
+      return;
+    }
+    if(drawTool==='text'){
+      // テキスト入力プロンプト
+      var txt=prompt('テキストを入力:','');
+      if(txt!=null&&txt.trim()!==''){
+        var stroke={id:'s_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),
+          type:'text',anchors:[{tm:tp.tm,p:tp.p}],
+          color:drawColor,opacity:drawOpacity,
+          fontSize:drawFontSize,fontBold:drawFontBold,
+          text:txt};
+        if(onStrokeAdd)onStrokeAdd(stroke);
+      }
+      return;
+    }
+    if(drawTool==='freehand'){
+      drawRef.current={on:true, freehand:true, pts:[{tm:tp.tm,p:tp.p}]};
+      drawCrosshair();
+      return;
+    }
+    // 2点ツール: ドラッグ開始
+    if(drawTool==='line'||drawTool==='dotted'||drawTool==='arrow'||
+       drawTool==='rect'||drawTool==='circle'||drawTool==='marker'){
+      drawRef.current={on:true, sTM:tp.tm, sP:tp.p, cTM:tp.tm, cP:tp.p};
+      drawCrosshair();
     }
   }
   function onMouseMove(e){
-    // 描画中プレビュー (line ツールで始点設定後) は overlay に出す
-    onChartMouseMove(e); // 十字 + プレビュー
-    var p=panStartRef.current; if(!p)return;
-    if(drawTool!=='pan'){panStartRef.current=null;return;}
-    var rect=containerRef.current.getBoundingClientRect();
+    // 十字カーソル座標更新 (hoverでも描画中でも)
+    if(containerRef.current){
+      var rect=containerRef.current.getBoundingClientRect();
+      cursorRef.current={x:e.clientX-rect.left,y:e.clientY-rect.top};
+    }
+    // lasso 移動中
+    if(moveRef.current){
+      var tpm=pxToTimePrice(e.clientX,e.clientY);
+      if(tpm&&tpm.p!=null){
+        var mref=moveRef.current;
+        mref.dtm=tpm.tm-mref.startTM;
+        mref.dp=tpm.p-mref.startP;
+        // 微小移動は無視 (クリック選択時に意図せず動かないように)
+        var L0=layoutRef.current;
+        if(L0){
+          var dxPx=Math.abs(((tpm.tm-mref.startTM)/(L0.vE-L0.vS))*L0.chartW);
+          var dyPx=Math.abs(((tpm.p-mref.startP)/(L0.pmax-L0.pmin))*L0.priceH);
+          if(!mref.moving&&Math.hypot(dxPx,dyPx)>=3)mref.moving=true;
+        }
+      }
+      if(!rafRef.current){
+        rafRef.current=requestAnimationFrame(function(){drawCrosshair();rafRef.current=null;});
+      }
+      return;
+    }
+    // ドラッグ描画中
+    if(drawRef.current.on){
+      var tp=pxToTimePrice(e.clientX,e.clientY);
+      if(tp&&tp.p!=null){
+        if(drawRef.current.freehand){
+          // freehand: 距離閾値超えたら点追加
+          var pts=drawRef.current.pts;
+          var last=pts[pts.length-1];
+          var L1=layoutRef.current;
+          if(L1){
+            var dxp=Math.abs(((tp.tm-last.tm)/(L1.vE-L1.vS))*L1.chartW);
+            var dyp=Math.abs(((tp.p-last.p)/(L1.pmax-L1.pmin))*L1.priceH);
+            if(Math.hypot(dxp,dyp)>=1.5)pts.push({tm:tp.tm,p:tp.p});
+          }
+        } else {
+          // 2点ツール
+          var ep=tp.p;
+          var etm=tp.tm;
+          if(props.horiz){
+            var snapped=applyHorizSnap(drawRef.current.sTM,drawRef.current.sP,etm,ep);
+            etm=snapped.tm; ep=snapped.p;
+          }
+          drawRef.current.cTM=etm;
+          drawRef.current.cP=ep;
+        }
+      }
+      if(!rafRef.current){
+        rafRef.current=requestAnimationFrame(function(){
+          drawCrosshair();
+          rafRef.current=null;
+        });
+      }
+      return;
+    }
+    // パン (ctrl or pan tool)
+    var p=panStartRef.current;
+    if(!p){
+      // hover 時の十字カーソル更新
+      if(!rafRef.current){
+        rafRef.current=requestAnimationFrame(function(){
+          drawCrosshair();
+          rafRef.current=null;
+        });
+      }
+      return;
+    }
+    if(drawTool!=='pan'&&!ctrlPanRef.current){panStartRef.current=null;return;}
+    var rect2=containerRef.current.getBoundingClientRect();
     var padL=10, padR=60;
-    var chartW=rect.width-padL-padR;
+    var chartW=rect2.width-padL-padR;
     var span=p.e-p.s;
     var dxMin=-(e.clientX-p.x)/chartW*span;
     var newS=p.s+dxMin, newE=p.e+dxMin;
     if(newS<540){newS=540;newE=newS+span;}
     if(newE>930){newE=930;newS=newE-span;}
     setView({s:newS,e:newE});
-    // 縦ドラッグ: yen単位シフト (10円ピクセル幅は固定のまま)
     if(priceRange){
       var L=layoutRef.current;
-      var priceH=L?L.priceH:(rect.height-34-22-Math.max(50,Math.round((rect.height-56)*0.18))-6);
+      var priceH=L?L.priceH:(rect2.height-34-22-Math.max(50,Math.round((rect2.height-56)*0.18))-6);
       var yenPerPx=(priceRange.max-priceRange.min)/priceH;
       setPShift(p.ps + (e.clientY-p.y)*yenPerPx);
     }
   }
-  function onMouseUp(){panStartRef.current=null;}
-  // タッチ (iPad) 同等 — 描画モード時はpanしない
-  function onTouchStart(e){
-    if(drawTool!=='pan'){
-      // タッチで描画: 1本指タップのみ
-      if(e.touches.length!==1)return;
-      var t=e.touches[0];
-      // clientX/Yでマウス相当処理
-      onMouseDown({clientX:t.clientX,clientY:t.clientY});
+  function onMouseUp(){
+    // lasso 移動終了 → 確定
+    if(moveRef.current){
+      var m=moveRef.current;
+      if(m.moving&&onStrokeUpdate){
+        var s=strokes[m.idx];
+        if(s){
+          var newStroke=Object.assign({},s,{
+            anchors:s.anchors.map(function(a){return {tm:a.tm+m.dtm, p:a.p+m.dp};})
+          });
+          onStrokeUpdate(m.idx,newStroke);
+        }
+      }
+      moveRef.current=null;
+      drawCrosshair();
       return;
     }
+    // ドラッグ描画終了 → ストローク確定
+    if(drawRef.current.on){
+      var d=drawRef.current;
+      if(d.freehand){
+        // freehand: 2点以上あれば確定
+        if(d.pts&&d.pts.length>=2){
+          var stroke={id:'s_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),
+            type:'freehand',anchors:d.pts,
+            color:drawColor,width:drawWidth,opacity:drawOpacity};
+          if(onStrokeAdd)onStrokeAdd(stroke);
+        }
+      } else {
+        // 微小ドラッグは無視 (誤クリック防止)
+        var L=layoutRef.current;
+        var minDragOK=false;
+        if(L){
+          var sx=L.padL+((d.sTM-L.vS)/(L.vE-L.vS))*L.chartW;
+          var sy=L.priceTop+(1-(d.sP-L.pmin)/(L.pmax-L.pmin))*L.priceH;
+          var cx=L.padL+((d.cTM-L.vS)/(L.vE-L.vS))*L.chartW;
+          var cy=L.priceTop+(1-(d.cP-L.pmin)/(L.pmax-L.pmin))*L.priceH;
+          minDragOK=Math.hypot(cx-sx,cy-sy)>=3;
+        }
+        if(minDragOK){
+          var stroke={id:'s_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),
+            type:drawTool,
+            anchors:[{tm:d.sTM,p:d.sP},{tm:d.cTM,p:d.cP}],
+            color:drawColor,width:drawWidth,opacity:drawOpacity};
+          if(onStrokeAdd)onStrokeAdd(stroke);
+        }
+      }
+      drawRef.current={on:false};
+      drawCrosshair();
+    }
+    panStartRef.current=null;
+    ctrlPanRef.current=false;
+  }
+  // タッチ (iPad) - マウスと同等の処理に誘導
+  function onTouchStart(e){
     if(e.touches.length!==1)return;
     var t=e.touches[0];
-    panStartRef.current={x:t.clientX,y:t.clientY,s:view.s,e:view.e,ps:pShift};
+    onMouseDown({clientX:t.clientX,clientY:t.clientY,ctrlKey:false,metaKey:false});
   }
   function onTouchMove(e){
-    var p=panStartRef.current; if(!p||!e.touches.length)return;
-    if(drawTool!=='pan'){panStartRef.current=null;return;}
+    if(!e.touches.length)return;
     var t=e.touches[0];
-    var rect=containerRef.current.getBoundingClientRect();
-    var padL=10, padR=60;
-    var chartW=rect.width-padL-padR;
-    var span=p.e-p.s;
-    var dxMin=-(t.clientX-p.x)/chartW*span;
-    var newS=p.s+dxMin, newE=p.e+dxMin;
-    if(newS<540){newS=540;newE=newS+span;}
-    if(newE>930){newE=930;newS=newE-span;}
-    setView({s:newS,e:newE});
-    if(priceRange){
-      var L2=layoutRef.current;
-      var priceH2=L2?L2.priceH:(rect.height-34-22-Math.max(50,Math.round((rect.height-56)*0.18))-6);
-      var yenPerPx2=(priceRange.max-priceRange.min)/priceH2;
-      setPShift(p.ps + (t.clientY-p.y)*yenPerPx2);
-    }
+    onMouseMove({clientX:t.clientX,clientY:t.clientY});
   }
   // ダブルクリック: (機能削除、ユーザー要望)
+
+  /* ツール切替時 / データ切替時: 選択状態をリセット */
+  useEffect(function(){setSelectedIdx(null);},[drawTool,data,tf]);
+
+  /* Delete/Escapeキー: 選択削除・解除 */
+  useEffect(function(){
+    function onKey(e){
+      if(e.key==='Escape'){setSelectedIdx(null);return;}
+      if((e.key==='Delete'||e.key==='Backspace')&&selectedIdx!=null){
+        // input/textarea にフォーカス中は無視
+        var ae=document.activeElement;
+        if(ae&&(ae.tagName==='INPUT'||ae.tagName==='TEXTAREA'||ae.isContentEditable))return;
+        if(onStrokeDelete)onStrokeDelete(selectedIdx);
+        setSelectedIdx(null);
+      }
+    }
+    window.addEventListener('keydown',onKey);
+    return function(){window.removeEventListener('keydown',onKey);};
+  },[selectedIdx,onStrokeDelete]);
 
   if(!data||!bars.length){
     return ce("div",{ref:containerRef,style:{flex:1,display:"flex",alignItems:"center",justifyContent:"center",color:"#555"}},
@@ -1160,7 +1401,7 @@ function DataChart(props){
 }
 
 /* DataChart 描画関数 (Canvas 2D 直接描画、HSBI2色、ズーム対応、10円固定グリッド、時刻+価格ストローク) */
-function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes){
+function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx){
   var dpr=window.devicePixelRatio||1;
   var W=dim.w, H=dim.h;
   canvas.width=Math.round(W*dpr);
@@ -1294,40 +1535,16 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
 
   /* B-drawing: 時刻+価格座標ストローク描画 (ズーム・パンに追従) */
   if(strokes&&strokes.length){
-    strokes.forEach(function(s){
-      if(!s||!s.anchors||!s.anchors.length)return;
-      ctx.globalAlpha=(s.opacity!=null?s.opacity:1);
-      ctx.strokeStyle=s.color||'#ff3b30';
-      ctx.fillStyle=s.color||'#ff3b30';
-      ctx.lineWidth=s.width||2;
-      if(s.dash)ctx.setLineDash(s.dash); else ctx.setLineDash([]);
-      if(s.tool==='horizontal'){
-        // 水平線: 価格だけ使う (tm無視)、全幅に引く
-        var y=pToY(s.anchors[0].p);
-        if(y>=priceTop-2&&y<=priceBot+2){
-          ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(padL+chartW,y); ctx.stroke();
-          // 右端に価格ラベル
-          var lbl=s.anchors[0].p.toFixed(0);
-          ctx.font='bold 10px -apple-system,Helvetica,sans-serif';
-          ctx.textBaseline='middle'; ctx.textAlign='left';
-          var lw=ctx.measureText(lbl).width+8;
-          ctx.globalAlpha=1;
-          ctx.fillRect(padL+chartW+2,y-7,lw,14);
-          ctx.fillStyle='#000';
-          ctx.fillText(lbl,padL+chartW+6,y);
-          ctx.globalAlpha=(s.opacity!=null?s.opacity:1);
-        }
-      } else if(s.tool==='line'){
-        // 直線: 2点を結ぶ
-        if(s.anchors.length>=2){
-          var a1=s.anchors[0], a2=s.anchors[1];
-          var x1=minToX(a1.tm), y1=pToY(a1.p);
-          var x2=minToX(a2.tm), y2=pToY(a2.p);
-          ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
-        }
+    strokes.forEach(function(s,idx){
+      var tp=s.type||s.tool;
+      if(tp==='freehand'||tp==='text'){
+        drawAnalysisStrokeExt(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
+      } else {
+        drawAnalysisStroke(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
       }
-      ctx.setLineDash([]);
-      ctx.globalAlpha=1;
+      if(selectedIdx===idx){
+        drawSelectionHighlight(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
+      }
     });
   }
 
@@ -1370,6 +1587,160 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     ctx.fillStyle='#000';
     ctx.fillText(lbl,padL+chartW+6,lastY);
   }
+}
+
+/* B-drawing: 時刻+価格座標ストロークの描画 (画像画面と同等のツール群)
+   type: 'line'|'dotted'|'arrow'|'rect'|'circle'|'marker'|'horizontal'
+   anchors: [{tm, p}, {tm, p}]  (horizontal は 1点のみ、p のみ使用) */
+function drawAnalysisStroke(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH){
+  if(!s||!s.anchors||!s.anchors.length)return;
+  var col=s.color||'#ff3b30';
+  var w=s.width||2;
+  var op=s.opacity!=null?s.opacity:1;
+  ctx.globalAlpha=op;
+  ctx.strokeStyle=col;
+  ctx.fillStyle=col;
+  ctx.lineWidth=w;
+  ctx.setLineDash([]);
+
+  if(s.type==='horizontal'){
+    // 水平: 価格のみ使用、全幅
+    var y=pToY(s.anchors[0].p);
+    if(y>=priceTop-2&&y<=priceBot+2){
+      ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(padL+chartW,y); ctx.stroke();
+      // 右端に価格ラベル
+      var lbl=s.anchors[0].p.toFixed(0);
+      ctx.font='bold 10px -apple-system,Helvetica,sans-serif';
+      ctx.textBaseline='middle'; ctx.textAlign='left';
+      var lw=ctx.measureText(lbl).width+8;
+      ctx.globalAlpha=1;
+      ctx.fillRect(padL+chartW+2,y-7,lw,14);
+      ctx.fillStyle='#000';
+      ctx.fillText(lbl,padL+chartW+6,y);
+      ctx.fillStyle=col;
+      ctx.globalAlpha=op;
+    }
+    ctx.globalAlpha=1; return;
+  }
+
+  // 2点ツール: line/dotted/arrow/rect/circle/marker
+  if(s.anchors.length<2){ctx.globalAlpha=1;return;}
+  var a1=s.anchors[0], a2=s.anchors[1];
+  var x1=minToX(a1.tm), y1=pToY(a1.p);
+  var x2=minToX(a2.tm), y2=pToY(a2.p);
+
+  if(s.type==='line'){
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+  } else if(s.type==='dotted'){
+    ctx.setLineDash([Math.max(3,w*2), Math.max(3,w*2)]);
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+    ctx.setLineDash([]);
+  } else if(s.type==='arrow'){
+    // 線 + 矢尻
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+    var ang=Math.atan2(y2-y1,x2-x1);
+    var hs=Math.max(8,w*3); // 矢尻サイズ
+    ctx.beginPath();
+    ctx.moveTo(x2,y2);
+    ctx.lineTo(x2-hs*Math.cos(ang-Math.PI/6), y2-hs*Math.sin(ang-Math.PI/6));
+    ctx.lineTo(x2-hs*Math.cos(ang+Math.PI/6), y2-hs*Math.sin(ang+Math.PI/6));
+    ctx.closePath(); ctx.fill();
+  } else if(s.type==='rect'){
+    var rx=Math.min(x1,x2), ry=Math.min(y1,y2);
+    var rw2=Math.abs(x2-x1), rh2=Math.abs(y2-y1);
+    ctx.strokeRect(rx,ry,rw2,rh2);
+  } else if(s.type==='circle'){
+    var cx=(x1+x2)/2, cy=(y1+y2)/2;
+    var rx2=Math.abs(x2-x1)/2, ry2=Math.abs(y2-y1)/2;
+    ctx.beginPath();
+    ctx.ellipse(cx,cy,rx2,ry2,0,0,Math.PI*2);
+    ctx.stroke();
+  } else if(s.type==='marker'){
+    // 半透明の太線 (画像画面仕様)
+    var markerW=Math.max(14,w*5);
+    ctx.globalAlpha=op*0.4;
+    ctx.lineWidth=markerW;
+    ctx.lineCap='butt';
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+    ctx.lineCap='butt';
+  }
+  ctx.globalAlpha=1;
+}
+
+/* freehand / text / 選択ハイライト 用の拡張描画 */
+function drawAnalysisStrokeExt(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH){
+  if(!s||!s.anchors||!s.anchors.length)return;
+  var col=s.color||'#ff3b30';
+  var w=s.width||2;
+  var op=s.opacity!=null?s.opacity:1;
+  var tp=s.type||s.tool;
+  ctx.globalAlpha=op;
+  ctx.strokeStyle=col;
+  ctx.fillStyle=col;
+  ctx.lineWidth=w;
+  ctx.setLineDash([]);
+
+  if(tp==='freehand'){
+    if(s.anchors.length<2){ctx.globalAlpha=1;return;}
+    ctx.lineCap='round'; ctx.lineJoin='round';
+    ctx.beginPath();
+    var a0=s.anchors[0];
+    ctx.moveTo(minToX(a0.tm), pToY(a0.p));
+    for(var i=1;i<s.anchors.length;i++){
+      var a=s.anchors[i];
+      ctx.lineTo(minToX(a.tm), pToY(a.p));
+    }
+    ctx.stroke();
+    ctx.lineCap='butt'; ctx.lineJoin='miter';
+  } else if(tp==='text'){
+    var a=s.anchors[0];
+    var x=minToX(a.tm), y=pToY(a.p);
+    var fs=s.fontSize||18;
+    var fb=s.fontBold?'bold ':'';
+    ctx.font=fb+fs+'px -apple-system,Helvetica,sans-serif';
+    ctx.textBaseline='top'; ctx.textAlign='left';
+    // 背景半透明ボックス (視認性向上)
+    var lines=(s.text||'').split('\n');
+    var maxW=0;
+    lines.forEach(function(l){var m=ctx.measureText(l).width; if(m>maxW)maxW=m;});
+    var boxH=lines.length*fs*1.3;
+    ctx.globalAlpha=op*0.6; ctx.fillStyle='#000';
+    ctx.fillRect(x-3,y-2,maxW+6,boxH+4);
+    ctx.globalAlpha=op; ctx.fillStyle=col;
+    lines.forEach(function(l,i){ctx.fillText(l,x,y+i*fs*1.3);});
+  }
+  ctx.globalAlpha=1;
+}
+
+/* 選択ハイライト (縁取り) */
+function drawSelectionHighlight(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH){
+  if(!s||!s.anchors||!s.anchors.length)return;
+  var tp=s.type||s.tool;
+  ctx.save();
+  ctx.strokeStyle='#4a9de3';
+  ctx.lineWidth=2;
+  ctx.setLineDash([4,3]);
+  if(tp==='horizontal'){
+    var y=pToY(s.anchors[0].p);
+    ctx.strokeRect(padL-2,y-4,chartW+4,8);
+  } else if(s.anchors.length>=2){
+    // bounding box
+    var minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+    s.anchors.forEach(function(a){
+      var x=minToX(a.tm), y=pToY(a.p);
+      if(x<minX)minX=x; if(x>maxX)maxX=x;
+      if(y<minY)minY=y; if(y>maxY)maxY=y;
+    });
+    var pad=(tp==='marker'?(s.width||2)*3:4);
+    ctx.strokeRect(minX-pad,minY-pad,(maxX-minX)+pad*2,(maxY-minY)+pad*2);
+  } else if(tp==='text'){
+    var a=s.anchors[0];
+    var x=minToX(a.tm), y=pToY(a.p);
+    var fs=s.fontSize||18;
+    ctx.strokeRect(x-4,y-4,(s.text||'').length*fs*0.6+8,fs*1.3+8);
+  }
+  ctx.setLineDash([]);
+  ctx.restore();
 }
 
 function ImageAnnotator(props){
@@ -2995,12 +3366,19 @@ function ImageAnnotator(props){
               :'')
           ),
           ce("div",{style:{flex:1}}),
-          /* B-drawing: 描画ツール選択 */
-          ce("div",{style:{display:"flex",gap:2,marginRight:6}},
+          /* B-drawing: 描画ツール選択 (画像画面と同等) */
+          ce("div",{style:{display:"flex",gap:2,marginRight:6,flexWrap:"wrap"}},
             [
-              {k:'pan',lbl:'🖐'},
-              {k:'horizontal',lbl:'━ 水平'},
-              {k:'line',lbl:'╱ 直線'},
+              {k:'pan',lbl:'✋'},
+              {k:'line',lbl:'直線'},
+              {k:'dotted',lbl:'点線'},
+              {k:'arrow',lbl:'矢印'},
+              {k:'rect',lbl:'四角'},
+              {k:'circle',lbl:'丸'},
+              {k:'marker',lbl:'マーカー'},
+              {k:'freehand',lbl:'フリー'},
+              {k:'text',lbl:'Ｔ'},
+              {k:'lasso',lbl:'選択'},
               {k:'eraser',lbl:'🧹'}
             ].map(function(t){
               return ce("button",{key:t.k,onClick:function(){setTool(t.k);},
@@ -3011,6 +3389,14 @@ function ImageAnnotator(props){
                 t.lbl);
             })
           ),
+          /* 水平スナップ トグル (画像画面と同じ) */
+          ce("button",{
+            onClick:function(){setHoriz(!horiz);},
+            title:"水平スナップ (直線・点線・矢印・四角・丸でドラッグを水平/垂直に制約)",
+            style:{padding:"5px 8px",fontSize:11,fontWeight:700,border:"none",borderRadius:5,
+              background:horiz?'#10b981':'#2a2a2a',
+              color:horiz?'#fff':'#888',cursor:"pointer",fontFamily:"inherit",marginRight:6}
+          },"⇺水平"),
           /* 色選択 (簡易クイックパレット) */
           ce("div",{style:{display:"flex",gap:2,marginRight:6}},
             ['#ff3b30','#ffcc00','#34c759','#4a9de3','#ffffff'].map(function(c){
@@ -3018,6 +3404,22 @@ function ImageAnnotator(props){
                 style:{width:20,height:20,padding:0,border:color===c?'2px solid #fff':'1px solid #333',
                   borderRadius:10,background:c,cursor:'pointer'}});
             })
+          ),
+          /* 線幅スライダ */
+          ce("div",{style:{display:"flex",alignItems:"center",gap:4,marginRight:6,fontSize:10,color:'#888'}},
+            ce("span",null,"幅"),
+            ce("input",{type:"range",min:1,max:10,step:1,value:lineW,
+              onChange:function(e){setLineW(parseInt(e.target.value,10));},
+              style:{width:60}}),
+            ce("span",{style:{minWidth:14,textAlign:"right",color:'#ccc'}},lineW)
+          ),
+          /* 不透明度スライダ (marker主用途) */
+          ce("div",{style:{display:"flex",alignItems:"center",gap:4,marginRight:6,fontSize:10,color:'#888'}},
+            ce("span",null,"濃"),
+            ce("input",{type:"range",min:0.1,max:1,step:0.1,value:opacity,
+              onChange:function(e){setOpacity(parseFloat(e.target.value));},
+              style:{width:50}}),
+            ce("span",{style:{minWidth:22,textAlign:"right",color:'#ccc'}},opacity.toFixed(1))
           ),
           /* 十字カーソル ON/OFF (常時ボタン表示、PCで機能) */
           ce("button",{
@@ -3048,11 +3450,18 @@ function ImageAnnotator(props){
         ce(DataChart,{
           data:analysisData, tf:analysisTf, showCrosshair:showCrosshair,
           drawTool:tool, drawColor:color, drawWidth:lineW, drawOpacity:opacity,
+          drawFontSize:fontSize, drawFontBold:fontBold,
+          horiz:horiz,
           strokes:analysisStrokes,
           onStrokeAdd:function(s){setAnalysisStrokes(analysisStrokesRef.current.concat([s]));},
           onStrokeDelete:function(idx){
             var next=analysisStrokesRef.current.slice();
             next.splice(idx,1);
+            setAnalysisStrokes(next);
+          },
+          onStrokeUpdate:function(idx,newStroke){
+            var next=analysisStrokesRef.current.slice();
+            next[idx]=newStroke;
             setAnalysisStrokes(next);
           }
         })
