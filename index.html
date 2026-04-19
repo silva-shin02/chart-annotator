@@ -827,7 +827,8 @@ function RefAnalysisPicker(props){
         onSelect({
           id:id, ticker:chartMeta.ticker, name:chartMeta.name,
           analysisData:d.analysisData,
-          analysisStrokes:d.analysisStrokes||null,
+          /* C6: ref側strokeに side='ref' を付与 */
+          analysisStrokes:migrateAnalysisStrokes(d.analysisStrokes,'ref'),
           savedAt:chartMeta.savedAt||0
         });
         return;
@@ -844,7 +845,8 @@ function RefAnalysisPicker(props){
               onSelect({
                 id:id, ticker:chartMeta.ticker, name:chartMeta.name,
                 analysisData:fbData.analysisData,
-                analysisStrokes:fbData.analysisStrokes||null,
+                /* C6: ref側strokeに side='ref' を付与 */
+                analysisStrokes:migrateAnalysisStrokes(fbData.analysisStrokes,'ref'),
                 savedAt:chartMeta.savedAt||0
               });
             }else{
@@ -1119,12 +1121,13 @@ function DataChart(props){
         drawAnalysisStroke(ctx,preview2,minToXloc,pToYloc,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
       }
     }
-    /* lasso 移動中プレビュー (移動後位置を点線で表示) */
+    /* lasso 移動中プレビュー (移動後位置を点線で表示) — C6: side対応 */
     if(L&&moveRef.current&&moveRef.current.moving){
       var m=moveRef.current;
-      var s=strokes[m.idx];
+      var mSrcArr=(m.side==='ref')?(refStrokes||[]):(strokes||[]);
+      var s=mSrcArr[m.idx];
       if(s){
-        var mSide=s.side||'cur';
+        var mSide=m.side||s.side||'cur';
         function minToXloc2(mm){return minToXWithSide(mm,mSide);}
         function pToYloc2(pp){return L.priceTop+(1-(pp-L.pmin)/(L.pmax-L.pmin))*L.priceH;}
         var shifted=Object.assign({},s,{
@@ -1293,18 +1296,23 @@ function DataChart(props){
   }
 
   /* ヒットテスト: クリック位置に近いストロークを返す (全ツール対応)
-     C5+: hasRef時は クリックした side と同じ side の strokes のみ対象 (C6で ref strokes hit) */
+     C6: {side, idx} を返す。hasRef時は クリック側の strokes (cur or ref) のみ対象。
+         gap領域は null。hit無しも null。 */
   function hitTestStroke(clientX,clientY){
-    var L=layoutRef.current; if(!L||!strokes||!strokes.length)return null;
+    var L=layoutRef.current; if(!L)return null;
     var rect=containerRef.current.getBoundingClientRect();
     var cx=clientX-rect.left, cy=clientY-rect.top;
-    /* C5+: クリック側判定。cur側 でなければ cur strokes のhit対象外 */
+    /* C6: クリック側を判定、gap/null は対象外 */
+    var clickSide='cur';
     if(L.hasRef){
       var xst=xToSideTm(cx);
-      if(xst.side!=='cur')return null;
+      if(xst.side==='gap'||xst.side==null)return null;
+      clickSide=xst.side;
     }
+    var targetArr=(clickSide==='ref')?(refStrokes||[]):(strokes||[]);
+    if(!targetArr.length)return null;
     var TOL=8;
-    function minToXloc(m){return minToXWithSide(m,'cur');}
+    function minToXloc(m){return minToXWithSide(m,clickSide);}
     function pToYloc(p){return L.priceTop+(1-(p-L.pmin)/(L.pmax-L.pmin))*L.priceH;}
     function distPtToSeg(px,py,x1,y1,x2,y2){
       var dx=x2-x1, dy=y2-y1, lenSq=dx*dx+dy*dy;
@@ -1312,18 +1320,18 @@ function DataChart(props){
       var t=Math.max(0,Math.min(1,((px-x1)*dx+(py-y1)*dy)/lenSq));
       return Math.hypot(px-(x1+t*dx),py-(y1+t*dy));
     }
-    for(var i=strokes.length-1;i>=0;i--){
-      var s=strokes[i]; if(!s||!s.anchors||!s.anchors.length)continue;
+    for(var i=targetArr.length-1;i>=0;i--){
+      var s=targetArr[i]; if(!s||!s.anchors||!s.anchors.length)continue;
       var tp=s.type||s.tool;  // 後方互換
       if(tp==='horizontal'){
         var y=pToYloc(s.anchors[0].p);
-        if(Math.abs(cy-y)<=TOL)return i;
+        if(Math.abs(cy-y)<=TOL)return {side:clickSide,idx:i};
       } else if((tp==='line'||tp==='dotted'||tp==='arrow'||tp==='marker')&&s.anchors.length>=2){
         var a1=s.anchors[0], a2=s.anchors[1];
         var x1=minToXloc(a1.tm), y1=pToYloc(a1.p);
         var x2=minToXloc(a2.tm), y2=pToYloc(a2.p);
         var tol=tp==='marker'?(s.width||2)*5+4:TOL;
-        if(distPtToSeg(cx,cy,x1,y1,x2,y2)<=tol)return i;
+        if(distPtToSeg(cx,cy,x1,y1,x2,y2)<=tol)return {side:clickSide,idx:i};
       } else if(tp==='rect'&&s.anchors.length>=2){
         var a1=s.anchors[0], a2=s.anchors[1];
         var x1=minToXloc(a1.tm), y1=pToYloc(a1.p);
@@ -1337,7 +1345,7 @@ function DataChart(props){
           distPtToSeg(cx,cy,rx+rw,ry+rh,rx,ry+rh),
           distPtToSeg(cx,cy,rx,ry+rh,rx,ry)
         );
-        if(d<=TOL)return i;
+        if(d<=TOL)return {side:clickSide,idx:i};
       } else if(tp==='circle'&&s.anchors.length>=2){
         var a1=s.anchors[0], a2=s.anchors[1];
         var x1=minToXloc(a1.tm), y1=pToYloc(a1.p);
@@ -1350,7 +1358,7 @@ function DataChart(props){
         var nd=Math.hypot(ndx,ndy);
         // 半径1の円との距離 → 絶対距離に戻す (ざっくり)
         var diff=Math.abs(nd-1)*Math.min(rx,ry);
-        if(diff<=TOL)return i;
+        if(diff<=TOL)return {side:clickSide,idx:i};
       } else if(tp==='freehand'&&s.anchors.length>=2){
         // 各セグメントとの距離の最小値
         var minD=Infinity;
@@ -1361,7 +1369,7 @@ function DataChart(props){
           var dd=distPtToSeg(cx,cy,xa,ya,xb,yb);
           if(dd<minD)minD=dd;
         }
-        if(minD<=TOL)return i;
+        if(minD<=TOL)return {side:clickSide,idx:i};
       } else if(tp==='text'){
         var a=s.anchors[0];
         var tx=minToXloc(a.tm), ty=pToYloc(a.p);
@@ -1370,7 +1378,7 @@ function DataChart(props){
         // ざっくりバウンディング (文字幅=fs*0.6想定)
         var mW=0; lines.forEach(function(l){if(l.length*fs*0.6>mW)mW=l.length*fs*0.6;});
         var tH=lines.length*fs*1.3;
-        if(cx>=tx-4&&cx<=tx+mW+4&&cy>=ty-4&&cy<=ty+tH+4)return i;
+        if(cx>=tx-4&&cx<=tx+mW+4&&cy>=ty-4&&cy<=ty+tH+4)return {side:clickSide,idx:i};
       }
     }
     return null;
@@ -1406,12 +1414,14 @@ function DataChart(props){
     }
     var tp=pxToTimePrice(e.clientX,e.clientY);
     if(!tp||tp.p==null)return;
+    /* C6: gap領域での書込は block (eraser/lasso/text は hit側に任せるので通す) */
+    var tpSide=tp.side||'cur';
     if(drawTool==='eraser'){
       // 即時削除: hit を見つけたら silent で消し、ドラッグ中ずっと続ける
       drawRef.current={on:true, eraser:true, didDelete:false};
-      var eIdx=hitTestStroke(e.clientX,e.clientY);
-      if(eIdx!=null&&onStrokeDelete){
-        onStrokeDelete(eIdx, true); // silent=true: 履歴コミットしない
+      var eHit=hitTestStroke(e.clientX,e.clientY);
+      if(eHit!=null&&onStrokeDelete){
+        onStrokeDelete(eHit.side, eHit.idx, true); // silent=true: 履歴コミットしない
         drawRef.current.didDelete=true;
       }
       return;
@@ -1424,8 +1434,8 @@ function DataChart(props){
         return;
       }
       setSelectedIdx(hi);
-      // 選択したストロークをドラッグで移動 → moveRef開始
-      moveRef.current={idx:hi, startTM:tp.tm, startP:tp.p, dtm:0, dp:0, moving:false};
+      // 選択したストロークをドラッグで移動 → moveRef開始 (C6: side 保持)
+      moveRef.current={side:hi.side, idx:hi.idx, startTM:tp.tm, startP:tp.p, dtm:0, dp:0, moving:false};
       return;
     }
     if(drawTool==='text'){
@@ -1433,26 +1443,37 @@ function DataChart(props){
       if(props.onRequestTextInput){
         var hitT=hitTestStroke(e.clientX,e.clientY);
         var editIdxT=-1;
-        if(hitT!=null&&strokes[hitT]&&(strokes[hitT].type||strokes[hitT].tool)==='text'){
-          editIdxT=hitT;
+        var editSideT='cur';
+        if(hitT!=null){
+          var hitArr=(hitT.side==='ref')?(refStrokes||[]):(strokes||[]);
+          var hitStk=hitArr[hitT.idx];
+          if(hitStk&&(hitStk.type||hitStk.tool)==='text'){
+            editIdxT=hitT.idx;
+            editSideT=hitT.side;
+          }
         }
+        /* C6: gapでの新規text作成はblock */
+        if(editIdxT<0&&tpSide==='gap')return;
         props.onRequestTextInput({
           tm:tp.tm, p:tp.p,
           screenX:e.clientX, screenY:e.clientY,
-          editIdx:editIdxT
+          editIdx:editIdxT,
+          side: editIdxT>=0?editSideT:tpSide
         });
       }
       return;
     }
+    /* C6: 描画系 (freehand / 2点ツール) はgap開始をblock */
+    if(tpSide==='gap')return;
     if(drawTool==='freehand'){
-      drawRef.current={on:true, freehand:true, pts:[{tm:tp.tm,p:tp.p}]};
+      drawRef.current={on:true, freehand:true, side:tpSide, pts:[{tm:tp.tm,p:tp.p}]};
       drawCrosshair();
       return;
     }
-    // 2点ツール: ドラッグ開始
+    // 2点ツール: ドラッグ開始 (C6: side 記録)
     if(drawTool==='line'||drawTool==='dotted'||drawTool==='arrow'||
        drawTool==='rect'||drawTool==='circle'||drawTool==='marker'){
-      drawRef.current={on:true, sTM:tp.tm, sP:tp.p, cTM:tp.tm, cP:tp.p};
+      drawRef.current={on:true, side:tpSide, sTM:tp.tm, sP:tp.p, cTM:tp.tm, cP:tp.p};
       drawCrosshair();
     }
   }
@@ -1471,10 +1492,13 @@ function DataChart(props){
         var mref=moveRef.current;
         mref.dtm=tpm.tm-mref.startTM;
         mref.dp=tpm.p-mref.startP;
-        // 微小移動は無視 (クリック選択時に意図せず動かないように)
+        // 微小移動は無視 (クリック選択時に意図せず動かないように) — C6: u軸対応
         var L0=layoutRef.current;
         if(L0){
-          var dxPx=Math.abs(((tpm.tm-mref.startTM)/(L0.vE-L0.vS))*L0.chartW);
+          var mSide=mref.side||'cur';
+          var mx0=minToXWithSide(mref.startTM,mSide);
+          var mx1=minToXWithSide(tpm.tm,mSide);
+          var dxPx=Math.abs(mx1-mx0);
           var dyPx=Math.abs(((tpm.p-mref.startP)/(L0.pmax-L0.pmin))*L0.priceH);
           if(!mref.moving&&Math.hypot(dxPx,dyPx)>=3)mref.moving=true;
         }
@@ -1484,11 +1508,11 @@ function DataChart(props){
       }
       return;
     }
-    // eraser ドラッグ中: hitしたら即削除 (silent)
+    // eraser ドラッグ中: hitしたら即削除 (silent) — C6: side対応
     if(drawRef.current.on&&drawRef.current.eraser){
-      var ehi=hitTestStroke(e.clientX,e.clientY);
-      if(ehi!=null&&onStrokeDelete){
-        onStrokeDelete(ehi, true);
+      var eHit2=hitTestStroke(e.clientX,e.clientY);
+      if(eHit2!=null&&onStrokeDelete){
+        onStrokeDelete(eHit2.side, eHit2.idx, true);
         drawRef.current.didDelete=true;
       }
       return;
@@ -1496,14 +1520,18 @@ function DataChart(props){
     // ドラッグ描画中
     if(drawRef.current.on){
       var tp=pxToTimePrice(e.clientX,e.clientY);
-      if(tp&&tp.p!=null){
+      /* C6: gap位置の点は追加しない (描画side側のtmしか意味がないため) */
+      if(tp&&tp.p!=null&&tp.side!=='gap'){
         if(drawRef.current.freehand){
-          // freehand: 距離閾値超えたら点追加
+          // freehand: 距離閾値超えたら点追加 — C6: u軸対応
           var pts=drawRef.current.pts;
           var last=pts[pts.length-1];
           var L1=layoutRef.current;
           if(L1){
-            var dxp=Math.abs(((tp.tm-last.tm)/(L1.vE-L1.vS))*L1.chartW);
+            var fSide=drawRef.current.side||'cur';
+            var fx0=minToXWithSide(last.tm,fSide);
+            var fx1=minToXWithSide(tp.tm,fSide);
+            var dxp=Math.abs(fx1-fx0);
             var dyp=Math.abs(((tp.p-last.p)/(L1.pmax-L1.pmin))*L1.priceH);
             if(Math.hypot(dxp,dyp)>=1.5)pts.push({tm:tp.tm,p:tp.p});
           }
@@ -1570,30 +1598,32 @@ function DataChart(props){
       drawCrosshair();
       return;
     }
-    // lasso 移動終了 → 確定
+    // lasso 移動終了 → 確定 (C6: side対応)
     if(moveRef.current){
       var m=moveRef.current;
       if(m.moving&&onStrokeUpdate){
-        var s=strokes[m.idx];
+        var srcArr=(m.side==='ref')?(refStrokes||[]):(strokes||[]);
+        var s=srcArr[m.idx];
         if(s){
           var newStroke=Object.assign({},s,{
             anchors:s.anchors.map(function(a){return {tm:a.tm+m.dtm, p:a.p+m.dp};})
           });
-          onStrokeUpdate(m.idx,newStroke);
+          onStrokeUpdate(m.side,m.idx,newStroke);
         }
       }
       moveRef.current=null;
       drawCrosshair();
       return;
     }
-    // ドラッグ描画終了 → ストローク確定
+    // ドラッグ描画終了 → ストローク確定 (C6: side埋め込み)
     if(drawRef.current.on){
       var d=drawRef.current;
+      var commitSide=d.side||'cur';
       if(d.freehand){
         // freehand: 2点以上あれば確定
         if(d.pts&&d.pts.length>=2){
           var stroke={id:'s_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),
-            type:'freehand',anchors:d.pts,
+            type:'freehand',side:commitSide,anchors:d.pts,
             color:drawColor,width:drawWidth,opacity:drawOpacity};
           if(onStrokeAdd)onStrokeAdd(stroke);
         }
@@ -1602,17 +1632,15 @@ function DataChart(props){
         var L=layoutRef.current;
         var minDragOK=false;
         if(L){
-          /* drawRef.sideを基準に (C6で設定、未設定なら 'cur') */
-          var dSide=d.side||'cur';
-          var sx=minToXWithSide(d.sTM,dSide);
+          var sx=minToXWithSide(d.sTM,commitSide);
           var sy=L.priceTop+(1-(d.sP-L.pmin)/(L.pmax-L.pmin))*L.priceH;
-          var cx=minToXWithSide(d.cTM,dSide);
+          var cx=minToXWithSide(d.cTM,commitSide);
           var cy=L.priceTop+(1-(d.cP-L.pmin)/(L.pmax-L.pmin))*L.priceH;
           minDragOK=Math.hypot(cx-sx,cy-sy)>=3;
         }
         if(minDragOK){
           var stroke={id:'s_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),
-            type:drawTool,
+            type:drawTool,side:commitSide,
             anchors:[{tm:d.sTM,p:d.sP},{tm:d.cTM,p:d.cP}],
             color:drawColor,width:drawWidth,opacity:drawOpacity};
           if(onStrokeAdd)onStrokeAdd(stroke);
@@ -1720,7 +1748,7 @@ function DataChart(props){
   /* ツール切替時 / データ切替時: 選択状態をリセット */
   useEffect(function(){setSelectedIdx(null);},[drawTool,data,tf]);
 
-  /* Delete/Escapeキー: 選択削除・解除 */
+  /* Delete/Escapeキー: 選択削除・解除 (C6: side対応) */
   useEffect(function(){
     function onKey(e){
       if(e.key==='Escape'){setSelectedIdx(null);return;}
@@ -1728,7 +1756,7 @@ function DataChart(props){
         // input/textarea にフォーカス中は無視
         var ae=document.activeElement;
         if(ae&&(ae.tagName==='INPUT'||ae.tagName==='TEXTAREA'||ae.isContentEditable))return;
-        if(onStrokeDelete)onStrokeDelete(selectedIdx);
+        if(onStrokeDelete)onStrokeDelete(selectedIdx.side,selectedIdx.idx);
         setSelectedIdx(null);
       }
     }
@@ -1977,27 +2005,33 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   function minToXRef(m){return minToX(m,'ref');}
   if(strokes&&strokes.length){
     strokes.forEach(function(s,idx){
-      // 編集中のテキストは重複描画を避けるためスキップ (portal 側でプレビュー)
-      if(editingTextIdx!=null&&editingTextIdx>=0&&idx===editingTextIdx)return;
+      // 編集中のテキストは重複描画を避けるためスキップ (C6: side一致も見る)
+      if(editingTextIdx&&editingTextIdx.side==='cur'&&editingTextIdx.idx===idx)return;
       var tp=s.type||s.tool;
       if(tp==='freehand'||tp==='text'){
         drawAnalysisStrokeExt(ctx,s,minToXCur,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
       } else {
         drawAnalysisStroke(ctx,s,minToXCur,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
       }
-      if(selectedIdx===idx){
+      /* C6: selectedIdx を {side,idx} 比較 */
+      if(selectedIdx&&selectedIdx.side==='cur'&&selectedIdx.idx===idx){
         drawSelectionHighlight(ctx,s,minToXCur,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
       }
     });
   }
-  // C3+: ref側stroke描画 (hasRef時のみ、selectionはC6で対応)
+  // C6: ref側stroke描画 + selection対応
   if(hasRef&&refStrokes&&refStrokes.length){
-    refStrokes.forEach(function(s){
+    refStrokes.forEach(function(s,idx){
+      // 編集中のテキストはスキップ
+      if(editingTextIdx&&editingTextIdx.side==='ref'&&editingTextIdx.idx===idx)return;
       var tp=s.type||s.tool;
       if(tp==='freehand'||tp==='text'){
         drawAnalysisStrokeExt(ctx,s,minToXRef,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
       } else {
         drawAnalysisStroke(ctx,s,minToXRef,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
+      }
+      if(selectedIdx&&selectedIdx.side==='ref'&&selectedIdx.idx===idx){
+        drawSelectionHighlight(ctx,s,minToXRef,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
       }
     });
   }
@@ -2181,11 +2215,19 @@ function drawSelectionHighlight(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,pri
 
 /* ─── 分析モードストローク管理ヘルパー ───
    旧形式（配列）↔新形式（{'1m':[],'5m':[]}）互換 */
-function migrateAnalysisStrokes(v){
-  if(Array.isArray(v))return {'1m':v.slice(),'5m':[]};
+/* C6: 第2引数 defaultSide で未設定strokeに side('cur'|'ref') を付与 */
+function migrateAnalysisStrokes(v, defaultSide){
+  var ds=(defaultSide==='ref')?'ref':'cur';
+  function addSide(arr){
+    return (arr||[]).map(function(s){
+      if(!s)return s;
+      if(s.side==='cur'||s.side==='ref')return s;
+      return Object.assign({},s,{side:ds});
+    });
+  }
+  if(Array.isArray(v))return {'1m':addSide(v),'5m':[]};
   if(v&&typeof v==='object'){
-    return {'1m':Array.isArray(v['1m'])?v['1m'].slice():[],
-            '5m':Array.isArray(v['5m'])?v['5m'].slice():[]};
+    return {'1m':addSide(v['1m']),'5m':addSide(v['5m'])};
   }
   return {'1m':[],'5m':[]};
 }
@@ -2215,9 +2257,56 @@ function ImageAnnotator(props){
   /* C5+: VJなどイベントハンドラ内で最新refAnalysisを参照するためのref */
   var refAnalysisRef=useRef(refAnalysis);
   useEffect(function(){refAnalysisRef.current=refAnalysis;},[refAnalysis]);
+  /* C6: ref側ストローク書込用のauto-saveタイマー (帯域抑制のため1.5s debounce) */
+  var refAutoSaveTimerRef=useRef(null);
+  /* C6: ref側analysisStrokesをFirebaseにPATCH (帯域抑制: analysisStrokesのみ送信)
+     同時にローカル IDB/memキャッシュにも反映 (再ロード時の stale 回避) */
+  function triggerRefAutoSave(){
+    var cfg=props.fbCfg;
+    if(refAutoSaveTimerRef.current)clearTimeout(refAutoSaveTimerRef.current);
+    refAutoSaveTimerRef.current=setTimeout(function(){
+      var ref=refAnalysisRef.current;
+      if(!ref||!ref.id)return;
+      var newStrokes=ref.analysisStrokes||{'1m':[],'5m':[]};
+      /* ローカルキャッシュ (IDB+mem) を最新化: 既存dataを読み取って analysisStrokes だけ差し替え */
+      try{
+        caLoadDataAsync(ref.id,function(d){
+          if(d){
+            var merged=Object.assign({},d,{analysisStrokes:newStrokes});
+            caSaveData(ref.id,merged);
+          }
+        });
+      }catch(e){console.warn('ref local cache update:',e);}
+      /* Firebase PATCH: paused中はFB書込のみスキップ (ローカルは更新済) */
+      var cfg2=props.fbCfg;
+      if(_fbIsPaused(cfg2))return;
+      var auth=cfg2.secret?'?auth='+cfg2.secret:'';
+      var dataBase=cfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
+      var patchBody=JSON.stringify({analysisStrokes:newStrokes});
+      /* PATCH で analysisStrokes だけ差し替え (画像URL等は温存) */
+      fetch(dataBase+'/'+ref.id+'.json'+auth,{method:'PATCH',
+        headers:{'Content-Type':'application/json'},body:patchBody})
+        .catch(function(e){console.error('ref draft strokes sync:',e);});
+      /* _v bump + ts 更新 (他端末同期用) */
+      var savedAt=Date.now();
+      var tsBase=cfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts-ts';
+      fetch(tsBase+'/'+ref.id+'.json'+auth,{method:'PUT',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({t:savedAt})}).catch(function(){});
+      fetch(cfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts-v.json'+auth,{method:'PUT',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({_v:savedAt})}).catch(function(){});
+    },1500);
+  }
+  /* C6: refAnalysis.analysisStrokes を更新するhelper (tf別書換) */
+  function updateRefAnalysisStrokes(newStrokesObj){
+    setRefAnalysis(function(prev){
+      if(!prev)return prev;
+      return Object.assign({},prev,{analysisStrokes:newStrokesObj});
+    });
+    triggerRefAutoSave();
+  }
   /* B-drawing: 分析画面の描画ストローク (時刻+価格座標、tf別管理)
      形状: {'1m':[...],'5m':[...]} 旧配列は {'1m':array,'5m':[]} に自動マイグレート */
-  var sAS=useState(function(){return migrateAnalysisStrokes(img&&img.analysisStrokes);});
+  var sAS=useState(function(){return migrateAnalysisStrokes(img&&img.analysisStrokes,'cur');});
   var analysisStrokes=sAS[0],setAnalysisStrokes=sAS[1];
   var analysisStrokesRef=useRef(analysisStrokes);
   useEffect(function(){analysisStrokesRef.current=analysisStrokes;},[analysisStrokes]);
@@ -2356,8 +2445,9 @@ function ImageAnnotator(props){
   var toolMemRef=useRef({}); // ツール別の色・線幅・透明度を記憶
   var prevHorizRef=useRef(false); // dotted切替前の水平スナップ状態
   /* 分析モード用 ref */
-  var analysisHistRef=useRef({'1m':[[]],'5m':[[]]});  // tf別 undo 履歴 (各tfの stroke配列のスタック)
-  var analysisFutRef=useRef({'1m':[],'5m':[]});       // tf別 redo 未来
+  /* C6: tf別 undo/redo 履歴。各entryは {cur:[...],ref:[...]} のスナップショット (cur/ref 共通スタック) */
+  var analysisHistRef=useRef({'1m':[{cur:[],ref:[]}],'5m':[{cur:[],ref:[]}]});
+  var analysisFutRef=useRef({'1m':[],'5m':[]});
   var analysisTfRef=useRef('1m');                     // 現在の tf (stale closure回避)
   var analysisTextInputRef=useRef(null);              // stale closure 回避
   var analysisFloatDragRef=useRef(null);              // 分析モード floating undo/redo のドラッグ
@@ -2366,16 +2456,28 @@ function ImageAnnotator(props){
   useEffect(function(){zoomRef.current=zoom;},[zoom]);
   useEffect(function(){analysisTextInputRef.current=analysisTextInput;},[analysisTextInput]);
   useEffect(function(){analysisTfRef.current=analysisTf;},[analysisTf]);
-  /* マウント時: 分析モード履歴を現在の analysisStrokes で tf別に初期化
-     (img から復元された初期strokesを「操作前の状態」として保持) */
+  /* マウント時: 分析モード履歴を tf別に初期化 (C6: {cur,ref} 統合スナップショット)
+     (img から復元された cur 初期strokes、ref strokes は refAnalysis open時に後追い init) */
   useEffect(function(){
     var init=cloneAnalysisStrokes(analysisStrokesRef.current);
     analysisHistRef.current={
-      '1m':[(init['1m']||[]).slice()],
-      '5m':[(init['5m']||[]).slice()]
+      '1m':[{cur:(init['1m']||[]).slice(),ref:[]}],
+      '5m':[{cur:(init['5m']||[]).slice(),ref:[]}]
     };
     analysisFutRef.current={'1m':[],'5m':[]};
   },[]);
+  /* C6: refAnalysis open/close時に履歴の refスナップショットを現在refで init
+     (refAnalysis切替で過去ref undoが混ざらないよう履歴自体をreset) */
+  useEffect(function(){
+    var cur=cloneAnalysisStrokes(analysisStrokesRef.current);
+    var ref=refAnalysis?cloneAnalysisStrokes(refAnalysis.analysisStrokes):{'1m':[],'5m':[]};
+    analysisHistRef.current={
+      '1m':[{cur:(cur['1m']||[]).slice(),ref:(ref['1m']||[]).slice()}],
+      '5m':[{cur:(cur['5m']||[]).slice(),ref:(ref['5m']||[]).slice()}]
+    };
+    analysisFutRef.current={'1m':[],'5m':[]};
+    if(modeTab==='analysis'){setCanUndo(false);setCanRedo(false);}
+  },[refAnalysis?refAnalysis.id:null]);
 
   // textInputRef を最新の textInputState に同期 + ライブプレビュー描画
   useEffect(function(){
@@ -2786,7 +2888,7 @@ function ImageAnnotator(props){
                 /* B-drawing: 分析ストロークも同期 */
                 if(fbData.analysisStrokes!==undefined){
                   analysisStrokesInitSkip.current=true;
-                  setAnalysisStrokes(migrateAnalysisStrokes(fbData.analysisStrokes));
+                  setAnalysisStrokes(migrateAnalysisStrokes(fbData.analysisStrokes,'cur'));
                 }
                 loadedSavedAtRef.current=remoteT;
                 setRemoteUpdate(false);
@@ -2806,12 +2908,21 @@ function ImageAnnotator(props){
     var timer=setInterval(poll,15000);
     return function(){clearInterval(timer);};
   },[]);
-  /* 分析モード用: ストローク変更を「現在のtfの履歴」に commit */
-  function analysisCommit(strks){
+  /* 分析モード用: ストローク変更を「現在のtfの履歴」に commit (C6: {cur,ref} 統合スナップショット)
+     curStrokesObj: setAnalysisStrokes直後の全体オブジェクト
+     refStrokesObj: setRefAnalysis直後の ref.analysisStrokes (refAnalysis無ければ null) */
+  function analysisCommit(curStrokesObj, refStrokesObj){
     var tk=analysisTfRef.current||'1m';
-    var tfArr=((strks&&strks[tk])||[]).slice();
-    var hist=analysisHistRef.current[tk]||[[]];
-    analysisHistRef.current[tk]=hist.slice(-19).concat([tfArr]);
+    var curTfArr=((curStrokesObj&&curStrokesObj[tk])||[]).slice();
+    /* refStrokesObj 未指定なら最新refAnalysisから取得 */
+    var refSrc=refStrokesObj;
+    if(refSrc===undefined){
+      var ra=refAnalysisRef.current;
+      refSrc=ra?ra.analysisStrokes:null;
+    }
+    var refTfArr=((refSrc&&refSrc[tk])||[]).slice();
+    var hist=analysisHistRef.current[tk]||[];
+    analysisHistRef.current[tk]=hist.slice(-19).concat([{cur:curTfArr,ref:refTfArr}]);
     analysisFutRef.current[tk]=[];
     if(modeTab==='analysis'){
       setCanUndo(analysisHistRef.current[tk].length>1);
@@ -2821,26 +2932,36 @@ function ImageAnnotator(props){
   function undo(){
     if(modeTab==='analysis'){
       var tk=analysisTfRef.current||'1m';
-      var hist=analysisHistRef.current[tk]||[[]];
+      var hist=analysisHistRef.current[tk]||[];
       if(hist.length<=1)return;
-      var prevTfArr=hist[hist.length-2];
+      var prev=hist[hist.length-2];
       var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
-      var curTfArr=((curObj[tk])||[]).slice();
-      analysisFutRef.current[tk]=[curTfArr].concat((analysisFutRef.current[tk]||[]).slice(0,19));
+      var curTfArrNow=((curObj[tk])||[]).slice();
+      var ra=refAnalysisRef.current;
+      var refTfArrNow=(ra&&ra.analysisStrokes&&(ra.analysisStrokes[tk]||[]).slice())||[];
+      /* 現状をfutureへ退避 */
+      analysisFutRef.current[tk]=[{cur:curTfArrNow,ref:refTfArrNow}].concat((analysisFutRef.current[tk]||[]).slice(0,19));
       analysisHistRef.current[tk]=hist.slice(0,-1);
-      var nextObj=Object.assign({},curObj);
-      nextObj[tk]=prevTfArr.slice();
-      setAnalysisStrokes(nextObj);
+      /* cur/ref 両方復元 */
+      var nextCurObj=Object.assign({},curObj);
+      nextCurObj[tk]=(prev.cur||[]).slice();
+      setAnalysisStrokes(nextCurObj);
+      if(ra){
+        var nextRefStrokes=Object.assign({},(ra.analysisStrokes||{'1m':[],'5m':[]}));
+        nextRefStrokes[tk]=(prev.ref||[]).slice();
+        setRefAnalysis(Object.assign({},ra,{analysisStrokes:nextRefStrokes}));
+        triggerRefAutoSave();
+      }
       setCanUndo(analysisHistRef.current[tk].length>1);
       setCanRedo((analysisFutRef.current[tk]||[]).length>0);
       return;
     }
     if(histRef.current.length<=1)return;
-    var prev=histRef.current[histRef.current.length-2];
+    var prev2=histRef.current[histRef.current.length-2];
     futRef.current=[strokesRef.current].concat(futRef.current.slice(0,19));
     histRef.current=histRef.current.slice(0,-1);
-    strokesRef.current=prev;
-    setSelIdxs(new Set()); setSelBounds(null); rebuild(prev);
+    strokesRef.current=prev2;
+    setSelIdxs(new Set()); setSelBounds(null); rebuild(prev2);
     setCanUndo(histRef.current.length>1); setCanRedo(true);
   }
   function redo(){
@@ -2848,23 +2969,30 @@ function ImageAnnotator(props){
       var tk=analysisTfRef.current||'1m';
       var fut=analysisFutRef.current[tk]||[];
       if(!fut.length)return;
-      var nextTfArr=fut[0], restFut=fut.slice(1);
+      var next=fut[0], restFut=fut.slice(1);
       analysisFutRef.current[tk]=restFut;
-      analysisHistRef.current[tk]=(analysisHistRef.current[tk]||[[]]).concat([nextTfArr.slice()]);
+      analysisHistRef.current[tk]=(analysisHistRef.current[tk]||[]).concat([{cur:(next.cur||[]).slice(),ref:(next.ref||[]).slice()}]);
       var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
-      var nextObj=Object.assign({},curObj);
-      nextObj[tk]=nextTfArr.slice();
-      setAnalysisStrokes(nextObj);
+      var nextCurObj=Object.assign({},curObj);
+      nextCurObj[tk]=(next.cur||[]).slice();
+      setAnalysisStrokes(nextCurObj);
+      var ra=refAnalysisRef.current;
+      if(ra){
+        var nextRefStrokes=Object.assign({},(ra.analysisStrokes||{'1m':[],'5m':[]}));
+        nextRefStrokes[tk]=(next.ref||[]).slice();
+        setRefAnalysis(Object.assign({},ra,{analysisStrokes:nextRefStrokes}));
+        triggerRefAutoSave();
+      }
       setCanUndo((analysisHistRef.current[tk]||[]).length>1);
       setCanRedo(restFut.length>0);
       return;
     }
     if(!futRef.current.length)return;
-    var next=futRef.current[0], rest=futRef.current.slice(1);
+    var next2=futRef.current[0], rest=futRef.current.slice(1);
     futRef.current=rest;
-    histRef.current=histRef.current.concat([next]);
-    strokesRef.current=next;
-    setSelIdxs(new Set()); setSelBounds(null); rebuild(next);
+    histRef.current=histRef.current.concat([next2]);
+    strokesRef.current=next2;
+    setSelIdxs(new Set()); setSelBounds(null); rebuild(next2);
     setCanUndo(true); setCanRedo(rest.length>0);
   }
   /* modeTab / analysisTf 切替時: canUndo/canRedo を現在モード・tfに同期 */
@@ -3676,7 +3804,7 @@ function ImageAnnotator(props){
             color:refAnalysis?"#bbf7d0":"#e9d5ff"})
         },refAnalysis?"閉じる":"過去チャートを開く"),
         modeTab==='analysis' && analysisData && ce("button",{
-          onClick:function(){if(confirm('別のJSONを読み込む? 現在のデータは破棄されます')){var empty={'1m':[],'5m':[]};setAnalysisData(null);setAnalysisStrokes(empty);analysisHistRef.current={'1m':[[]],'5m':[[]]};analysisFutRef.current={'1m':[],'5m':[]};setCanUndo(false);setCanRedo(false);}},
+          onClick:function(){if(confirm('別のJSONを読み込む? 現在のデータは破棄されます')){var empty={'1m':[],'5m':[]};setAnalysisData(null);setAnalysisStrokes(empty);analysisHistRef.current={'1m':[{cur:[],ref:[]}],'5m':[{cur:[],ref:[]}]};analysisFutRef.current={'1m':[],'5m':[]};setCanUndo(false);setCanRedo(false);}},
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#2a2a2a",color:"#aaa"})
         },"🔄 別のJSON"),
         /* spacer */
@@ -3790,7 +3918,7 @@ function ImageAnnotator(props){
               /* B-drawing: 分析ストロークも反映 */
               if(fbData.analysisStrokes!==undefined){
                 analysisStrokesInitSkip.current=true;
-                setAnalysisStrokes(migrateAnalysisStrokes(fbData.analysisStrokes));
+                setAnalysisStrokes(migrateAnalysisStrokes(fbData.analysisStrokes,'cur'));
               }
               loadedSavedAtRef.current=Date.now();
             }).catch(function(e){console.error('[反映する] fetch error:',e);});
@@ -4024,52 +4152,135 @@ function ImageAnnotator(props){
               /* F2: 自前算出 priceRange を親に通知 (yenPerPx統一用) */
               onBaseRangeComputed:setCurBaseRange,
               strokes:(analysisStrokes&&analysisStrokes[analysisTf])||[],
-              editingTextIdx:analysisTextInput&&analysisTextInput.editIdx>=0?analysisTextInput.editIdx:-1,
+              /* C6: editingTextInfo={side,idx} or null を渡す */
+              editingTextIdx:(analysisTextInput&&analysisTextInput.editIdx>=0)
+                ?{side:(analysisTextInput.side||'cur'),idx:analysisTextInput.editIdx}
+                :null,
               textInputActive:!!analysisTextInput,
+          /* C6: onStrokeAdd - s.side で cur/ref 分岐 */
           onStrokeAdd:function(s){
-            var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
-            var curArr=(curObj[analysisTf]||[]).slice();
-            curArr.push(s);
-            var next=Object.assign({},curObj,(function(){var o={};o[analysisTf]=curArr;return o;})());
-            setAnalysisStrokes(next);
-            analysisCommit(next);
+            var side=s.side||'cur';
+            if(side==='ref'){
+              var ra=refAnalysisRef.current;
+              if(!ra)return;
+              var rObj=ra.analysisStrokes||{'1m':[],'5m':[]};
+              var rArr=(rObj[analysisTf]||[]).slice();
+              rArr.push(s);
+              var nextRef=Object.assign({},rObj,(function(){var o={};o[analysisTf]=rArr;return o;})());
+              setRefAnalysis(Object.assign({},ra,{analysisStrokes:nextRef}));
+              triggerRefAutoSave();
+              analysisCommit(analysisStrokesRef.current, nextRef);
+            }else{
+              var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
+              var curArr=(curObj[analysisTf]||[]).slice();
+              curArr.push(s);
+              var next=Object.assign({},curObj,(function(){var o={};o[analysisTf]=curArr;return o;})());
+              setAnalysisStrokes(next);
+              analysisCommit(next);
+            }
           },
-          onStrokeDelete:function(idx, silent){
-            var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
-            var curArr=(curObj[analysisTf]||[]).slice();
-            curArr.splice(idx,1);
-            var next=Object.assign({},curObj,(function(){var o={};o[analysisTf]=curArr;return o;})());
-            setAnalysisStrokes(next);
-            if(!silent)analysisCommit(next);
+          /* C6: onStrokeDelete(side, idx, silent) */
+          onStrokeDelete:function(side, idx, silent){
+            if(side==='ref'){
+              var ra=refAnalysisRef.current;
+              if(!ra)return;
+              var rObj=ra.analysisStrokes||{'1m':[],'5m':[]};
+              var rArr=(rObj[analysisTf]||[]).slice();
+              rArr.splice(idx,1);
+              var nextRef=Object.assign({},rObj,(function(){var o={};o[analysisTf]=rArr;return o;})());
+              setRefAnalysis(Object.assign({},ra,{analysisStrokes:nextRef}));
+              triggerRefAutoSave();
+              if(!silent)analysisCommit(analysisStrokesRef.current, nextRef);
+            }else{
+              var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
+              var curArr=(curObj[analysisTf]||[]).slice();
+              curArr.splice(idx,1);
+              var next=Object.assign({},curObj,(function(){var o={};o[analysisTf]=curArr;return o;})());
+              setAnalysisStrokes(next);
+              if(!silent)analysisCommit(next);
+            }
           },
           onEraserSessionEnd:function(){
-            // 消しゴムドラッグ終了時に1回だけ履歴コミット
+            // 消しゴムドラッグ終了時に1回だけ履歴コミット (cur/ref両方のスナップショット)
             analysisCommit(analysisStrokesRef.current);
           },
-          onStrokeDeleteMany:function(idxs){
-            if(!idxs||!idxs.length)return;
-            var skip=new Set(idxs);
-            var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
-            var curArr=curObj[analysisTf]||[];
-            var newArr=curArr.filter(function(_,i){return !skip.has(i);});
-            if(newArr.length===curArr.length)return;
-            var next=Object.assign({},curObj,(function(){var o={};o[analysisTf]=newArr;return o;})());
-            setAnalysisStrokes(next);
-            analysisCommit(next);
+          /* C6: onStrokeDeleteMany(items=[{side,idx}]) */
+          onStrokeDeleteMany:function(items){
+            if(!items||!items.length)return;
+            /* side別にグルーピング */
+            var curIdxs=[], refIdxs=[];
+            items.forEach(function(it){
+              if(!it)return;
+              if(typeof it==='number'){curIdxs.push(it);return;}  // 後方互換
+              if(it.side==='ref')refIdxs.push(it.idx);
+              else curIdxs.push(it.idx);
+            });
+            var nextCur=null, nextRef=null;
+            if(curIdxs.length){
+              var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
+              var curArr=curObj[analysisTf]||[];
+              var skipC=new Set(curIdxs);
+              var newCurArr=curArr.filter(function(_,i){return !skipC.has(i);});
+              if(newCurArr.length!==curArr.length){
+                nextCur=Object.assign({},curObj,(function(){var o={};o[analysisTf]=newCurArr;return o;})());
+                setAnalysisStrokes(nextCur);
+              }
+            }
+            if(refIdxs.length){
+              var ra=refAnalysisRef.current;
+              if(ra){
+                var rObj=ra.analysisStrokes||{'1m':[],'5m':[]};
+                var rArr=rObj[analysisTf]||[];
+                var skipR=new Set(refIdxs);
+                var newRArr=rArr.filter(function(_,i){return !skipR.has(i);});
+                if(newRArr.length!==rArr.length){
+                  nextRef=Object.assign({},rObj,(function(){var o={};o[analysisTf]=newRArr;return o;})());
+                  setRefAnalysis(Object.assign({},ra,{analysisStrokes:nextRef}));
+                  triggerRefAutoSave();
+                }
+              }
+            }
+            analysisCommit(
+              nextCur||analysisStrokesRef.current,
+              nextRef||(refAnalysisRef.current?refAnalysisRef.current.analysisStrokes:null)
+            );
           },
-          onStrokeUpdate:function(idx,newStroke){
-            var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
-            var curArr=(curObj[analysisTf]||[]).slice();
-            curArr[idx]=newStroke;
-            var next=Object.assign({},curObj,(function(){var o={};o[analysisTf]=curArr;return o;})());
-            setAnalysisStrokes(next);
-            analysisCommit(next);
+          /* C6: onStrokeUpdate(side, idx, newStroke) */
+          onStrokeUpdate:function(side,idx,newStroke){
+            if(side==='ref'){
+              var ra=refAnalysisRef.current;
+              if(!ra)return;
+              var rObj=ra.analysisStrokes||{'1m':[],'5m':[]};
+              var rArr=(rObj[analysisTf]||[]).slice();
+              /* side保持 (move後も 'ref' のまま) */
+              rArr[idx]=Object.assign({},newStroke,{side:'ref'});
+              var nextRef=Object.assign({},rObj,(function(){var o={};o[analysisTf]=rArr;return o;})());
+              setRefAnalysis(Object.assign({},ra,{analysisStrokes:nextRef}));
+              triggerRefAutoSave();
+              analysisCommit(analysisStrokesRef.current, nextRef);
+            }else{
+              var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
+              var curArr=(curObj[analysisTf]||[]).slice();
+              curArr[idx]=Object.assign({},newStroke,{side:'cur'});
+              var next=Object.assign({},curObj,(function(){var o={};o[analysisTf]=curArr;return o;})());
+              setAnalysisStrokes(next);
+              analysisCommit(next);
+            }
           },
+          /* C6: onRequestTextInput({tm,p,screenX,screenY,editIdx,side}) */
           onRequestTextInput:function(req){
             var initText='', initFS=fontSize, initBold=fontBold, initColor=color, initOp=opacity;
+            var reqSide=req.side||'cur';
             if(req.editIdx>=0){
-              var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
-              var es=(curObj[analysisTf]||[])[req.editIdx];
+              var srcObj;
+              if(reqSide==='ref'){
+                var ra=refAnalysisRef.current;
+                srcObj=ra?ra.analysisStrokes:null;
+              }else{
+                srcObj=analysisStrokesRef.current;
+              }
+              srcObj=srcObj||{'1m':[],'5m':[]};
+              var es=(srcObj[analysisTf]||[])[req.editIdx];
               if(es){
                 initText=es.text||'';
                 initFS=es.fontSize||fontSize;
@@ -4085,6 +4296,7 @@ function ImageAnnotator(props){
               fontSize:initFS, fontBold:initBold,
               color:initColor, opacity:initOp,
               editIdx: req.editIdx>=0?req.editIdx:-1,
+              side: reqSide,
               tf:analysisTf,
               _openedAt:Date.now()  // タッチ合成イベント暴発ガード用 (タブレット対応)
             });
@@ -4136,7 +4348,7 @@ function ImageAnnotator(props){
             drawFontSize:fontSize, drawFontBold:fontBold,
             horiz:false,
             strokes:(refAnalysis.analysisStrokes&&refAnalysis.analysisStrokes[analysisTf])||[],
-            editingTextIdx:-1,
+            editingTextIdx:null,  /* C6: null(未編集) */
             textInputActive:false,
             onStrokeAdd:function(){}, onStrokeDelete:function(){}, onStrokeDeleteMany:function(){},
             onStrokeUpdate:function(){}, onRequestTextInput:function(){}, onEraserSessionEnd:function(){}
@@ -4595,17 +4807,43 @@ function ImageAnnotator(props){
         var fontFamily="-apple-system,'Helvetica Neue',sans-serif";
         /* ati.tf は作成時の timeframe。編集中は常に作成時tfのstrokes配列を操作 */
         var tfKey=ati.tf||'1m';
+        /* C6: text の side ('cur'|'ref') */
+        var atiSide=ati.side||'cur';
+        /* C6: side別の strokes対象取得/setter */
+        function getTfArr(){
+          if(atiSide==='ref'){
+            var ra=refAnalysisRef.current;
+            if(!ra)return null;
+            return ((ra.analysisStrokes||{})[tfKey]||[]).slice();
+          }
+          var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
+          return (curObj[tfKey]||[]).slice();
+        }
+        function setTfArrCommit(newTfArr){
+          if(atiSide==='ref'){
+            var ra=refAnalysisRef.current;
+            if(!ra)return;
+            var rObj=ra.analysisStrokes||{'1m':[],'5m':[]};
+            var nextRef=Object.assign({},rObj,(function(){var o={};o[tfKey]=newTfArr;return o;})());
+            setRefAnalysis(Object.assign({},ra,{analysisStrokes:nextRef}));
+            triggerRefAutoSave();
+            analysisCommit(analysisStrokesRef.current, nextRef);
+          }else{
+            var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
+            var next=Object.assign({},curObj,(function(){var o={};o[tfKey]=newTfArr;return o;})());
+            setAnalysisStrokes(next);
+            analysisCommit(next);
+          }
+        }
         function confirmAnalysisText(){
           var txt=(analysisTextareaRef.current&&analysisTextareaRef.current.value)||ati.text||'';
-          var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
-          var curArr=(curObj[tfKey]||[]).slice();
+          var curArr=getTfArr();
+          if(!curArr){setAnalysisTextInput(null);return;}
           if(!txt.trim()){
             // 空入力: 既存編集ならそのまま削除、新規なら何もしない
             if(ati.editIdx>=0){
               curArr.splice(ati.editIdx,1);
-              var next0=Object.assign({},curObj,(function(){var o={};o[tfKey]=curArr;return o;})());
-              setAnalysisStrokes(next0);
-              analysisCommit(next0);
+              setTfArrCommit(curArr);
             }
             setAnalysisTextInput(null);
             return;
@@ -4616,34 +4854,30 @@ function ImageAnnotator(props){
               var updated=Object.assign({},es0,{
                 text:txt, color:ati.color, opacity:ati.opacity,
                 fontSize:ati.fontSize, fontBold:ati.fontBold,
-                anchors:[{tm:ati.tm,p:ati.p}]
+                anchors:[{tm:ati.tm,p:ati.p}],
+                side:atiSide
               });
               curArr[ati.editIdx]=updated;
-              var next1=Object.assign({},curObj,(function(){var o={};o[tfKey]=curArr;return o;})());
-              setAnalysisStrokes(next1);
-              analysisCommit(next1);
+              setTfArrCommit(curArr);
             }
           } else {
             var stroke={id:'s_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),
-              type:'text', anchors:[{tm:ati.tm,p:ati.p}],
+              type:'text', side:atiSide, anchors:[{tm:ati.tm,p:ati.p}],
               color:ati.color, opacity:ati.opacity,
               fontSize:ati.fontSize, fontBold:ati.fontBold,
               text:txt};
             curArr.push(stroke);
-            var next2=Object.assign({},curObj,(function(){var o={};o[tfKey]=curArr;return o;})());
-            setAnalysisStrokes(next2);
-            analysisCommit(next2);
+            setTfArrCommit(curArr);
           }
           setAnalysisTextInput(null);
         }
         function deleteAnalysisText(){
           if(ati.editIdx>=0){
-            var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
-            var curArr=(curObj[tfKey]||[]).slice();
-            curArr.splice(ati.editIdx,1);
-            var next=Object.assign({},curObj,(function(){var o={};o[tfKey]=curArr;return o;})());
-            setAnalysisStrokes(next);
-            analysisCommit(next);
+            var curArr=getTfArr();
+            if(curArr){
+              curArr.splice(ati.editIdx,1);
+              setTfArrCommit(curArr);
+            }
           }
           setAnalysisTextInput(null);
         }
@@ -5466,7 +5700,7 @@ function DraftLibrary(props){
               var merged={orig_base64:d.orig_base64||d.base64,orig_mt:d.orig_mt||d.mt||fbData.orig_mt||'image/png',
                 strokes:fbData.strokes||[],name:fbData.name||'',
                 analysisData:fbData.analysisData||null,
-                analysisStrokes:migrateAnalysisStrokes(fbData.analysisStrokes)};  /* B-drawing */
+                analysisStrokes:migrateAnalysisStrokes(fbData.analysisStrokes,'cur')};  /* B-drawing */
               caSaveData(id,merged);setSyncStatus(null);
               onOpen(Object.assign({},merged,extra));return;
             }
@@ -5475,7 +5709,7 @@ function DraftLibrary(props){
             var localData={orig_base64:res.base64,orig_mt:res.mt||fbData.orig_mt||'image/png',
               strokes:fbData.strokes||[],name:fbData.name||'',
               analysisData:fbData.analysisData||null,
-              analysisStrokes:migrateAnalysisStrokes(fbData.analysisStrokes)};  /* B-drawing */
+              analysisStrokes:migrateAnalysisStrokes(fbData.analysisStrokes,'cur')};  /* B-drawing */
             caSaveData(id,localData);setSyncStatus(null);
             onOpen(Object.assign({},localData,extra));
           }).catch(function(e){
@@ -5490,7 +5724,7 @@ function DraftLibrary(props){
                   var du=tc.toDataURL('image/png');var b64=du.split(',')[1];
                   var localData={orig_base64:b64,orig_mt:'image/png',strokes:fbData.strokes||[],name:fbData.name||'',
                     analysisData:fbData.analysisData||null,
-                    analysisStrokes:migrateAnalysisStrokes(fbData.analysisStrokes)};  /* B-drawing */
+                    analysisStrokes:migrateAnalysisStrokes(fbData.analysisStrokes,'cur')};  /* B-drawing */
                   caSaveData(id,localData);setSyncStatus(null);
                   onOpen(Object.assign({},localData,extra));resolve();
                 }catch(e2){reject(e2);}
