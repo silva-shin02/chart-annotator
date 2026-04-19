@@ -795,7 +795,7 @@ function RefChartPicker(props){
 }
 
 function DataChart(props){
-  /* B2: 歩み値JSON → Canvas描画
+  /* B2+: 歩み値JSON → Canvas描画 (HSBI2色、ズーム・パン対応)
      props: { data, tf }    data=JSON全体, tf='1m'|'5m' */
   var data=props.data;
   var tf=props.tf||'1m';
@@ -805,6 +805,16 @@ function DataChart(props){
   var canvasRef=useRef(null);
   var containerRef=useRef(null);
   var sD=useState({w:800,h:520}); var dim=sD[0],setDim=sD[1];
+  /* 時間軸ビューレンジ (分, 540=09:00, 930=15:30) */
+  var sV=useState({s:540,e:930}); var view=sV[0],setView=sV[1];
+  var panStartRef=useRef(null);
+  /* 価格軸も画面に収まらなくなった時用の縦シフト */
+  var sPY=useState(0); var pShift=sPY[0],setPShift=sPY[1];
+
+  // tf 変更時にビューリセット
+  useEffect(function(){
+    setView({s:540,e:930}); setPShift(0);
+  },[tf,data]);
 
   // コンテナサイズ追従
   useEffect(function(){
@@ -824,21 +834,112 @@ function DataChart(props){
   // 描画
   useEffect(function(){
     var canvas=canvasRef.current; if(!canvas||!bars.length)return;
-    drawDataChart(canvas,bars,data,dim,tf);
-  },[data,bars,dim,tf]);
+    drawDataChart(canvas,bars,data,dim,tf,view,pShift);
+  },[data,bars,dim,tf,view,pShift]);
+
+  // ホイール: ズーム (カーソル位置中心)
+  useEffect(function(){
+    var el=containerRef.current; if(!el)return;
+    function handler(e){
+      e.preventDefault();
+      var rect=el.getBoundingClientRect();
+      var padL=10, padR=60;
+      var chartW=rect.width-padL-padR;
+      var cx=e.clientX-rect.left-padL; // 0..chartW
+      if(cx<0||cx>chartW)return;
+      var frac=cx/chartW;
+      setView(function(v){
+        var span=v.e-v.s;
+        var cursorMin=v.s+frac*span;
+        // Ctrl+ホイール = 価格軸シフト (垂直パン)
+        if(e.ctrlKey||e.metaKey){
+          setPShift(function(p){return p + (e.deltaY>0?-0.02:0.02);});
+          return v;
+        }
+        // 通常ホイール = ズーム
+        var factor=e.deltaY<0?0.85:1/0.85;  // 上=縮小(ズームイン)、下=拡大
+        var newSpan=Math.max(15,Math.min(390,span*factor));
+        var newS=cursorMin-frac*newSpan;
+        var newE=newS+newSpan;
+        // 09:00-15:30 の範囲で境界クランプ
+        if(newS<540){newS=540;newE=newS+newSpan;}
+        if(newE>930){newE=930;newS=newE-newSpan;}
+        return {s:newS,e:newE};
+      });
+    }
+    el.addEventListener('wheel',handler,{passive:false});
+    return function(){el.removeEventListener('wheel',handler);};
+  },[]);
+
+  // パン: ドラッグで時間軸横スライド
+  function onMouseDown(e){
+    panStartRef.current={x:e.clientX,y:e.clientY,s:view.s,e:view.e,ps:pShift};
+  }
+  function onMouseMove(e){
+    var p=panStartRef.current; if(!p)return;
+    var rect=containerRef.current.getBoundingClientRect();
+    var padL=10, padR=60;
+    var chartW=rect.width-padL-padR;
+    var span=p.e-p.s;
+    var dxMin=-(e.clientX-p.x)/chartW*span;
+    var dyFrac=(e.clientY-p.y)/rect.height;
+    var newS=p.s+dxMin, newE=p.e+dxMin;
+    if(newS<540){newS=540;newE=newS+span;}
+    if(newE>930){newE=930;newS=newE-span;}
+    setView({s:newS,e:newE});
+    setPShift(p.ps+dyFrac*0.4);
+  }
+  function onMouseUp(){panStartRef.current=null;}
+  // タッチ (iPad) 同等
+  function onTouchStart(e){
+    if(e.touches.length!==1)return;
+    var t=e.touches[0];
+    panStartRef.current={x:t.clientX,y:t.clientY,s:view.s,e:view.e,ps:pShift};
+  }
+  function onTouchMove(e){
+    var p=panStartRef.current; if(!p||!e.touches.length)return;
+    var t=e.touches[0];
+    var rect=containerRef.current.getBoundingClientRect();
+    var padL=10, padR=60;
+    var chartW=rect.width-padL-padR;
+    var span=p.e-p.s;
+    var dxMin=-(t.clientX-p.x)/chartW*span;
+    var dyFrac=(t.clientY-p.y)/rect.height;
+    var newS=p.s+dxMin, newE=p.e+dxMin;
+    if(newS<540){newS=540;newE=newS+span;}
+    if(newE>930){newE=930;newS=newE-span;}
+    setView({s:newS,e:newE});
+    setPShift(p.ps+dyFrac*0.4);
+  }
+  // ダブルクリック/タップ: リセット
+  function onDblClick(){setView({s:540,e:930}); setPShift(0);}
 
   if(!data||!bars.length){
     return ce("div",{ref:containerRef,style:{flex:1,display:"flex",alignItems:"center",justifyContent:"center",color:"#555"}},
       ce("div",null,"データなし"));
   }
 
-  return ce("div",{ref:containerRef,style:{flex:1,position:"relative",background:"#0a0a0a",overflow:"hidden"}},
-    ce("canvas",{ref:canvasRef,style:{display:"block",width:"100%",height:"100%"}})
+  return ce("div",{
+    ref:containerRef,
+    onMouseDown:onMouseDown,
+    onMouseMove:onMouseMove,
+    onMouseUp:onMouseUp,
+    onMouseLeave:onMouseUp,
+    onTouchStart:onTouchStart,
+    onTouchMove:onTouchMove,
+    onTouchEnd:onMouseUp,
+    onDoubleClick:onDblClick,
+    style:{flex:1,position:"relative",background:"#000000",overflow:"hidden",cursor:"grab",touchAction:"none",userSelect:"none"}
+  },
+    ce("canvas",{ref:canvasRef,style:{display:"block",width:"100%",height:"100%",pointerEvents:"none"}}),
+    /* ズーム倍率表示 (右下) */
+    ce("div",{style:{position:"absolute",right:8,bottom:6,fontSize:10,color:"#555",pointerEvents:"none"}},
+      (390/(view.e-view.s)).toFixed(1)+'×  '+'ダブルクリックでリセット')
   );
 }
 
-/* B2: DataChart の描画関数（Canvas 2D 直接描画） */
-function drawDataChart(canvas,bars,data,dim,tf){
+/* DataChart 描画関数 (Canvas 2D 直接描画、HSBI2色、ズーム対応) */
+function drawDataChart(canvas,bars,data,dim,tf,view,pShift){
   var dpr=window.devicePixelRatio||1;
   var W=dim.w, H=dim.h;
   canvas.width=Math.round(W*dpr);
@@ -846,8 +947,8 @@ function drawDataChart(canvas,bars,data,dim,tf){
   var ctx=canvas.getContext('2d');
   ctx.setTransform(dpr,0,0,dpr,0,0);
 
-  // 背景
-  ctx.fillStyle='#0a0a0a';
+  // 背景 (HSBI2 と同じ漆黒)
+  ctx.fillStyle='#000000';
   ctx.fillRect(0,0,W,H);
 
   // レイアウト
@@ -858,15 +959,17 @@ function drawDataChart(canvas,bars,data,dim,tf){
   var priceTop=padT, priceBot=padT+priceH;
   var volTop=priceBot+6, volBot=volTop+volH;
 
-  // 時間軸: 09:00-15:30 = 390分を横軸全体にマップ
-  var baseMin=540;       // 09:00
-  var totalMin=390;      // 09:00-15:30
+  // 時間軸: view.s - view.e (分単位)
+  var vS=view.s, vE=view.e, vSpan=vE-vS;
   function tToMin(t){var p=t.split(':');return parseInt(p[0],10)*60+parseInt(p[1],10);}
-  function tToX(t){return padL+((tToMin(t)-baseMin)/totalMin)*chartW;}
+  function tToX(t){return padL+((tToMin(t)-vS)/vSpan)*chartW;}
+  function minToX(m){return padL+((m-vS)/vSpan)*chartW;}
 
-  // 価格レンジ算出（ローソク + EMA + VWAP を含める）
+  // 表示範囲内のバーだけで価格レンジ算出
+  var visibleBars=bars.filter(function(b){var m=tToMin(b.t);return m>=vS&&m<=vE;});
+  if(visibleBars.length===0) visibleBars=bars;
   var pmin=Infinity, pmax=-Infinity;
-  bars.forEach(function(b){
+  visibleBars.forEach(function(b){
     if(b.l<pmin)pmin=b.l;
     if(b.h>pmax)pmax=b.h;
     ['ema9','ema22','ema50','ema200','vwap'].forEach(function(k){
@@ -875,11 +978,16 @@ function drawDataChart(canvas,bars,data,dim,tf){
   });
   var ppad=(pmax-pmin)*0.05;
   pmin-=ppad; pmax+=ppad;
+  // 垂直シフト (pShift: -1..1 相当)
+  var pRange=pmax-pmin;
+  pmin+=pShift*pRange;
+  pmax+=pShift*pRange;
   function pToY(p){return priceTop+(1-(p-pmin)/(pmax-pmin))*priceH;}
 
-  // 出来高レンジ
+  // 出来高レンジ (表示範囲内)
   var vmax=0;
-  bars.forEach(function(b){if(b.v>vmax)vmax=b.v;});
+  visibleBars.forEach(function(b){if(b.v>vmax)vmax=b.v;});
+  if(vmax<=0) vmax=1;
   function vToY(v){return volBot-(v/vmax)*volH;}
 
   // 水平価格グリッド
@@ -891,35 +999,42 @@ function drawDataChart(canvas,bars,data,dim,tf){
     var y=pToY(p);
     ctx.strokeStyle='#1a1a1a'; ctx.lineWidth=0.5;
     ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(padL+chartW,y); ctx.stroke();
-    ctx.fillStyle='#555';
+    ctx.fillStyle='#666';
     ctx.fillText(p.toFixed(0),padL+chartW+52,y);
   }
 
-  // 時間グリッド（1時間毎）
+  // 時間グリッド: ズーム率に応じてステップ可変
   ctx.textBaseline='top'; ctx.textAlign='center';
-  for(var h=9;h<=15;h++){
-    var tStr=(h<10?'0':'')+h+':00';
-    var x=tToX(tStr);
+  var stepMin = vSpan>=300?60 : vSpan>=120?30 : vSpan>=60?15 : vSpan>=30?10 : 5;
+  var firstStep = Math.ceil(vS/stepMin)*stepMin;
+  for(var m=firstStep; m<=vE; m+=stepMin){
+    var x=minToX(m);
     if(x<padL-1||x>padL+chartW+1)continue;
+    var hh=Math.floor(m/60), mm=m%60;
+    var tStr=(hh<10?'0':'')+hh+':'+(mm<10?'0':'')+mm;
     ctx.strokeStyle='#1a1a1a'; ctx.lineWidth=0.5;
     ctx.beginPath(); ctx.moveTo(x,priceTop); ctx.lineTo(x,volBot); ctx.stroke();
     ctx.fillStyle='#666'; ctx.fillText(tStr,x,volBot+4);
   }
-  // 昼休み境界（点線）
-  ['11:30','12:30'].forEach(function(t){
-    var x=tToX(t);
+  // 昼休み境界 (可視範囲内のみ)
+  [690,750].forEach(function(m){
+    if(m<vS||m>vE)return;
+    var x=minToX(m);
     ctx.strokeStyle='#2a2a2a'; ctx.setLineDash([2,3]); ctx.lineWidth=0.5;
     ctx.beginPath(); ctx.moveTo(x,priceTop); ctx.lineTo(x,volBot); ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle='#444'; ctx.fillText(t,x,volBot+4);
   });
 
-  // ローソク足 + 出来高バー
-  var barW=Math.max(1,(chartW/totalMin)*(tf==='5m'?5:1)*0.75);
-  bars.forEach(function(b){
-    var cx=tToX(b.t);
+  // HSBI2 配色
+  var COL_UP='#ff0054';       // 陽線 (ピンク/ローズ)
+  var COL_DN='#11ded9';       // 陰線 (シアン)
+
+  // ローソク足 + 出来高バー (表示範囲内のみ)
+  var barW=Math.max(1,(chartW/vSpan)*(tf==='5m'?5:1)*0.8);
+  visibleBars.forEach(function(b){
+    var cx=minToX(tToMin(b.t));
     var up=b.c>=b.o;
-    var col=up?'#e74c3c':'#3498db';
+    var col=up?COL_UP:COL_DN;
     // ヒゲ
     ctx.strokeStyle=col; ctx.lineWidth=1;
     ctx.beginPath(); ctx.moveTo(Math.round(cx)+0.5,pToY(b.h)); ctx.lineTo(Math.round(cx)+0.5,pToY(b.l)); ctx.stroke();
@@ -933,27 +1048,25 @@ function drawDataChart(canvas,bars,data,dim,tf){
     ctx.fillRect(cx-barW/2,vy,barW,volBot-vy);
   });
 
-  // EMA + VWAP ライン
+  // EMA + VWAP ライン (HSBI2 実測配色、表示範囲内のみ描画)
   var lines=[
-    {k:'ema9',   col:'#f1c40f', label:'EMA9'},
-    {k:'ema22',  col:'#e67e22', label:'EMA22'},
-    {k:'ema50',  col:'#9b59b6', label:'EMA50'},
-    {k:'ema200', col:'#ecf0f1', label:'EMA200'},
-    {k:'vwap',   col:'#FFD700', label:'VWAP', dash:[4,3]}
+    {k:'ema9',   col:'#ffffff', label:'EMA9'},       // 白 (期間1)
+    {k:'ema22',  col:'#ffa9ff', label:'EMA22'},      // ライトピンク (期間2)
+    {k:'ema50',  col:'#ff00ff', label:'EMA50'},      // マゼンタ (期間3)
+    {k:'ema200', col:'#55017d', label:'EMA200'},     // ダークパープル (期間4)
+    {k:'vwap',   col:'#ffff00', label:'VWAP'}        // 黄 (実線)
   ];
   lines.forEach(function(line){
     ctx.strokeStyle=line.col; ctx.lineWidth=1.2;
-    if(line.dash)ctx.setLineDash(line.dash); else ctx.setLineDash([]);
     ctx.beginPath();
     var first=true;
-    bars.forEach(function(b){
+    visibleBars.forEach(function(b){
       var v=b[line.k]; if(v==null)return;
-      var x=tToX(b.t), y=pToY(v);
+      var x=minToX(tToMin(b.t)), y=pToY(v);
       if(first){ctx.moveTo(x,y); first=false;} else ctx.lineTo(x,y);
     });
     ctx.stroke();
   });
-  ctx.setLineDash([]);
 
   // ヘッダー (上段: タイトル、下段: 凡例)
   var last=bars[bars.length-1];
@@ -962,34 +1075,38 @@ function drawDataChart(canvas,bars,data,dim,tf){
   ctx.fillStyle='#ddd';
   var title=(data.ticker||'')+'  '+(data.date||'')+'   '+bars.length+'本 '+(tf==='5m'?'5分':'1分');
   ctx.fillText(title,padL+2,4);
-  // 凡例（EMA/VWAP の現在値）
+  // 凡例 (EMA/VWAP の現在値 — 直近の可視バー基準)
+  var legendBase=visibleBars[visibleBars.length-1]||last;
   ctx.font='11px -apple-system,Helvetica,sans-serif';
   var lx=padL+2;
   lines.forEach(function(line){
-    if(last[line.k]==null)return;
-    var txt=line.label+' '+last[line.k].toFixed(1);
+    if(legendBase[line.k]==null)return;
+    var txt=line.label+' '+legendBase[line.k].toFixed(1);
     ctx.fillStyle=line.col;
-    // 色マーカー
     ctx.fillRect(lx,20,8,8);
     ctx.fillStyle='#ccc';
     ctx.fillText(txt,lx+12,18);
     lx+=ctx.measureText(txt).width+30;
   });
 
-  // 直近終値の水平ライン + ラベル（右端）
+  // 直近終値の水平ライン + ラベル (右端)
   var lastY=pToY(last.c);
-  ctx.strokeStyle=last.c>=last.o?'#e74c3c':'#3498db';
-  ctx.setLineDash([3,3]); ctx.lineWidth=0.8;
-  ctx.beginPath(); ctx.moveTo(padL,lastY); ctx.lineTo(padL+chartW,lastY); ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.fillStyle=last.c>=last.o?'#e74c3c':'#3498db';
-  var lbl=last.c.toFixed(0);
-  ctx.textAlign='left'; ctx.textBaseline='middle';
-  ctx.font='bold 11px -apple-system,Helvetica,sans-serif';
-  var tw=ctx.measureText(lbl).width+8;
-  ctx.fillRect(padL+chartW+2,lastY-8,tw,16);
-  ctx.fillStyle='#fff';
-  ctx.fillText(lbl,padL+chartW+6,lastY);
+  var lastUp=last.c>=last.o;
+  var lastCol=lastUp?COL_UP:COL_DN;
+  if(lastY>=priceTop&&lastY<=priceBot){
+    ctx.strokeStyle=lastCol;
+    ctx.setLineDash([3,3]); ctx.lineWidth=0.8;
+    ctx.beginPath(); ctx.moveTo(padL,lastY); ctx.lineTo(padL+chartW,lastY); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle=lastCol;
+    var lbl=last.c.toFixed(0);
+    ctx.textAlign='left'; ctx.textBaseline='middle';
+    ctx.font='bold 11px -apple-system,Helvetica,sans-serif';
+    var tw=ctx.measureText(lbl).width+8;
+    ctx.fillRect(padL+chartW+2,lastY-8,tw,16);
+    ctx.fillStyle='#000';
+    ctx.fillText(lbl,padL+chartW+6,lastY);
+  }
 }
 
 function ImageAnnotator(props){
@@ -998,10 +1115,13 @@ function ImageAnnotator(props){
   var canvasRef = useRef(null);
   /* B1: モードタブ ('image' | 'analysis') — Step B2で分析モードの中身を実装予定 */
   var stMT=useState('image'); var modeTab=stMT[0],setModeTab=stMT[1];
-  /* B2: 分析モードの state */
-  var stAD=useState(null); var analysisData=stAD[0],setAnalysisData=stAD[1];
+  /* B2: 分析モードの state (img にある場合はそこから復元 = Firebase同期対応) */
+  var stAD=useState(function(){return (img&&img.analysisData)||null;});
+  var analysisData=stAD[0],setAnalysisData=stAD[1];
   var stAT=useState('1m'); var analysisTf=stAT[0],setAnalysisTf=stAT[1];
   var analysisFileRef=useRef(null);
+  var analysisDataRef=useRef(analysisData);  // triggerAutoSave内で最新値参照用
+  useEffect(function(){analysisDataRef.current=analysisData;},[analysisData]);
   var st0=useState("pan");   var tool=st0[0],setTool=st0[1];
   var st1=useState("#E53935"); var color=st1[0],setColor=st1[1];
   var st2=useState([]);      var colorHist=st2[0],setColorHist=st2[1];
@@ -1405,6 +1525,8 @@ function ImageAnnotator(props){
         var draftData=imageUrl
           ?{imageUrl:imageUrl,orig_mt:mt,strokes:strokes,name:img._name||img.name||'chart'}
           :{orig_base64:b64,orig_mt:mt,strokes:strokes,name:img._name||img.name||'chart'};
+        /* B2+: 分析データがあれば同梱 (Firebase同期対応) */
+        if(analysisDataRef.current)draftData.analysisData=analysisDataRef.current;
         var dataBody=JSON.stringify(draftData);fetch(draftDataBase+'/'+draftId+'.json'+auth,{method:'PUT',
           headers:{'Content-Type':'application/json'},body:dataBody})
           .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);
@@ -1442,6 +1564,14 @@ function ImageAnnotator(props){
     return function(){if(autoSaveTimerRef.current)clearTimeout(autoSaveTimerRef.current);};
   },[]);
 
+  /* B2+: 分析データ(JSON)変更時の Firebase 自動保存トリガー
+     初回mount時はskip (初期値は同期済みデータそのものなので重複保存しない) */
+  var analysisDataInitSkip=useRef(true);
+  useEffect(function(){
+    if(analysisDataInitSkip.current){analysisDataInitSkip.current=false;return;}
+    triggerAutoSave();
+  },[analysisData]);
+
   // ── 別端末同期ポーリング（60秒ごとにタイムスタンプを確認）──
   useEffect(function(){
     var cfg=props.fbCfg;
@@ -1468,6 +1598,11 @@ function ImageAnnotator(props){
                 histRef.current=[newStrokes]; futRef.current=[];
                 setCanUndo(false); setCanRedo(false);
                 rebuild(newStrokes);
+                /* B2+: 分析データも同期 (自動保存トリガーは skip) */
+                if(fbData.analysisData!==undefined){
+                  analysisDataInitSkip.current=true;
+                  setAnalysisData(fbData.analysisData||null);
+                }
                 loadedSavedAtRef.current=remoteT;
                 setRemoteUpdate(false);
                 setAutoSaveStatus('ok');
@@ -2086,6 +2221,7 @@ function ImageAnnotator(props){
         var dbData=imageUrl
           ?{imageUrl:imageUrl,orig_mt:mt,strokes:strokesRef.current,name:chartName}
           :{orig_base64:b64,orig_mt:mt,strokes:strokesRef.current,name:chartName};
+        if(analysisDataRef.current)dbData.analysisData=analysisDataRef.current;  /* B2+: JSON同梱 */
         var dataBody=JSON.stringify(dbData);fetch(draftDataBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
           body:dataBody}).catch(function(e){console.error('fbSyncDraft data:',e);});
       });
@@ -2361,6 +2497,11 @@ function ImageAnnotator(props){
               histRef.current=[ns]; futRef.current=[];
               setCanUndo(false); setCanRedo(false);
               rebuild(ns); setRemoteUpdate(false);
+              /* B2+: analysisData も同期反映 */
+              if(fbData.analysisData!==undefined){
+                analysisDataInitSkip.current=true;
+                setAnalysisData(fbData.analysisData||null);
+              }
               loadedSavedAtRef.current=Date.now();
             }).catch(function(e){console.error('[反映する] fetch error:',e);});
         },
@@ -3640,14 +3781,16 @@ function DraftLibrary(props){
             // ローカルに画像があればそれを使い、strokesだけリモートから取得（Storage DL不要）
             if(d&&(d.orig_base64||d.base64)){
               var merged={orig_base64:d.orig_base64||d.base64,orig_mt:d.orig_mt||d.mt||fbData.orig_mt||'image/png',
-                strokes:fbData.strokes||[],name:fbData.name||''};
+                strokes:fbData.strokes||[],name:fbData.name||'',
+                analysisData:fbData.analysisData||null};  /* B2+: Firebase同期されたJSON */
               caSaveData(id,merged);setSyncStatus(null);
               onOpen(Object.assign({},merged,extra));return;
             }
           // ローカルに画像なし → Storageからダウンロード
           return storageUrlToBase64(fbData.imageUrl).then(function(res){
             var localData={orig_base64:res.base64,orig_mt:res.mt||fbData.orig_mt||'image/png',
-              strokes:fbData.strokes||[],name:fbData.name||''};
+              strokes:fbData.strokes||[],name:fbData.name||'',
+              analysisData:fbData.analysisData||null};  /* B2+ */
             caSaveData(id,localData);setSyncStatus(null);
             onOpen(Object.assign({},localData,extra));
           }).catch(function(e){
@@ -3660,7 +3803,8 @@ function DraftLibrary(props){
                 tc.getContext('2d').drawImage(fi,0,0);
                 try{
                   var du=tc.toDataURL('image/png');var b64=du.split(',')[1];
-                  var localData={orig_base64:b64,orig_mt:'image/png',strokes:fbData.strokes||[],name:fbData.name||''};
+                  var localData={orig_base64:b64,orig_mt:'image/png',strokes:fbData.strokes||[],name:fbData.name||'',
+                    analysisData:fbData.analysisData||null};  /* B2+ */
                   caSaveData(id,localData);setSyncStatus(null);
                   onOpen(Object.assign({},localData,extra));resolve();
                 }catch(e2){reject(e2);}
