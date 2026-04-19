@@ -794,10 +794,214 @@ function RefChartPicker(props){
   );
 }
 
+function DataChart(props){
+  /* B2: 歩み値JSON → Canvas描画
+     props: { data, tf }    data=JSON全体, tf='1m'|'5m' */
+  var data=props.data;
+  var tf=props.tf||'1m';
+  var barsKey=tf==='5m'?'bars_5m':'bars_1m';
+  var bars=(data&&data[barsKey])||[];
+
+  var canvasRef=useRef(null);
+  var containerRef=useRef(null);
+  var sD=useState({w:800,h:520}); var dim=sD[0],setDim=sD[1];
+
+  // コンテナサイズ追従
+  useEffect(function(){
+    function update(){
+      var el=containerRef.current; if(!el)return;
+      var r=el.getBoundingClientRect();
+      var w=Math.max(400,Math.floor(r.width));
+      var h=Math.max(300,Math.floor(r.height));
+      setDim(function(prev){return(prev.w===w&&prev.h===h)?prev:{w:w,h:h};});
+    }
+    update();
+    var t=setTimeout(update,50);
+    window.addEventListener('resize',update);
+    return function(){clearTimeout(t);window.removeEventListener('resize',update);};
+  },[]);
+
+  // 描画
+  useEffect(function(){
+    var canvas=canvasRef.current; if(!canvas||!bars.length)return;
+    drawDataChart(canvas,bars,data,dim,tf);
+  },[data,bars,dim,tf]);
+
+  if(!data||!bars.length){
+    return ce("div",{ref:containerRef,style:{flex:1,display:"flex",alignItems:"center",justifyContent:"center",color:"#555"}},
+      ce("div",null,"データなし"));
+  }
+
+  return ce("div",{ref:containerRef,style:{flex:1,position:"relative",background:"#0a0a0a",overflow:"hidden"}},
+    ce("canvas",{ref:canvasRef,style:{display:"block",width:"100%",height:"100%"}})
+  );
+}
+
+/* B2: DataChart の描画関数（Canvas 2D 直接描画） */
+function drawDataChart(canvas,bars,data,dim,tf){
+  var dpr=window.devicePixelRatio||1;
+  var W=dim.w, H=dim.h;
+  canvas.width=Math.round(W*dpr);
+  canvas.height=Math.round(H*dpr);
+  var ctx=canvas.getContext('2d');
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+
+  // 背景
+  ctx.fillStyle='#0a0a0a';
+  ctx.fillRect(0,0,W,H);
+
+  // レイアウト
+  var padL=10, padR=60, padT=34, padB=22;
+  var volH=Math.max(50,Math.round((H-padT-padB)*0.18));
+  var priceH=H-padT-padB-volH-6;
+  var chartW=W-padL-padR;
+  var priceTop=padT, priceBot=padT+priceH;
+  var volTop=priceBot+6, volBot=volTop+volH;
+
+  // 時間軸: 09:00-15:30 = 390分を横軸全体にマップ
+  var baseMin=540;       // 09:00
+  var totalMin=390;      // 09:00-15:30
+  function tToMin(t){var p=t.split(':');return parseInt(p[0],10)*60+parseInt(p[1],10);}
+  function tToX(t){return padL+((tToMin(t)-baseMin)/totalMin)*chartW;}
+
+  // 価格レンジ算出（ローソク + EMA + VWAP を含める）
+  var pmin=Infinity, pmax=-Infinity;
+  bars.forEach(function(b){
+    if(b.l<pmin)pmin=b.l;
+    if(b.h>pmax)pmax=b.h;
+    ['ema9','ema22','ema50','ema200','vwap'].forEach(function(k){
+      var v=b[k]; if(v!=null){if(v<pmin)pmin=v; if(v>pmax)pmax=v;}
+    });
+  });
+  var ppad=(pmax-pmin)*0.05;
+  pmin-=ppad; pmax+=ppad;
+  function pToY(p){return priceTop+(1-(p-pmin)/(pmax-pmin))*priceH;}
+
+  // 出来高レンジ
+  var vmax=0;
+  bars.forEach(function(b){if(b.v>vmax)vmax=b.v;});
+  function vToY(v){return volBot-(v/vmax)*volH;}
+
+  // 水平価格グリッド
+  ctx.font='10px -apple-system,Helvetica,sans-serif';
+  ctx.textBaseline='middle'; ctx.textAlign='right';
+  var pSteps=6;
+  for(var i=0;i<=pSteps;i++){
+    var p=pmin+(pmax-pmin)*(i/pSteps);
+    var y=pToY(p);
+    ctx.strokeStyle='#1a1a1a'; ctx.lineWidth=0.5;
+    ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(padL+chartW,y); ctx.stroke();
+    ctx.fillStyle='#555';
+    ctx.fillText(p.toFixed(0),padL+chartW+52,y);
+  }
+
+  // 時間グリッド（1時間毎）
+  ctx.textBaseline='top'; ctx.textAlign='center';
+  for(var h=9;h<=15;h++){
+    var tStr=(h<10?'0':'')+h+':00';
+    var x=tToX(tStr);
+    if(x<padL-1||x>padL+chartW+1)continue;
+    ctx.strokeStyle='#1a1a1a'; ctx.lineWidth=0.5;
+    ctx.beginPath(); ctx.moveTo(x,priceTop); ctx.lineTo(x,volBot); ctx.stroke();
+    ctx.fillStyle='#666'; ctx.fillText(tStr,x,volBot+4);
+  }
+  // 昼休み境界（点線）
+  ['11:30','12:30'].forEach(function(t){
+    var x=tToX(t);
+    ctx.strokeStyle='#2a2a2a'; ctx.setLineDash([2,3]); ctx.lineWidth=0.5;
+    ctx.beginPath(); ctx.moveTo(x,priceTop); ctx.lineTo(x,volBot); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle='#444'; ctx.fillText(t,x,volBot+4);
+  });
+
+  // ローソク足 + 出来高バー
+  var barW=Math.max(1,(chartW/totalMin)*(tf==='5m'?5:1)*0.75);
+  bars.forEach(function(b){
+    var cx=tToX(b.t);
+    var up=b.c>=b.o;
+    var col=up?'#e74c3c':'#3498db';
+    // ヒゲ
+    ctx.strokeStyle=col; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(Math.round(cx)+0.5,pToY(b.h)); ctx.lineTo(Math.round(cx)+0.5,pToY(b.l)); ctx.stroke();
+    // 実体
+    ctx.fillStyle=col;
+    var y1=pToY(b.o), y2=pToY(b.c);
+    var yTop=Math.min(y1,y2), bh=Math.max(1,Math.abs(y1-y2));
+    ctx.fillRect(cx-barW/2,yTop,barW,bh);
+    // 出来高
+    var vy=vToY(b.v);
+    ctx.fillRect(cx-barW/2,vy,barW,volBot-vy);
+  });
+
+  // EMA + VWAP ライン
+  var lines=[
+    {k:'ema9',   col:'#f1c40f', label:'EMA9'},
+    {k:'ema22',  col:'#e67e22', label:'EMA22'},
+    {k:'ema50',  col:'#9b59b6', label:'EMA50'},
+    {k:'ema200', col:'#ecf0f1', label:'EMA200'},
+    {k:'vwap',   col:'#FFD700', label:'VWAP', dash:[4,3]}
+  ];
+  lines.forEach(function(line){
+    ctx.strokeStyle=line.col; ctx.lineWidth=1.2;
+    if(line.dash)ctx.setLineDash(line.dash); else ctx.setLineDash([]);
+    ctx.beginPath();
+    var first=true;
+    bars.forEach(function(b){
+      var v=b[line.k]; if(v==null)return;
+      var x=tToX(b.t), y=pToY(v);
+      if(first){ctx.moveTo(x,y); first=false;} else ctx.lineTo(x,y);
+    });
+    ctx.stroke();
+  });
+  ctx.setLineDash([]);
+
+  // ヘッダー (上段: タイトル、下段: 凡例)
+  var last=bars[bars.length-1];
+  ctx.textBaseline='top'; ctx.textAlign='left';
+  ctx.font='bold 12px -apple-system,Helvetica,sans-serif';
+  ctx.fillStyle='#ddd';
+  var title=(data.ticker||'')+'  '+(data.date||'')+'   '+bars.length+'本 '+(tf==='5m'?'5分':'1分');
+  ctx.fillText(title,padL+2,4);
+  // 凡例（EMA/VWAP の現在値）
+  ctx.font='11px -apple-system,Helvetica,sans-serif';
+  var lx=padL+2;
+  lines.forEach(function(line){
+    if(last[line.k]==null)return;
+    var txt=line.label+' '+last[line.k].toFixed(1);
+    ctx.fillStyle=line.col;
+    // 色マーカー
+    ctx.fillRect(lx,20,8,8);
+    ctx.fillStyle='#ccc';
+    ctx.fillText(txt,lx+12,18);
+    lx+=ctx.measureText(txt).width+30;
+  });
+
+  // 直近終値の水平ライン + ラベル（右端）
+  var lastY=pToY(last.c);
+  ctx.strokeStyle=last.c>=last.o?'#e74c3c':'#3498db';
+  ctx.setLineDash([3,3]); ctx.lineWidth=0.8;
+  ctx.beginPath(); ctx.moveTo(padL,lastY); ctx.lineTo(padL+chartW,lastY); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle=last.c>=last.o?'#e74c3c':'#3498db';
+  var lbl=last.c.toFixed(0);
+  ctx.textAlign='left'; ctx.textBaseline='middle';
+  ctx.font='bold 11px -apple-system,Helvetica,sans-serif';
+  var tw=ctx.measureText(lbl).width+8;
+  ctx.fillRect(padL+chartW+2,lastY-8,tw,16);
+  ctx.fillStyle='#fff';
+  ctx.fillText(lbl,padL+chartW+6,lastY);
+}
+
 function ImageAnnotator(props){
   var img=props.img, onSave=props.onSave, onClose=props.onClose;
 
   var canvasRef = useRef(null);
+  /* B1: モードタブ ('image' | 'analysis') — Step B2で分析モードの中身を実装予定 */
+  var stMT=useState('image'); var modeTab=stMT[0],setModeTab=stMT[1];
+  /* B2: 分析モードの state */
+  var stAD=useState(null); var analysisData=stAD[0],setAnalysisData=stAD[1];
+  var stAT=useState('1m'); var analysisTf=stAT[0],setAnalysisTf=stAT[1];
+  var analysisFileRef=useRef(null);
   var st0=useState("pan");   var tool=st0[0],setTool=st0[1];
   var st1=useState("#E53935"); var color=st1[0],setColor=st1[1];
   var st2=useState([]);      var colorHist=st2[0],setColorHist=st2[1];
@@ -2009,7 +2213,18 @@ function ImageAnnotator(props){
       ce("div",{className:"toolbar-row",style:{display:"flex",gap:IS_TOUCH?4:6,alignItems:"center",padding:IS_TOUCH?"6px 8px":"10px 14px",
         flexWrap:IS_TOUCH?"nowrap":"wrap",overflowX:IS_TOUCH?"auto":"visible",WebkitOverflowScrolling:"touch",
         borderBottom:"1px solid #1e1e1e",justifyContent:IS_TOUCH?"flex-start":"center",touchAction:"pan-x"}},
-        ce("div",{style:{display:"flex",gap:IS_TOUCH?3:5,flexWrap:"nowrap",flexShrink:0}},
+        /* B1: モードタブ（画像 / 分析） — 常に表示 */
+        ce("div",{style:{display:"flex",gap:2,flexShrink:0,marginRight:8}},
+          ['image','analysis'].map(function(m){
+            return ce("button",{key:m,onClick:function(){setModeTab(m);},
+              style:Object.assign({},TS,{fontSize:IS_TOUCH?11:12,padding:IS_TOUCH?"5px 10px":"6px 12px",
+                background:modeTab===m?(m==='image'?'#6366F1':'#10b981'):'#2a2a2a',
+                color:modeTab===m?'#fff':'#aaa',fontWeight:700})},
+              m==='image'?'🖼 画像':'📊 分析');
+          })
+        ),
+        /* B1: 以下は画像モード時のみ表示 */
+        modeTab==='image' && ce("div",{style:{display:"flex",gap:IS_TOUCH?3:5,flexWrap:"nowrap",flexShrink:0}},
           TOOLS.map(function(t){
             return ce("button",{key:t.id,onClick:function(){switchTool(t.id);},
               style:Object.assign({},TS,{fontSize:IS_TOUCH?11:12,padding:IS_TOUCH?"5px 7px":"6px 10px",
@@ -2018,14 +2233,14 @@ function ImageAnnotator(props){
               t.label);
           })
         ),
-        ce("div",{style:{width:1,height:20,background:"#333",flexShrink:0,margin:"0 4px"}}),
+        modeTab==='image' && ce("div",{style:{width:1,height:20,background:"#333",flexShrink:0,margin:"0 4px"}}),
         /* ⇺ 水平スナップ */
-        ce("button",{
+        modeTab==='image' && ce("button",{
           onClick:function(){setHoriz(function(h2){return !h2;});},
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:horiz?"#D4AC0D":"#2a2a2a",color:horiz?"#1a1a1a":"#aaa"})
         },"⇺水平"),
         /* 📂 過去チャートを参照 */
-        ce("button",{
+        modeTab==='image' && ce("button",{
           onClick:function(){
             if(refPanel){if(refPanel._isBlob)try{URL.revokeObjectURL(refPanel.url);}catch(e3){}setRefPanel(null);setRefImgDim(null);setRefSlideMode(false);setRefOffsetY(0);}
             else{setShowRefPicker(true);}
@@ -2035,11 +2250,11 @@ function ImageAnnotator(props){
             color:refPanel?"#bbf7d0":"#aaa"})
         },"過去チャートを参照"),
         /* ↕ 上下スライド / ここで固定 (参照画像がある時だけ表示) */
-        refPanel&&refPanel.url&&!refSlideMode&&ce("button",{
+        modeTab==='image' && refPanel&&refPanel.url&&!refSlideMode&&ce("button",{
           onClick:function(){setRefSlideMode(true);},
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#7c3aed",color:"#e9d5ff"})
         },"↕ 上下にスライド"),
-        refPanel&&refPanel.url&&refSlideMode&&ce("button",{
+        modeTab==='image' && refPanel&&refPanel.url&&refSlideMode&&ce("button",{
           onClick:function(){setRefSlideMode(false);},
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#b45309",color:"#fef3c7",fontWeight:700})
         },"📌 ここで固定"),
@@ -2061,8 +2276,8 @@ function ImageAnnotator(props){
         ce("button",{onClick:function(){setCancelConfirm(true);},style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#333",color:"#ccc"})},"分析を終了する"),
         ce("button",{onClick:saveAndExport,style:Object.assign({},TS,{fontSize:12,padding:"6px 12px",background:"#2563eb",color:"#fff",fontWeight:700})},"💾 保存・出力")
       ),
-      /* Row 2: color + lineW + opacity + zoom */
-      ce("div",{style:{display:"flex",gap:IS_TOUCH?6:14,alignItems:"center",padding:IS_TOUCH?"5px 8px":"10px 14px",
+      /* Row 2: color + lineW + opacity + zoom — B1: 画像モード時のみ */
+      modeTab==='image' && ce("div",{style:{display:"flex",gap:IS_TOUCH?6:14,alignItems:"center",padding:IS_TOUCH?"5px 8px":"10px 14px",
         flexWrap:"nowrap",overflowX:IS_TOUCH?"auto":"visible",WebkitOverflowScrolling:"touch",
         justifyContent:IS_TOUCH?"flex-start":"center",touchAction:"pan-x"}},
         ce(ColorPicker,{value:color,onChange:setColor,
@@ -2157,8 +2372,8 @@ function ImageAnnotator(props){
           padding:"5px 8px",fontFamily:"inherit",flexShrink:0}},"×")
     ),
 
-    /* ── Canvas area ── */
-    ce("div",{
+    /* ── Canvas area (画像モード時のみ) ── */
+    modeTab==='image' && ce("div",{
       ref:canvasAreaRef,
       onMouseDown:function(e){if(e.target===canvasRef.current||e.target===overlayCanvasRef.current)return;if(refSlideMode)return;var src=e.touches?e.touches[0]:e;panRef.current={sx:src.clientX,sy:src.clientY,px:pan.x,py:pan.y};},
       onMouseMove:function(e){if(!panRef.current)return;var src=e.touches?e.touches[0]:e;setPan({x:panRef.current.px+(src.clientX-panRef.current.sx),y:panRef.current.py+(src.clientY-panRef.current.sy)});},
@@ -2283,6 +2498,94 @@ function ImageAnnotator(props){
         )
       )
     ), /* end canvas area */
+
+    /* ── B2: 分析モード panel ── */
+    modeTab==='analysis' && ce("div",{
+      style:{flex:1,overflow:"hidden",display:"flex",flexDirection:"column",
+        position:"relative",background:"#0a0a0a"}
+    },
+      /* データ未読込時: ローダーUI */
+      !analysisData && ce("div",{
+        style:{flex:1,display:"flex",alignItems:"center",justifyContent:"center",
+          flexDirection:"column",gap:16,padding:20}
+      },
+        ce("div",{style:{fontSize:48,opacity:.6}},"📊"),
+        ce("div",{style:{fontSize:16,color:"#aaa",fontWeight:700,letterSpacing:1}},"分析モード"),
+        ce("div",{style:{fontSize:12,color:"#666",textAlign:"center",lineHeight:1.7,maxWidth:440}},
+          "tick_to_ohlcv.py で生成した ",
+          ce("code",{style:{background:"#1a1a1a",padding:"1px 5px",borderRadius:3,color:"#a5b4fc"}},"{ticker}_{YYYYMMDD}.json"),
+          " を読み込んで、1分足 + EMA + VWAP + 出来高を表示します。"
+        ),
+        ce("button",{
+          onClick:function(){analysisFileRef.current&&analysisFileRef.current.click();},
+          style:{padding:"12px 24px",fontSize:14,fontWeight:700,border:"none",borderRadius:10,
+            background:"#10b981",color:"#fff",cursor:"pointer",fontFamily:"inherit",
+            display:"flex",alignItems:"center",gap:8,marginTop:8}
+        },
+          ce("span",null,"📥"),
+          ce("span",null,"歩み値JSONを読み込む")
+        ),
+        ce("input",{
+          ref:analysisFileRef,type:"file",accept:".json,application/json",
+          style:{display:"none"},
+          onChange:function(e){
+            var f=e.target.files&&e.target.files[0]; if(!f)return;
+            var fr=new FileReader();
+            fr.onload=function(ev){
+              try{
+                var d=JSON.parse(ev.target.result);
+                if(!d||!Array.isArray(d.bars_1m)){
+                  alert('形式が不正です: bars_1m が配列ではありません');
+                  return;
+                }
+                setAnalysisData(d);
+                setAnalysisTf('1m');
+              }catch(err){
+                alert('JSONパースエラー: '+err.message);
+              }
+            };
+            fr.onerror=function(){alert('ファイル読み込みエラー');};
+            fr.readAsText(f);
+            e.target.value='';
+          }
+        })
+      ),
+      /* データ読込済: ヘッダ + DataChart */
+      analysisData && ce(Fragment,null,
+        ce("div",{style:{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",
+          background:"#111",borderBottom:"1px solid #222",flexShrink:0}},
+          ce("div",{style:{fontSize:13,fontWeight:700,color:"#ddd"}},
+            (analysisData.ticker||'?')+'　'+(analysisData.date||'')
+          ),
+          ce("div",{style:{fontSize:11,color:"#666"}},
+            (analysisData.stats?
+              'O'+analysisData.stats.open.toFixed(0)+' H'+analysisData.stats.high.toFixed(0)+
+              ' L'+analysisData.stats.low.toFixed(0)+' C'+analysisData.stats.close.toFixed(0)+
+              '  VWAP'+analysisData.stats.vwap.toFixed(1)
+              :'')
+          ),
+          ce("div",{style:{flex:1}}),
+          /* 1m/5m 切替 */
+          ce("div",{style:{display:"flex",gap:2}},
+            ['1m','5m'].map(function(t){
+              return ce("button",{key:t,onClick:function(){setAnalysisTf(t);},
+                style:{padding:"5px 12px",fontSize:11,fontWeight:700,border:"none",borderRadius:5,
+                  background:analysisTf===t?'#10b981':'#2a2a2a',
+                  color:analysisTf===t?'#fff':'#888',cursor:"pointer",fontFamily:"inherit"}},
+                t==='1m'?'1分':'5分');
+            })
+          ),
+          ce("button",{
+            onClick:function(){
+              if(confirm('別のJSONを読み込む? 現在のデータは破棄されます'))setAnalysisData(null);
+            },
+            style:{padding:"5px 10px",fontSize:11,border:"none",borderRadius:5,
+              background:"#2a2a2a",color:"#888",cursor:"pointer",fontFamily:"inherit"}
+          },"🔄 別のJSON")
+        ),
+        ce(DataChart,{data:analysisData,tf:analysisTf})
+      )
+    ),
 
     /* ── Selection SVG overlay + color bar ── */
     selUI&&ReactDOM.createPortal(
