@@ -945,16 +945,16 @@ function DataChart(props){
   var rafRef=useRef(null);
   var drawRef=useRef({on:false});  // ドラッグ式描画状態 {on, sTM, sP, cTM, cP, pts(freehand用)}
   var ctrlPanRef=useRef(false);    // Ctrl+drag パン状態
-  // 昼休み(11:30=690〜12:30=750)の60分を15分に圧縮した仮想時間軸 — drawDataChart と同じ定義
+  // 昼休み(11:30=690〜12:30=750)の60分を5分に圧縮した仮想時間軸 — drawDataChart と同じ定義
   function tmToVis(t){
     if(t<=690)return t;
-    if(t<=750)return 690+(t-690)*0.25;
-    return t-45;
+    if(t<=750)return 690+(t-690)*(5/60);  // 60min→5min
+    return t-55;                           // 12:30以降 -55分シフト (60-5)
   }
   function visToTm(v){
     if(v<=690)return v;
-    if(v<=705)return 690+(v-690)*4;
-    return v+45;
+    if(v<=695)return 690+(v-690)*12;       // tmVis 690-695 → tm 690-750 (12倍展開)
+    return v+55;
   }
   /* C-uaxis: layoutRefベースで u軸対応の tm→x 変換 (side='cur'|'ref')
      DataChart内 hitTest/crosshair/applyHorizSnap 等から使う */
@@ -981,11 +981,11 @@ function DataChart(props){
   var containerRef=useRef(null);
   var sD=useState({w:800,h:520}); var dim=sD[0],setDim=sD[1];
   /* C-uaxis: 時間軸ビューレンジを u軸単位で管理 {uS, uE}
-     u軸: 0..uTotal (hasRef無時 uTotal=345、hasRef時 695=345+5+345)
-     初期値は hasRef無時の全体表示 {uS:0, uE:345}
+     u軸: 0..uTotal (hasRef無時 uTotal=335、hasRef時 675=335+5+335)
+     初期値は hasRef無時の全体表示 {uS:0, uE:335}
      refAnalysis の open/close で親 (ImageAnnotator) が reset する
      controlled: props.view / props.onViewChange があればそれを使う */
-  var sV=useState({uS:0,uE:345}); var viewLocal=sV[0],setViewLocal=sV[1];
+  var sV=useState({uS:0,uE:335}); var viewLocal=sV[0],setViewLocal=sV[1];
   var view=props.view!==undefined?props.view:viewLocal;
   var setView=props.onViewChange||setViewLocal;
   var panStartRef=useRef(null);
@@ -1037,7 +1037,7 @@ function DataChart(props){
 
   // tf 変更時にビューリセット (controlled 時は親が制御するのでスキップ)
   useEffect(function(){
-    if(props.view===undefined)setView({uS:0,uE:hasRef?695:345});
+    if(props.view===undefined)setView({uS:0,uE:hasRef?675:335});
     if(props.pShift===undefined)setPShift(0);
   },[tf,data]);
 
@@ -1251,7 +1251,7 @@ function DataChart(props){
         if(uCursor>=L.tmVisSpan&&uCursor<L.tmVisSpan+L.gapVis)return;
       }
       setView(function(v){
-        var uS=v.uS||0, uE=v.uE!=null?v.uE:(L?L.uTotal:345);
+        var uS=v.uS||0, uE=v.uE!=null?v.uE:(L?L.uTotal:335);
         var uSpan=uE-uS;
         var frac=cx/chartW;
         var uCenter=uS+frac*uSpan;
@@ -1260,7 +1260,7 @@ function DataChart(props){
           setPShift(function(p){return p + (e.deltaY>0?-0.02:0.02);});
           return v;
         }
-        var uTotalNow=(L&&L.uTotal)||(hasRef?695:345);
+        var uTotalNow=(L&&L.uTotal)||(hasRef?675:335);
         var factor=e.deltaY<0?0.85:1/0.85;
         var newUSpan=Math.max(2,Math.min(uTotalNow,uSpan*factor));
         var newUS=uCenter-frac*newUSpan;
@@ -1548,7 +1548,7 @@ function DataChart(props){
     var dU=-(e.clientX-p.x)/chartW*uSpan0;
     var newUS=p.uS+dU, newUE=p.uE+dU;
     var L=layoutRef.current;
-    var uTotalNow=(L&&L.uTotal)||(hasRef?695:345);
+    var uTotalNow=(L&&L.uTotal)||(hasRef?675:335);
     if(newUS<0){newUS=0;newUE=newUS+uSpan0;}
     if(newUE>uTotalNow){newUE=uTotalNow;newUS=newUE-uSpan0;}
     if(newUS<0)newUS=0;
@@ -1672,7 +1672,7 @@ function DataChart(props){
       var L=layoutRef.current;
       if(!L||!containerRef.current){return;}
       /* C-uaxis: u軸ズーム — uCenter を cxRatio 位置に固定 */
-      var uTotalNow=L.uTotal||(hasRef?695:345);
+      var uTotalNow=L.uTotal||(hasRef?675:335);
       var newUSpan=pr.uSpan0/r;
       if(newUSpan<2)newUSpan=2;
       if(newUSpan>uTotalNow)newUSpan=uTotalNow;
@@ -1767,7 +1767,7 @@ function DataChart(props){
     ce("canvas",{ref:overlayRef,style:{position:"absolute",inset:0,width:"100%",height:"100%",pointerEvents:"none"}}),
     /* ズーム倍率表示 (右下) — C-uaxis: uTotal/uSpan */
     ce("div",{style:{position:"absolute",right:8,bottom:6,fontSize:10,color:"#555",pointerEvents:"none"}},
-      (((hasRef?695:345)/((view.uE||0)-(view.uS||0)||1))).toFixed(1)+'×')
+      (((hasRef?675:335)/((view.uE||0)-(view.uS||0)||1))).toFixed(1)+'×')
   );
 }
 
@@ -1797,21 +1797,21 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   var hasRef=!!(refBars&&refBars.length);
   gapVis=gapVis||5;
 
-  // 昼休み(11:30=690〜12:30=750)の60分を15分に圧縮した仮想時間軸 tmVis
+  // 昼休み(11:30=690〜12:30=750)の60分を5分に圧縮した仮想時間軸 tmVis
   function tmToVis(t){
     if(t<=690)return t;
-    if(t<=750)return 690+(t-690)*0.25;
-    return t-45;
+    if(t<=750)return 690+(t-690)*(5/60);
+    return t-55;
   }
   function visToTm(v){
     if(v<=690)return v;
-    if(v<=705)return 690+(v-690)*4;
-    return v+45;
+    if(v<=695)return 690+(v-690)*12;
+    return v+55;
   }
   /* C-uaxis: u軸 — ref [0, tmVisSpan] + gap [tmVisSpan, tmVisSpan+gapVis] + cur [tmVisSpan+gapVis, uTotal]
      hasRef無時は [0, tmVisSpan] (cur のみ) */
   var tmVisStart=540;         // 09:00 の tmVis値
-  var tmVisSpan=345;          // tmToVis(930)-tmToVis(540) (9:00-15:30 圧縮後)
+  var tmVisSpan=335;          // tmToVis(930)-tmToVis(540) (9:00-15:30、昼5min圧縮後: (930-55)-540=335)
   var uTotal=hasRef?(tmVisSpan*2+gapVis):tmVisSpan;
 
   // view は u軸単位 {uS, uE}。fallback: 未設定なら全体表示
@@ -2248,7 +2248,7 @@ function ImageAnnotator(props){
   /* F1: 過去チャート選択モーダルの表示 */
   var stRPicker=useState(false); var showRefAnalysisPicker=stRPicker[0],setShowRefAnalysisPicker=stRPicker[1];
   /* F2: 両チャート連動用の共有 state */
-  var stAV=useState({uS:0,uE:345});  var analysisView=stAV[0],setAnalysisView=stAV[1];         // 時間軸ビュー u軸 (両chart共通、hasRef時uE=695)
+  var stAV=useState({uS:0,uE:335});  var analysisView=stAV[0],setAnalysisView=stAV[1];         // 時間軸ビュー u軸 (両chart共通、hasRef時uE=675)
   var stAPS=useState(0);             var analysisPShift=stAPS[0],setAnalysisPShift=stAPS[1];   // 現在チャートの pShift
   var stRPS=useState(0);             var refPShift=stRPS[0],setRefPShift=stRPS[1];             // 過去チャートの pShift (独立)
   /* F2: yenPerPx統一用 — 現在chartの自前算出 priceRange を保持し、過去chart にレンジ幅を強制 */
@@ -2275,7 +2275,7 @@ function ImageAnnotator(props){
   /* C-uaxis: analysisData/analysisTf 変更時に view/pShift をリセット (u軸) */
   useEffect(function(){
     if(modeTab==='analysis'&&analysisData){
-      setAnalysisView({uS:0,uE:refAnalysis?695:345});
+      setAnalysisView({uS:0,uE:refAnalysis?675:335});
       setAnalysisPShift(0);
       setRefPShift(0);
     }
@@ -2283,7 +2283,7 @@ function ImageAnnotator(props){
   /* C-uaxis: refAnalysis open/close時に view を全体表示にリセット (uTotal変化に追従) */
   useEffect(function(){
     if(USE_UNIFIED_CHART&&modeTab==='analysis'&&analysisData){
-      setAnalysisView({uS:0,uE:refAnalysis?695:345});
+      setAnalysisView({uS:0,uE:refAnalysis?675:335});
       setAnalysisPShift(0);
     }
   },[refAnalysis]);
@@ -4148,9 +4148,9 @@ function ImageAnnotator(props){
           onPanDelta:function(dx,dy){
             // C-uaxis: u軸上で pan (1400px swipe = 1 uSpan分の pan)
             setAnalysisView(function(v){
-              var uS=v.uS||0, uE=v.uE||345;
+              var uS=v.uS||0, uE=v.uE||335;
               var uSpan=uE-uS;
-              var uTotal=refAnalysisRef.current?695:345;
+              var uTotal=refAnalysisRef.current?675:335;
               var dU=dx*(uSpan/1400);  // バグB: 速度半減
               var newUS=uS+dU, newUE=uE+dU;
               if(newUS<0){newUE-=newUS; newUS=0;}
