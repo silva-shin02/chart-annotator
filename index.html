@@ -47,8 +47,7 @@ var ce         = R.createElement;   // ← h ではなく ce を使う
 
 var IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
 var HAS_HOVER = typeof matchMedia!=='undefined' && matchMedia('(hover: hover)').matches;
-/* C1+: 過去chartと現在chartを1つのキャンバスに連結表示 (trueで統合、falseで旧・左右分離) */
-var USE_UNIFIED_CHART = true;
+/* C-uaxis+C6+C7: 過去chartと現在chartを同一キャンバスに連結表示 (旧左右分離レイアウトはC7で削除) */
 var UNIFIED_GAP_VIS = 5;  // 過去と現在の間のgap (仮想分単位、圧縮軸上)
 
 /* ─── IndexedDB キャッシュ（localStorage 5MB制限回避）──────── */
@@ -1009,13 +1008,8 @@ function DataChart(props){
   var refStrokes=props.refStrokes||[];
 
   // データロード時: 全バーから priceRange を算出 (10円境界に丸める)
-  // F2: props.priceRangeOverride があれば、それを優先して使用 (yenPerPx統一用)
   // C1+: hasRef時は refBars も含めて外接 min/max で両chart共通レンジに (仕様①a)
   useEffect(function(){
-    if(props.priceRangeOverride && !hasRef){
-      setPriceRange(props.priceRangeOverride);
-      return;
-    }
     if(!bars.length){setPriceRange(null);return;}
     var mn=Infinity, mx=-Infinity;
     function scan(barsArr){
@@ -1033,9 +1027,7 @@ function DataChart(props){
     mx=Math.ceil(mx/10)*10 + 5;
     var pr={min:mn, max:mx};
     setPriceRange(pr);
-    // F2: 親へ自前算出 priceRange を通知 (連動チャートが yenPerPx を揃えるため)
-    if(props.onBaseRangeComputed)props.onBaseRangeComputed(pr);
-  },[data,tf,props.priceRangeOverride,refData,hasRef]);
+  },[data,tf,refData,hasRef]);
 
   // tf 変更時にビューリセット (controlled 時は親が制御するのでスキップ)
   useEffect(function(){
@@ -2339,43 +2331,13 @@ function ImageAnnotator(props){
   /* F2: 両チャート連動用の共有 state */
   var stAV=useState({uS:0,uE:335});  var analysisView=stAV[0],setAnalysisView=stAV[1];         // 時間軸ビュー u軸 (両chart共通、hasRef時uE=675)
   var stAPS=useState(0);             var analysisPShift=stAPS[0],setAnalysisPShift=stAPS[1];   // 現在チャートの pShift
-  var stRPS=useState(0);             var refPShift=stRPS[0],setRefPShift=stRPS[1];             // 過去チャートの pShift (独立)
-  /* F2: yenPerPx統一用 — 現在chartの自前算出 priceRange を保持し、過去chart にレンジ幅を強制 */
-  var stCBR=useState(null); var curBaseRange=stCBR[0],setCurBaseRange=stCBR[1];
-  /* F2: 過去chart の priceRangeOverride (useMemo で参照安定化 — でないと DataChart 内 useEffect が
-         毎renderで発火して setPriceRange ループ → フリーズの原因になる) */
-  var refPriceRangeOverride = useMemo(function(){
-    if(!curBaseRange||!refAnalysis||!refAnalysis.analysisData)return null;
-    var bk=analysisTf==='5m'?'bars_5m':'bars_1m';
-    var rbars=refAnalysis.analysisData[bk]||[];
-    if(!rbars.length)return null;
-    var rmn=Infinity, rmx=-Infinity;
-    rbars.forEach(function(b){
-      if(b.l<rmn)rmn=b.l; if(b.h>rmx)rmx=b.h;
-      ['ema9','ema22','ema50','ema200','vwap'].forEach(function(k){
-        var v=b[k]; if(v!=null){if(v<rmn)rmn=v;if(v>rmx)rmx=v;}
-      });
-    });
-    var refCenter=(rmn+rmx)/2;
-    var width=curBaseRange.max-curBaseRange.min;
-    var centerSnap=Math.round(refCenter/10)*10;
-    return {min:centerSnap-width/2, max:centerSnap+width/2};
-  }, [refAnalysis, analysisTf, curBaseRange]);
-  /* C-uaxis: analysisData/analysisTf 変更時に view/pShift をリセット (u軸) */
+  /* C-uaxis: analysisData/analysisTf/refAnalysis 変更時に view/pShift をリセット (u軸、uTotal変化に追従) */
   useEffect(function(){
     if(modeTab==='analysis'&&analysisData){
       setAnalysisView({uS:0,uE:refAnalysis?675:335});
       setAnalysisPShift(0);
-      setRefPShift(0);
     }
-  },[analysisData,analysisTf]);
-  /* C-uaxis: refAnalysis open/close時に view を全体表示にリセット (uTotal変化に追従) */
-  useEffect(function(){
-    if(USE_UNIFIED_CHART&&modeTab==='analysis'&&analysisData){
-      setAnalysisView({uS:0,uE:refAnalysis?675:335});
-      setAnalysisPShift(0);
-    }
-  },[refAnalysis]);
+  },[analysisData,analysisTf,refAnalysis]);
   /* F2: 十字カーソル共有 ({tm, yOffset}) — tmは絶対時刻(分)、yOffsetはpriceTop基準のcanvas内y */
   var analysisCursorRef=useRef(null);
   var stCB=useState(0); var cursorBump=stCB[0],setCursorBump=stCB[1];
@@ -3803,6 +3765,12 @@ function ImageAnnotator(props){
             background:refAnalysis?"#16a34a":"#7c3aed",
             color:refAnalysis?"#bbf7d0":"#e9d5ff"})
         },refAnalysis?"閉じる":"過去チャートを開く"),
+        /* C7: 過去chart open時のみ「↺変更」ボタン (1clickで別chartに切替) */
+        modeTab==='analysis' && analysisData && refAnalysis && ce("button",{
+          onClick:function(){setShowRefAnalysisPicker(true);},
+          title:"他のチャートに変更",
+          style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#2a2a2a",color:"#aaa"})
+        },"↺変更"),
         modeTab==='analysis' && analysisData && ce("button",{
           onClick:function(){if(confirm('別のJSONを読み込む? 現在のデータは破棄されます')){var empty={'1m':[],'5m':[]};setAnalysisData(null);setAnalysisStrokes(empty);analysisHistRef.current={'1m':[{cur:[],ref:[]}],'5m':[{cur:[],ref:[]}]};analysisFutRef.current={'1m':[],'5m':[]};setCanUndo(false);setCanRedo(false);}},
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#2a2a2a",color:"#aaa"})
@@ -4114,43 +4082,40 @@ function ImageAnnotator(props){
       analysisData && ce(Fragment,null,
         /* 横並びコンテナ (両チャートで横スクロール) */
         ce("div",{style:{flex:1,display:"flex",flexDirection:"row",overflowX:"auto",overflowY:"hidden",WebkitOverflowScrolling:"touch"}},
-          /* ── 現在チャート (C1+: 統合chart時は refAnalysis有でもこのcontainerが全幅) ── */
+          /* ── 現在チャート (統合chart: refAnalysis有でも全幅、同一キャンバスに連結描画) ── */
           ce("div",{style:{
             display:"flex",flexDirection:"column",
             // バグA根治: 幅を flex-basis で明示指定 — minWidth:auto + flex:0 0 auto の循環参照でタブレットcanvas width暴走 (33M px化) を防ぐ
-            // C1+: USE_UNIFIED_CHART有効時は refAnalysis あっても全幅 (過去chartは別containerに描画せず、同一キャンバスに連結)
-            flex:(refAnalysis&&!USE_UNIFIED_CHART)?("0 0 "+(IS_TOUCH?480:600)+"px"):"1 1 100%",
+            flex:"1 1 100%",
             alignSelf:"stretch",    // 親flex row経由で高さ継承
             minHeight:0,            // flex child のminHeight default 'auto' を上書き
-            borderRight:(refAnalysis&&!USE_UNIFIED_CHART)?"1px solid #333":"none"
+            borderRight:"none"
           }},
             /* メタ行 (ticker + date のみ) — C2+: refあり時は両日付連結 */
             ce("div",{style:{display:"flex",alignItems:"center",gap:10,padding:"6px 12px",
               background:"#111",borderBottom:"1px solid #222",flexShrink:0}},
               ce("div",{style:{fontSize:13,fontWeight:700,color:"#ddd"}},
                 (analysisData.ticker||'?')+'　'+
-                ((USE_UNIFIED_CHART&&refAnalysis&&refAnalysis.analysisData)
+                ((refAnalysis&&refAnalysis.analysisData)
                   ?((refAnalysis.analysisData.date||'')+' ⇄ '+(analysisData.date||''))
                   :(analysisData.date||''))
               )
             ),
             ce(DataChart,{
               data:analysisData, tf:analysisTf, showCrosshair:showCrosshair,
-              /* C1+: 過去chartデータを渡して同一キャンバスに連結描画 (flag切替可) */
-              refData:(USE_UNIFIED_CHART&&refAnalysis)?refAnalysis.analysisData:null,
-              /* C3+: 過去chart側ストロークも連結描画 (書込みはC6) */
-              refStrokes:(USE_UNIFIED_CHART&&refAnalysis&&refAnalysis.analysisStrokes)?(refAnalysis.analysisStrokes[analysisTf]||[]):null,
+              /* C1+: 過去chartデータを渡して同一キャンバスに連結描画 */
+              refData:refAnalysis?refAnalysis.analysisData:null,
+              /* C3+: 過去chart側ストロークも連結描画 (C6で書込対応) */
+              refStrokes:(refAnalysis&&refAnalysis.analysisStrokes)?(refAnalysis.analysisStrokes[analysisTf]||[]):null,
               drawTool:tool, drawColor:color, drawWidth:lineW, drawOpacity:opacity,
               drawFontSize:fontSize, drawFontBold:fontBold,
               horiz:horiz,
-              /* F2: 時間軸ビュー / pShift controlled (両チャート連動) */
+              /* F2: 時間軸ビュー / pShift controlled */
               view:analysisView, onViewChange:setAnalysisView,
               pShift:analysisPShift, onPShiftChange:setAnalysisPShift,
               /* F2: 十字カーソル連動 */
               externalCursorRef:analysisCursorRef, externalCursorBump:cursorBump,
               onExternalCursorChange:notifyAnalysisCursor,
-              /* F2: 自前算出 priceRange を親に通知 (yenPerPx統一用) */
-              onBaseRangeComputed:setCurBaseRange,
               strokes:(analysisStrokes&&analysisStrokes[analysisTf])||[],
               /* C6: editingTextInfo={side,idx} or null を渡す */
               editingTextIdx:(analysisTextInput&&analysisTextInput.editIdx>=0)
@@ -4302,59 +4267,8 @@ function ImageAnnotator(props){
             });
           }
         })
-        ), /* end 現在チャート container div */
-        /* ── 過去チャート (refAnalysis時のみ、ただしUSE_UNIFIED_CHART=trueなら統合表示に任せて非render) ── */
-        refAnalysis && !USE_UNIFIED_CHART && ce("div",{style:{
-          display:"flex",flexDirection:"column",
-          flex:"0 0 "+(IS_TOUCH?480:600)+"px",   // バグA根治: 幅を flex-basis で明示指定
-          alignSelf:"stretch",
-          minHeight:0
-        }},
-          /* メタ行 (ticker + date + 他のチャートに変更 + ✕) */
-          ce("div",{style:{display:"flex",alignItems:"center",gap:10,padding:"6px 12px",
-            background:"#111",borderBottom:"1px solid #222",flexShrink:0}},
-            ce("div",{style:{fontSize:13,fontWeight:700,color:"#ddd",flex:1}},
-              (refAnalysis.analysisData&&refAnalysis.analysisData.ticker||refAnalysis.ticker||'?')+'　'+
-              (refAnalysis.analysisData&&refAnalysis.analysisData.date||'')
-            ),
-            ce("button",{
-              onClick:function(){setShowRefAnalysisPicker(true);},
-              title:"他のチャートに変更",
-              style:{padding:"4px 10px",fontSize:11,fontWeight:700,border:"none",borderRadius:5,
-                background:"#2a2a2a",color:"#aaa",cursor:"pointer",fontFamily:"inherit"}
-            },"他のチャートに変更"),
-            ce("button",{
-              onClick:function(){setRefAnalysis(null);},
-              title:"過去チャートを閉じる",
-              style:{padding:"4px 9px",fontSize:13,fontWeight:700,border:"none",borderRadius:5,
-                background:"#2a2a2a",color:"#888",cursor:"pointer",fontFamily:"inherit"}
-            },"✕")
-          ),
-          /* F2段階: 過去チャート DataChart (連動: view/tf/cursor、独立: pShift) */
-          ce(DataChart,{
-            data:refAnalysis.analysisData,
-            tf:analysisTf,
-            showCrosshair:showCrosshair,
-            /* 連動 */
-            view:analysisView, onViewChange:setAnalysisView,
-            externalCursorRef:analysisCursorRef, externalCursorBump:cursorBump,
-            onExternalCursorChange:notifyAnalysisCursor,
-            /* yenPerPx 統一: useMemoで安定化した priceRangeOverride を渡す */
-            priceRangeOverride:refPriceRangeOverride,
-            /* 独立 */
-            pShift:refPShift, onPShiftChange:setRefPShift,
-            drawTool:'pan',            // F3まで描画不可
-            drawColor:color, drawWidth:lineW, drawOpacity:opacity,
-            drawFontSize:fontSize, drawFontBold:fontBold,
-            horiz:false,
-            strokes:(refAnalysis.analysisStrokes&&refAnalysis.analysisStrokes[analysisTf])||[],
-            editingTextIdx:null,  /* C6: null(未編集) */
-            textInputActive:false,
-            onStrokeAdd:function(){}, onStrokeDelete:function(){}, onStrokeDeleteMany:function(){},
-            onStrokeUpdate:function(){}, onRequestTextInput:function(){}, onEraserSessionEnd:function(){}
-          })
-        ) /* end 過去チャート container div */
-        ), /* end 横並びコンテナ */
+        ) /* end 現在チャート container div (統合chart: refAnalysis有でもこの1つに集約) */
+        ), /* end 横並びコンテナ (実質ラップ1枚、旧レイアウト削除で1カラムのみ) */
         /* F2: VirtualJoystick (タッチデバイスのみ、分析モードのpan制御) */
         IS_TOUCH&&ce(VirtualJoystick,{
           onPanDelta:function(dx,dy){
