@@ -2372,8 +2372,8 @@ function ImageAnnotator(props){
           padding:"5px 8px",fontFamily:"inherit",flexShrink:0}},"×")
     ),
 
-    /* ── Canvas area (画像モード時のみ) ── */
-    modeTab==='image' && ce("div",{
+    /* ── Canvas area (画像モード時のみ表示、アンマウントしないことでwheel等のイベントを保持) ── */
+    ce("div",{
       ref:canvasAreaRef,
       onMouseDown:function(e){if(e.target===canvasRef.current||e.target===overlayCanvasRef.current)return;if(refSlideMode)return;var src=e.touches?e.touches[0]:e;panRef.current={sx:src.clientX,sy:src.clientY,px:pan.x,py:pan.y};},
       onMouseMove:function(e){if(!panRef.current)return;var src=e.touches?e.touches[0]:e;setPan({x:panRef.current.px+(src.clientX-panRef.current.sx),y:panRef.current.py+(src.clientY-panRef.current.sy)});},
@@ -2382,7 +2382,7 @@ function ImageAnnotator(props){
       onTouchStart:function(e){if(e.target===canvasRef.current||e.target===overlayCanvasRef.current)return;if(refSlideMode)return;if(e.touches.length!==1)return;var src=e.touches[0];panRef.current={sx:src.clientX,sy:src.clientY,px:pan.x,py:pan.y};},
       onTouchMove:function(e){if(!panRef.current||!e.touches.length)return;var src=e.touches[0];setPan({x:panRef.current.px+(src.clientX-panRef.current.sx),y:panRef.current.py+(src.clientY-panRef.current.sy)});},
       onTouchEnd:function(){panRef.current=null;},
-      style:{flex:1,overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center",position:"relative",cursor:"grab",touchAction:"none"}
+      style:{flex:1,overflow:"hidden",display:modeTab==='image'?"flex":"none",alignItems:"center",justifyContent:"center",position:"relative",cursor:"grab",touchAction:"none"}
     },
       /* ── 参照画像 + メインキャンバスの連結ラッパー ── */
       ce("div",{style:{
@@ -2499,9 +2499,9 @@ function ImageAnnotator(props){
       )
     ), /* end canvas area */
 
-    /* ── B2: 分析モード panel ── */
-    modeTab==='analysis' && ce("div",{
-      style:{flex:1,overflow:"hidden",display:"flex",flexDirection:"column",
+    /* ── B2: 分析モード panel (アンマウントしない) ── */
+    ce("div",{
+      style:{flex:1,overflow:"hidden",display:modeTab==='analysis'?"flex":"none",flexDirection:"column",
         position:"relative",background:"#0a0a0a"}
     },
       /* データ未読込時: ローダーUI */
