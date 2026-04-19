@@ -1307,8 +1307,10 @@ function DataChart(props){
     setView({s:newS,e:newE});
     if(priceRange){
       var L=layoutRef.current;
-      var priceH=L?L.priceH:(rect2.height-34-22-Math.max(50,Math.round((rect2.height-56)*0.18))-6);
-      var yenPerPx=(priceRange.max-priceRange.min)/priceH;
+      var priceH=L?L.priceH:(rect2.height-34-22-Math.max(44,Math.round((rect2.height-56)*0.13))-6);
+      // yenPerPx は現在表示の実効レンジから計算 (ズーム後の値を反映)
+      var effRange=L?(L.pmax-L.pmin):(priceRange.max-priceRange.min);
+      var yenPerPx=effRange/priceH;
       setPShift(p.ps + (e.clientY-p.y)*yenPerPx);
     }
   }
@@ -1388,7 +1390,8 @@ function DataChart(props){
       pinchRef.current={
         d0:d0, cx0:cx0, cy0:cy0,
         s0:view.s, e0:view.e, ps0:pShift,
-        tmCenter:tpC?tpC.tm:null
+        tmCenter:tpC?tpC.tm:null,
+        pCenter:tpC?tpC.p:null  // ピンチ中心の価格 (ズーム中は画面上この位置にこの価格を固定)
       };
       // 既存の描画/パン/移動をキャンセル
       drawRef.current={on:false};
@@ -1428,10 +1431,23 @@ function DataChart(props){
       if(newS<540){newS=540;newE=newS+newSpan;}
       if(newE>930){newE=930;newS=newE-newSpan;}
       setView({s:newS,e:newE});
-      // 価格軸縦シフト: 中心のy移動量で pShift 変化
-      var priceH=L.priceH;
-      var yenPerPx=(L.pmax-L.pmin)/priceH;
-      setPShift(pr.ps0 + (cy-pr.cy0)*yenPerPx);
+      // 価格軸: ピンチ中心の価格 pCenter を cy (現在のピンチ中心y) に配置するよう pShift 逆算
+      //        これで「指が動けば pan」「開きが大きくなれば縦方向も広がる」両方を満たす
+      if(pr.pCenter!=null){
+        var ORIG_TIME_SPAN_P=390;
+        var zoomFactorP=ORIG_TIME_SPAN_P/newSpan;
+        var baseRangeP=priceRange.max-priceRange.min;
+        var baseCenterP=(priceRange.min+priceRange.max)/2;
+        var newPriceRangeP=baseRangeP/zoomFactorP;
+        if(newPriceRangeP<20)newPriceRangeP=20;
+        var cyLocal=cy-rect.top;
+        // pToY(pCenter) = cyLocal を満たす pShift:
+        //   pmax_new - (cyLocal-priceTop)/priceH * newPriceRangeP = pCenter
+        //   pmax_new = baseCenterP + newPShift + newPriceRangeP/2
+        //   ∴ newPShift = pCenter + (cyLocal-priceTop)/priceH * newPriceRangeP - baseCenterP - newPriceRangeP/2
+        var newPShift=pr.pCenter + (cyLocal-L.priceTop)/L.priceH*newPriceRangeP - baseCenterP - newPriceRangeP/2;
+        setPShift(newPShift);
+      }
       return;
     }
     if(!e.touches.length)return;
@@ -1539,9 +1555,18 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   var visibleBars=bars.filter(function(b){var m=tToMin(b.t);return m>=vS&&m<=vE;});
   if(visibleBars.length===0) visibleBars=bars;
 
-  // 価格軸: 固定の priceRange + 縦シフト (タイム軸操作では変化しない)
-  var pmin=priceRange.min + pShift;
-  var pmax=priceRange.max + pShift;
+  // 価格軸: 時間軸ズーム倍率と同じ倍率で範囲を縮小
+  // (10円幅固定 → 画面上の10円マスの縦px幅はズームに応じて広がる)
+  var ORIG_TIME_SPAN=390; // 基準時間幅 (540→930 = 9:00→15:30)
+  var curTimeSpan=vE-vS;
+  var zoomFactor=curTimeSpan>0?ORIG_TIME_SPAN/curTimeSpan:1;
+  var baseRange=priceRange.max-priceRange.min;
+  var baseCenter=(priceRange.min+priceRange.max)/2;
+  var newRange=baseRange/zoomFactor;
+  // 下限: 狭まりすぎて10円幅が見えなくなると意味がないので、最低でも 2*10=20円は表示
+  if(newRange<20)newRange=20;
+  var pmin=(baseCenter+pShift)-newRange/2;
+  var pmax=(baseCenter+pShift)+newRange/2;
   function pToY(p){return priceTop+(1-(p-pmin)/(pmax-pmin))*priceH;}
 
   // 出来高レンジ (表示範囲内)
