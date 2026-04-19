@@ -2,13 +2,15 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no,viewport-fit=cover"/>
 <meta name="mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-title" content="チャート分析ツール 完全版"/>
 <meta name="theme-color" content="#111111"/>
 <link rel="manifest" href="manifest.json"/>
 <title>チャート分析ツール 完全版</title>
+<script>/* ?debug=1 でErudaコンソール起動 (タブレット調査用、通常時は無害) */
+if(location.search.indexOf('debug=1')>=0){var _es=document.createElement('script');_es.src='https://cdn.jsdelivr.net/npm/eruda';_es.onload=function(){try{eruda.init();}catch(e){}};document.head.appendChild(_es);}</script>
 <style>
 *,*::before,*::after{box-sizing:border-box}
 html,body{margin:0;padding:0;width:100%;height:100%;background:#111;color:#fff;
@@ -1032,7 +1034,11 @@ function DataChart(props){
 
   // メインチャート描画
   useEffect(function(){
-    var canvas=canvasRef.current; if(!canvas||!bars.length||!priceRange)return;
+    var canvas=canvasRef.current;
+    if(!canvas||!bars.length||!priceRange){
+      if(props.priceRangeOverride)console.log('[bugA] DataChart DRAW SKIP (refChart)', {hasCanvas:!!canvas, barsLen:bars.length, hasPR:!!priceRange, dim:dim});
+      return;
+    }
     drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx);
     // 描画直後に十字カーソルも再描画 (リサイズ・ズーム等でレイアウト変わった時)
     drawCrosshair();
@@ -1672,6 +1678,7 @@ function DataChart(props){
   },[selectedIdx,onStrokeDelete]);
 
   if(!data||!bars.length){
+    if(props.priceRangeOverride)console.log('[bugA] DataChart NODATA (refChart)', {hasData:!!data, barsLen:bars.length, barsKey:barsKey, tf:tf});
     return ce("div",{ref:containerRef,style:{flex:1,display:"flex",alignItems:"center",justifyContent:"center",color:"#555"}},
       ce("div",null,"データなし"));
   }
@@ -2138,6 +2145,20 @@ function ImageAnnotator(props){
     var centerSnap=Math.round(refCenter/10)*10;
     return {min:centerSnap-width/2, max:centerSnap+width/2};
   }, [refAnalysis, analysisTf, curBaseRange]);
+  /* [bugA] 調査: refAnalysis / curBaseRange / refOverride の変化を可視化 (原因特定後に除去) */
+  useEffect(function(){
+    if(!refAnalysis){console.log('[bugA] refAnalysis=null');return;}
+    console.log('[bugA] refAnalysis set', {
+      ticker:refAnalysis.ticker,
+      hasData:!!refAnalysis.analysisData,
+      bars1m:(refAnalysis.analysisData&&refAnalysis.analysisData.bars_1m||[]).length,
+      bars5m:(refAnalysis.analysisData&&refAnalysis.analysisData.bars_5m||[]).length,
+      analysisTf:analysisTf
+    });
+  },[refAnalysis, analysisTf]);
+  useEffect(function(){
+    console.log('[bugA] curBase=',curBaseRange,' refOverride=',refPriceRangeOverride);
+  },[curBaseRange, refPriceRangeOverride]);
   /* F2: analysisData/analysisTf 変更時に view/pShift をリセット (両chart 共通) */
   useEffect(function(){
     if(modeTab==='analysis'&&analysisData){
@@ -4003,7 +4024,7 @@ function ImageAnnotator(props){
               var visS=tTV(v.s), visE=tTV(v.e);
               var visSpan=visE-visS;
               var dVis=dx*(visSpan/1400);  // バグB: ジョイスティック横速度を半減
-              var ns=visS-dVis, ne=visE-dVis;
+              var ns=visS+dVis, ne=visE+dVis;  // 倒した方向にスクロール (ジョイスティック符号反転)
               if(ns<540){ne+=540-ns; ns=540;}
               if(ne>tTV(930)){ns-=(ne-tTV(930)); ne=tTV(930);}
               if(ns<540)ns=540; if(ne>tTV(930))ne=tTV(930);
