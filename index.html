@@ -804,12 +804,16 @@ function RefAnalysisPicker(props){
   var s3=useState(null);          var loading=s3[0],setLoading=s3[1];
   var BT2={border:"none",cursor:"pointer",fontFamily:"inherit"};
 
-  // 現在のticker かつ 自分自身以外 のチャートのみ表示、保存日時の降順
+  // 現在のticker かつ 自分自身以外 のチャートのみ表示、保存日(降順) → name(降順) で「日付新しい順」
   var charts=meta.filter(function(m){
     if(!currentTicker||m.ticker!==currentTicker)return false;
     if(currentDraftId&&m.id===currentDraftId)return false;
     return true;
-  }).sort(function(a,b){return(b.savedAt||0)-(a.savedAt||0);});
+  }).sort(function(a,b){
+    var sd=(b.savedAt||0)-(a.savedAt||0);
+    if(sd!==0)return sd;
+    return (b.name||'').localeCompare(a.name||'');
+  });
 
   function pickAnalysis(id, chartMeta){
     setLoading(id);
@@ -982,9 +986,10 @@ function DataChart(props){
     if(props.onBaseRangeComputed)props.onBaseRangeComputed(pr);
   },[data,tf,props.priceRangeOverride]);
 
-  // tf 変更時にビューリセット
+  // tf 変更時にビューリセット (controlled 時は親が制御するのでスキップ)
   useEffect(function(){
-    setView({s:540,e:930}); setPShift(0);
+    if(props.view===undefined)setView({s:540,e:930});
+    if(props.pShift===undefined)setPShift(0);
   },[tf,data]);
 
   // コンテナサイズ追従 (ResizeObserver で display:none → 表示切替も捉える)
@@ -2077,6 +2082,14 @@ function ImageAnnotator(props){
   var stRPS=useState(0);             var refPShift=stRPS[0],setRefPShift=stRPS[1];             // 過去チャートの pShift (独立)
   /* F2: yenPerPx統一用 — 現在chartの自前算出 priceRange を保持し、過去chart にレンジ幅を強制 */
   var stCBR=useState(null); var curBaseRange=stCBR[0],setCurBaseRange=stCBR[1];
+  /* F2: analysisData/analysisTf 変更時に view/pShift をリセット (両chart 共通) */
+  useEffect(function(){
+    if(modeTab==='analysis'&&analysisData){
+      setAnalysisView({s:540,e:930});
+      setAnalysisPShift(0);
+      setRefPShift(0);
+    }
+  },[analysisData,analysisTf]);
   /* F2: 十字カーソル共有 ({tm, yOffset}) — tmは絶対時刻(分)、yOffsetはpriceTop基準のcanvas内y */
   var analysisCursorRef=useRef(null);
   var stCB=useState(0); var cursorBump=stCB[0],setCursorBump=stCB[1];
@@ -3940,6 +3953,23 @@ function ImageAnnotator(props){
           })
         ) /* end 過去チャート container div */
         ), /* end 横並びコンテナ */
+        /* F2: VirtualJoystick (タッチデバイスのみ、分析モードのpan制御) */
+        IS_TOUCH&&ce(VirtualJoystick,{
+          onPanDelta:function(dx,dy){
+            // 時間軸: dx[px] → 分シフト (チャート幅 ~700px 想定)
+            setAnalysisView(function(v){
+              var span=v.e-v.s;
+              var dMin=dx*(span/700);
+              var ns=v.s-dMin, ne=v.e-dMin;
+              if(ns<540){ne+=540-ns; ns=540;}
+              if(ne>930){ns-=(ne-930); ne=930;}
+              if(ns<540)ns=540; if(ne>930)ne=930;
+              return {s:ns,e:ne};
+            });
+            // 価格軸: dy[px] → pShift シフト (1px ≒ 1yen)
+            setAnalysisPShift(function(ps){return ps-dy;});
+          }
+        }),
         /* floating undo/redo (分析モード用、画像モードと同スタイル) */
         ce("div",{
           style:Object.assign(
