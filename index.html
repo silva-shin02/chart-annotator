@@ -844,9 +844,9 @@ function DataChart(props){
         var v=b[k]; if(v!=null){if(v<mn)mn=v;if(v>mx)mx=v;}
       });
     });
-    // 10円境界に丸める + 余白
-    mn=Math.floor(mn/10)*10 - 10;
-    mx=Math.ceil(mx/10)*10 + 10;
+    // 10円境界に丸める + 余白 (±5円: 10円1マスが画面上広く見えるよう最小限)
+    mn=Math.floor(mn/10)*10 - 5;
+    mx=Math.ceil(mx/10)*10 + 5;
     setPriceRange({min:mn, max:mx});
   },[data,tf]);
 
@@ -944,35 +944,7 @@ function DataChart(props){
         drawSelectionHighlight(ctx,shifted,minToXloc2,pToYloc2,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
       }
     }
-    /* eraser ドラッグ中プレビュー (削除予定 stroke を赤枠で囲う) */
-    if(L&&drawRef.current&&drawRef.current.on&&drawRef.current.eraser&&drawRef.current.deletedIdxs){
-      function minToXlocE(mm){return L.padL+((mm-L.vS)/(L.vE-L.vS))*L.chartW;}
-      function pToYlocE(pp){return L.priceTop+(1-(pp-L.pmin)/(L.pmax-L.pmin))*L.priceH;}
-      ctx.save();
-      ctx.strokeStyle='#ff3b30'; ctx.lineWidth=2; ctx.setLineDash([3,3]); ctx.globalAlpha=0.85;
-      drawRef.current.deletedIdxs.forEach(function(ei){
-        var es=strokes[ei]; if(!es||!es.anchors||!es.anchors.length)return;
-        var tpe=es.type||es.tool;
-        if(tpe==='horizontal'){
-          var yy=pToYlocE(es.anchors[0].p);
-          ctx.strokeRect(L.padL-2,yy-4,L.chartW+4,8);
-        }else if(tpe==='text'){
-          var ax=es.anchors[0];
-          var ex=minToXlocE(ax.tm), ey=pToYlocE(ax.p);
-          var efs=es.fontSize||18;
-          ctx.strokeRect(ex-4,ey-4,(es.text||'').length*efs*0.6+8,efs*1.3+8);
-        }else if(es.anchors.length>=2){
-          var mnX=Infinity,mxX=-Infinity,mnY=Infinity,mxY=-Infinity;
-          es.anchors.forEach(function(a){
-            var x=minToXlocE(a.tm), y=pToYlocE(a.p);
-            if(x<mnX)mnX=x; if(x>mxX)mxX=x;
-            if(y<mnY)mnY=y; if(y>mxY)mxY=y;
-          });
-          ctx.strokeRect(mnX-4,mnY-4,(mxX-mnX)+8,(mxY-mnY)+8);
-        }
-      });
-      ctx.restore();
-    }
+    /* eraser: 赤枠プレビューは廃止 — なぞった瞬間に即削除する方式 */
 
     /* 十字カーソル */
     if(!showCrosshair||!L)return;
@@ -1192,11 +1164,13 @@ function DataChart(props){
     var tp=pxToTimePrice(e.clientX,e.clientY);
     if(!tp||tp.p==null)return;
     if(drawTool==='eraser'){
-      // ドラッグ範囲削除: 開始、最初のヒットを deletedIdxs に入れる
-      drawRef.current={on:true, eraser:true, deletedIdxs:new Set()};
+      // 即時削除: hit を見つけたら silent で消し、ドラッグ中ずっと続ける
+      drawRef.current={on:true, eraser:true, didDelete:false};
       var eIdx=hitTestStroke(e.clientX,e.clientY);
-      if(eIdx!=null)drawRef.current.deletedIdxs.add(eIdx);
-      drawCrosshair();
+      if(eIdx!=null&&onStrokeDelete){
+        onStrokeDelete(eIdx, true); // silent=true: 履歴コミットしない
+        drawRef.current.didDelete=true;
+      }
       return;
     }
     if(drawTool==='lasso'){
@@ -1266,12 +1240,12 @@ function DataChart(props){
       }
       return;
     }
-    // eraser ドラッグ中: ヒットしたstrokeをdeletedIdxsに追加
+    // eraser ドラッグ中: hitしたら即削除 (silent)
     if(drawRef.current.on&&drawRef.current.eraser){
       var ehi=hitTestStroke(e.clientX,e.clientY);
-      if(ehi!=null)drawRef.current.deletedIdxs.add(ehi);
-      if(!rafRef.current){
-        rafRef.current=requestAnimationFrame(function(){drawCrosshair();rafRef.current=null;});
+      if(ehi!=null&&onStrokeDelete){
+        onStrokeDelete(ehi, true);
+        drawRef.current.didDelete=true;
       }
       return;
     }
@@ -1339,16 +1313,10 @@ function DataChart(props){
     }
   }
   function onMouseUp(){
-    // eraser ドラッグ終了 → 削除を一括コミット
+    // eraser ドラッグ終了: 1件以上消したら履歴コミット
     if(drawRef.current.on&&drawRef.current.eraser){
-      var del=Array.from(drawRef.current.deletedIdxs||[]);
-      if(del.length){
-        if(props.onStrokeDeleteMany){
-          props.onStrokeDeleteMany(del);
-        }else if(onStrokeDelete){
-          // フォールバック: 降順で1件ずつ
-          del.sort(function(a,b){return b-a;}).forEach(function(i){onStrokeDelete(i);});
-        }
+      if(drawRef.current.didDelete&&props.onEraserSessionEnd){
+        props.onEraserSessionEnd();
       }
       drawRef.current={on:false};
       drawCrosshair();
@@ -1555,7 +1523,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
 
   // レイアウト
   var padL=10, padR=60, padT=34, padB=22;
-  var volH=Math.max(50,Math.round((H-padT-padB)*0.18));
+  var volH=Math.max(44,Math.round((H-padT-padB)*0.13));
   var priceH=H-padT-padB-volH-6;
   var chartW=W-padL-padR;
   var priceTop=padT, priceBot=padT+priceH;
@@ -2008,19 +1976,25 @@ function ImageAnnotator(props){
   var toolMemRef=useRef({}); // ツール別の色・線幅・透明度を記憶
   var prevHorizRef=useRef(false); // dotted切替前の水平スナップ状態
   /* 分析モード用 ref */
-  var analysisHistRef=useRef([[]]);           // 分析モード用 undo 履歴
-  var analysisFutRef=useRef([]);              // 分析モード用 redo 未来
-  var analysisTextInputRef=useRef(null);      // stale closure 回避
-  var analysisFloatDragRef=useRef(null);      // 分析モード floating undo/redo のドラッグ
-  var analysisTextareaRef=useRef(null);       // 分析モード text 入力 textarea
+  var analysisHistRef=useRef({'1m':[[]],'5m':[[]]});  // tf別 undo 履歴 (各tfの stroke配列のスタック)
+  var analysisFutRef=useRef({'1m':[],'5m':[]});       // tf別 redo 未来
+  var analysisTfRef=useRef('1m');                     // 現在の tf (stale closure回避)
+  var analysisTextInputRef=useRef(null);              // stale closure 回避
+  var analysisFloatDragRef=useRef(null);              // 分析モード floating undo/redo のドラッグ
+  var analysisTextareaRef=useRef(null);               // 分析モード text 入力 textarea
   useEffect(function(){toolRef.current=tool;},[tool]);
   useEffect(function(){zoomRef.current=zoom;},[zoom]);
   useEffect(function(){analysisTextInputRef.current=analysisTextInput;},[analysisTextInput]);
-  /* マウント時: 分析モード履歴を現在の analysisStrokes で初期化
+  useEffect(function(){analysisTfRef.current=analysisTf;},[analysisTf]);
+  /* マウント時: 分析モード履歴を現在の analysisStrokes で tf別に初期化
      (img から復元された初期strokesを「操作前の状態」として保持) */
   useEffect(function(){
-    analysisHistRef.current=[cloneAnalysisStrokes(analysisStrokesRef.current)];
-    analysisFutRef.current=[];
+    var init=cloneAnalysisStrokes(analysisStrokesRef.current);
+    analysisHistRef.current={
+      '1m':[(init['1m']||[]).slice()],
+      '5m':[(init['5m']||[]).slice()]
+    };
+    analysisFutRef.current={'1m':[],'5m':[]};
   },[]);
 
   // textInputRef を最新の textInputState に同期 + ライブプレビュー描画
@@ -2452,21 +2426,33 @@ function ImageAnnotator(props){
     var timer=setInterval(poll,15000);
     return function(){clearInterval(timer);};
   },[]);
-  /* 分析モード用: ストローク変更を履歴に commit */
+  /* 分析モード用: ストローク変更を「現在のtfの履歴」に commit */
   function analysisCommit(strks){
-    var cloned=cloneAnalysisStrokes(strks);
-    analysisHistRef.current=analysisHistRef.current.slice(-19).concat([cloned]);
-    analysisFutRef.current=[];
-    if(modeTab==='analysis'){setCanUndo(true); setCanRedo(false);}
+    var tk=analysisTfRef.current||'1m';
+    var tfArr=((strks&&strks[tk])||[]).slice();
+    var hist=analysisHistRef.current[tk]||[[]];
+    analysisHistRef.current[tk]=hist.slice(-19).concat([tfArr]);
+    analysisFutRef.current[tk]=[];
+    if(modeTab==='analysis'){
+      setCanUndo(analysisHistRef.current[tk].length>1);
+      setCanRedo(false);
+    }
   }
   function undo(){
     if(modeTab==='analysis'){
-      if(analysisHistRef.current.length<=1)return;
-      var prevA=analysisHistRef.current[analysisHistRef.current.length-2];
-      analysisFutRef.current=[cloneAnalysisStrokes(analysisStrokesRef.current)].concat(analysisFutRef.current.slice(0,19));
-      analysisHistRef.current=analysisHistRef.current.slice(0,-1);
-      setAnalysisStrokes(cloneAnalysisStrokes(prevA));
-      setCanUndo(analysisHistRef.current.length>1); setCanRedo(true);
+      var tk=analysisTfRef.current||'1m';
+      var hist=analysisHistRef.current[tk]||[[]];
+      if(hist.length<=1)return;
+      var prevTfArr=hist[hist.length-2];
+      var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
+      var curTfArr=((curObj[tk])||[]).slice();
+      analysisFutRef.current[tk]=[curTfArr].concat((analysisFutRef.current[tk]||[]).slice(0,19));
+      analysisHistRef.current[tk]=hist.slice(0,-1);
+      var nextObj=Object.assign({},curObj);
+      nextObj[tk]=prevTfArr.slice();
+      setAnalysisStrokes(nextObj);
+      setCanUndo(analysisHistRef.current[tk].length>1);
+      setCanRedo((analysisFutRef.current[tk]||[]).length>0);
       return;
     }
     if(histRef.current.length<=1)return;
@@ -2479,12 +2465,18 @@ function ImageAnnotator(props){
   }
   function redo(){
     if(modeTab==='analysis'){
-      if(!analysisFutRef.current.length)return;
-      var nextA=analysisFutRef.current[0], restA=analysisFutRef.current.slice(1);
-      analysisFutRef.current=restA;
-      analysisHistRef.current=analysisHistRef.current.concat([cloneAnalysisStrokes(nextA)]);
-      setAnalysisStrokes(cloneAnalysisStrokes(nextA));
-      setCanUndo(true); setCanRedo(restA.length>0);
+      var tk=analysisTfRef.current||'1m';
+      var fut=analysisFutRef.current[tk]||[];
+      if(!fut.length)return;
+      var nextTfArr=fut[0], restFut=fut.slice(1);
+      analysisFutRef.current[tk]=restFut;
+      analysisHistRef.current[tk]=(analysisHistRef.current[tk]||[[]]).concat([nextTfArr.slice()]);
+      var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
+      var nextObj=Object.assign({},curObj);
+      nextObj[tk]=nextTfArr.slice();
+      setAnalysisStrokes(nextObj);
+      setCanUndo((analysisHistRef.current[tk]||[]).length>1);
+      setCanRedo(restFut.length>0);
       return;
     }
     if(!futRef.current.length)return;
@@ -2495,16 +2487,17 @@ function ImageAnnotator(props){
     setSelIdxs(new Set()); setSelBounds(null); rebuild(next);
     setCanUndo(true); setCanRedo(rest.length>0);
   }
-  /* modeTab 切替時: canUndo/canRedo を現在モードに同期 */
+  /* modeTab / analysisTf 切替時: canUndo/canRedo を現在モード・tfに同期 */
   useEffect(function(){
     if(modeTab==='analysis'){
-      setCanUndo(analysisHistRef.current.length>1);
-      setCanRedo(analysisFutRef.current.length>0);
+      var tk=analysisTf||'1m';
+      setCanUndo((analysisHistRef.current[tk]||[]).length>1);
+      setCanRedo((analysisFutRef.current[tk]||[]).length>0);
     }else{
       setCanUndo(histRef.current.length>1);
       setCanRedo(futRef.current.length>0);
     }
-  },[modeTab]);
+  },[modeTab,analysisTf]);
 
   function getPos(e){
     var c=canvasRef.current, r=c.getBoundingClientRect();
@@ -3289,7 +3282,7 @@ function ImageAnnotator(props){
           })
         ),
         modeTab==='analysis' && analysisData && ce("button",{
-          onClick:function(){if(confirm('別のJSONを読み込む? 現在のデータは破棄されます')){var empty={'1m':[],'5m':[]};setAnalysisData(null);setAnalysisStrokes(empty);analysisHistRef.current=[empty];analysisFutRef.current=[];setCanUndo(false);setCanRedo(false);}},
+          onClick:function(){if(confirm('別のJSONを読み込む? 現在のデータは破棄されます')){var empty={'1m':[],'5m':[]};setAnalysisData(null);setAnalysisStrokes(empty);analysisHistRef.current={'1m':[[]],'5m':[[]]};analysisFutRef.current={'1m':[],'5m':[]};setCanUndo(false);setCanRedo(false);}},
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#2a2a2a",color:"#aaa"})
         },"🔄 別のJSON"),
         /* spacer */
@@ -3626,13 +3619,17 @@ function ImageAnnotator(props){
             setAnalysisStrokes(next);
             analysisCommit(next);
           },
-          onStrokeDelete:function(idx){
+          onStrokeDelete:function(idx, silent){
             var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
             var curArr=(curObj[analysisTf]||[]).slice();
             curArr.splice(idx,1);
             var next=Object.assign({},curObj,(function(){var o={};o[analysisTf]=curArr;return o;})());
             setAnalysisStrokes(next);
-            analysisCommit(next);
+            if(!silent)analysisCommit(next);
+          },
+          onEraserSessionEnd:function(){
+            // 消しゴムドラッグ終了時に1回だけ履歴コミット
+            analysisCommit(analysisStrokesRef.current);
           },
           onStrokeDeleteMany:function(idxs){
             if(!idxs||!idxs.length)return;
