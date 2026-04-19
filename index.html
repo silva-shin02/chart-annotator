@@ -1308,9 +1308,7 @@ function DataChart(props){
     if(priceRange){
       var L=layoutRef.current;
       var priceH=L?L.priceH:(rect2.height-34-22-Math.max(44,Math.round((rect2.height-56)*0.13))-6);
-      // yenPerPx は現在表示の実効レンジから計算 (ズーム後の値を反映)
-      var effRange=L?(L.pmax-L.pmin):(priceRange.max-priceRange.min);
-      var yenPerPx=effRange/priceH;
+      var yenPerPx=(priceRange.max-priceRange.min)/priceH;
       setPShift(p.ps + (e.clientY-p.y)*yenPerPx);
     }
   }
@@ -1431,23 +1429,10 @@ function DataChart(props){
       if(newS<540){newS=540;newE=newS+newSpan;}
       if(newE>930){newE=930;newS=newE-newSpan;}
       setView({s:newS,e:newE});
-      // 価格軸: ピンチ中心の価格 pCenter を cy (現在のピンチ中心y) に配置するよう pShift 逆算
-      //        これで「指が動けば pan」「開きが大きくなれば縦方向も広がる」両方を満たす
-      if(pr.pCenter!=null){
-        var ORIG_TIME_SPAN_P=390;
-        var zoomFactorP=ORIG_TIME_SPAN_P/newSpan;
-        var baseRangeP=priceRange.max-priceRange.min;
-        var baseCenterP=(priceRange.min+priceRange.max)/2;
-        var newPriceRangeP=baseRangeP/zoomFactorP;
-        if(newPriceRangeP<20)newPriceRangeP=20;
-        var cyLocal=cy-rect.top;
-        // pToY(pCenter) = cyLocal を満たす pShift:
-        //   pmax_new - (cyLocal-priceTop)/priceH * newPriceRangeP = pCenter
-        //   pmax_new = baseCenterP + newPShift + newPriceRangeP/2
-        //   ∴ newPShift = pCenter + (cyLocal-priceTop)/priceH * newPriceRangeP - baseCenterP - newPriceRangeP/2
-        var newPShift=pr.pCenter + (cyLocal-L.priceTop)/L.priceH*newPriceRangeP - baseCenterP - newPriceRangeP/2;
-        setPShift(newPShift);
-      }
+      // 価格軸縦シフト: 中心のy移動量で pShift 変化
+      var priceH=L.priceH;
+      var yenPerPx=(L.pmax-L.pmin)/priceH;
+      setPShift(pr.ps0 + (cy-pr.cy0)*yenPerPx);
       return;
     }
     if(!e.touches.length)return;
@@ -1555,18 +1540,9 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   var visibleBars=bars.filter(function(b){var m=tToMin(b.t);return m>=vS&&m<=vE;});
   if(visibleBars.length===0) visibleBars=bars;
 
-  // 価格軸: 時間軸ズーム倍率と同じ倍率で範囲を縮小
-  // (10円幅固定 → 画面上の10円マスの縦px幅はズームに応じて広がる)
-  var ORIG_TIME_SPAN=390; // 基準時間幅 (540→930 = 9:00→15:30)
-  var curTimeSpan=vE-vS;
-  var zoomFactor=curTimeSpan>0?ORIG_TIME_SPAN/curTimeSpan:1;
-  var baseRange=priceRange.max-priceRange.min;
-  var baseCenter=(priceRange.min+priceRange.max)/2;
-  var newRange=baseRange/zoomFactor;
-  // 下限: 狭まりすぎて10円幅が見えなくなると意味がないので、最低でも 2*10=20円は表示
-  if(newRange<20)newRange=20;
-  var pmin=(baseCenter+pShift)-newRange/2;
-  var pmax=(baseCenter+pShift)+newRange/2;
+  // 価格軸: 固定の priceRange + 縦シフト (タイム軸操作では変化しない)
+  var pmin=priceRange.min + pShift;
+  var pmax=priceRange.max + pShift;
   function pToY(p){return priceTop+(1-(p-pmin)/(pmax-pmin))*priceH;}
 
   // 出来高レンジ (表示範囲内)
@@ -1586,9 +1562,11 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   var pStep=10;
   var pStart=Math.ceil(pmin/pStep)*pStep;
   var pEnd=Math.floor(pmax/pStep)*pStep;
-  // ラベル重複回避: 次のラベル位置が最小12px離れてなければ間引く
+  // ラベル間引き: 数字が密に詰まるのを避けて見やすくする (閾値を粗めに設定)
+  //  pxPerStep: 10円マス1つの画面上の高さ(px)
+  //  24px以上空いていれば10円毎 / 12px以上で20円毎 / 6px以上で50円毎 / 3px以上で100円毎 / それ未満は200円毎
   var pxPerStep=(priceH/(pmax-pmin))*pStep;
-  var labelEvery=pxPerStep>=12?1 : pxPerStep>=6?2 : pxPerStep>=3?5 : 10;
+  var labelEvery=pxPerStep>=24?1 : pxPerStep>=12?2 : pxPerStep>=6?5 : pxPerStep>=3?10 : 20;
   for(var p=pStart;p<=pEnd;p+=pStep){
     var y=pToY(p);
     // 薄い横実線 (HSBI2レイアウト準拠、全10円毎)
