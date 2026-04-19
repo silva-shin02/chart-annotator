@@ -795,6 +795,141 @@ function RefChartPicker(props){
   );
 }
 
+/* ─── RefAnalysisPicker（F1: 過去の分析データを選択） ───────── */
+function RefAnalysisPicker(props){
+  var onSelect=props.onSelect, onClose=props.onClose, fbCfg=props.fbCfg||{};
+  var s0=useState(caLoadTickers); var tickers=s0[0];
+  var s1=useState(null);          var selTicker=s1[0],setSelTicker=s1[1];
+  var s2=useState(caLoadMeta);    var meta=s2[0];
+  var s3=useState(null);          var loading=s3[0],setLoading=s3[1];
+  var BT2={border:"none",cursor:"pointer",fontFamily:"inherit"};
+
+  var charts=selTicker?meta.filter(function(m){return m.ticker===selTicker;}).sort(function(a,b){return(b.savedAt||0)-(a.savedAt||0);}):[];
+
+  function pickAnalysis(id, chartMeta){
+    setLoading(id);
+    // ローカル (IndexedDB) から取得試行
+    caLoadDataAsync(id, function(d){
+      if(d && d.analysisData){
+        // 紐付き analysisData あり
+        setLoading(null);
+        onSelect({
+          id:id, ticker:chartMeta.ticker, name:chartMeta.name,
+          analysisData:d.analysisData,
+          analysisStrokes:d.analysisStrokes||null,  // 過去側strokes (null許容)
+          savedAt:chartMeta.savedAt||0
+        });
+        return;
+      }
+      // ローカルにない → Firebase から取得
+      if(fbCfg.url){
+        var dataBase=fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
+        var auth=fbCfg.secret?'?auth='+fbCfg.secret:'';
+        fetch(dataBase+'/'+id+'.json'+auth).then(function(r){return r.ok?r.text():null;})
+          .then(function(txt){
+            var fbData=txt?JSON.parse(txt):null;
+            setLoading(null);
+            if(fbData && fbData.analysisData){
+              // Firebase から取得成功
+              onSelect({
+                id:id, ticker:chartMeta.ticker, name:chartMeta.name,
+                analysisData:fbData.analysisData,
+                analysisStrokes:fbData.analysisStrokes||null,
+                savedAt:chartMeta.savedAt||0
+              });
+            }else{
+              alert('このチャートには過去データ(JSON)が紐付いていません。\nF5機能「過去データを追加する」は未実装です。');
+            }
+          }).catch(function(e){
+            setLoading(null);
+            alert('読込失敗: '+(e&&e.message?e.message:'不明'));
+          });
+      }else{
+        setLoading(null);
+        alert('このチャートには過去データ(JSON)が紐付いていません。');
+      }
+    });
+  }
+
+  return ReactDOM.createPortal(
+    ce("div",{onClick:function(e){if(e.target===e.currentTarget)onClose();},
+      style:{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",zIndex:22000,
+        display:"flex",alignItems:"center",justifyContent:"center",padding:16}},
+      ce("div",{onClick:function(e){e.stopPropagation();},
+        style:{background:"#1c1c1e",borderRadius:18,width:"100%",maxWidth:700,maxHeight:"80vh",
+          boxShadow:"0 24px 64px rgba(0,0,0,.8)",border:"1px solid #2a2a2a",
+          display:"flex",flexDirection:"column",overflow:"hidden"}},
+        /* header */
+        ce("div",{style:{padding:"16px 18px",borderBottom:"1px solid #2a2a2a",display:"flex",alignItems:"center",gap:10,flexShrink:0}},
+          ce("span",{style:{fontSize:16,fontWeight:700,color:"#fff",flex:1}},"📊 過去チャートを開く"),
+          ce("button",{onClick:onClose,style:Object.assign({},BT2,{fontSize:13,fontWeight:700,
+            background:"#2a2a2a",color:"#aaa",padding:"7px 14px",borderRadius:8})},"閉じる")
+        ),
+        /* body */
+        ce("div",{style:{display:"flex",flex:1,overflow:"hidden"}},
+          /* ticker list */
+          ce("div",{style:{width:IS_TOUCH?120:140,background:"#161616",borderRight:"1px solid #2a2a2a",
+            overflowY:"auto",flexShrink:0}},
+            tickers.length===0
+              ?ce("div",{style:{color:"#555",fontSize:12,textAlign:"center",padding:20}},"銘柄なし")
+              :tickers.map(function(t){
+                var cnt=meta.filter(function(m){return m.ticker===t;}).length;
+                var isS=selTicker===t;
+                return ce("div",{key:t,onClick:function(){setSelTicker(t);},
+                  style:{padding:"10px 10px",borderBottom:"1px solid #1e1e1e",cursor:"pointer",
+                    background:isS?"#1e2a3a":"transparent",
+                    borderLeft:isS?"3px solid #10b981":"3px solid transparent"}},
+                  ce("div",{style:{fontSize:12,fontWeight:isS?700:400,color:isS?"#6ee7b7":"#ccc",
+                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},t),
+                  ce("div",{style:{fontSize:10,color:"#555",marginTop:1}},cnt+"件")
+                );
+              })
+          ),
+          /* chart grid */
+          ce("div",{style:{flex:1,overflowY:"auto",padding:10,
+            display:"flex",flexWrap:"wrap",gap:8,alignContent:"flex-start"}},
+            selTicker===null
+              ?ce("div",{style:{width:"100%",textAlign:"center",color:"#555",fontSize:13,paddingTop:40}},"← 銘柄を選択")
+              :charts.length===0
+                ?ce(Fragment,null,
+                    ce("div",{style:{width:"100%",textAlign:"center",color:"#888",fontSize:13,paddingTop:40}},"過去のデータがありません"),
+                    ce("div",{style:{width:"100%",textAlign:"center",marginTop:20}},
+                      ce("button",{
+                        onClick:function(){alert('F5機能: 過去データを追加する、は未実装です。');},
+                        style:{padding:"10px 20px",fontSize:13,fontWeight:700,border:"none",borderRadius:8,
+                          background:"#10b981",color:"#fff",cursor:"pointer",fontFamily:"inherit"}
+                      },"📥 過去データを追加する")
+                    )
+                  )
+                :charts.map(function(m){
+                  var isLoading=loading===m.id;
+                  return ce("div",{key:m.id,
+                    onClick:function(){if(!isLoading)pickAnalysis(m.id,m);},
+                    style:{width:IS_TOUCH?200:220,background:"#1a1a1a",borderRadius:8,
+                      border:"1px solid #2a2a2a",overflow:"hidden",cursor:isLoading?"wait":"pointer",flexShrink:0,
+                      opacity:isLoading?0.5:1,
+                      transition:"border-color .15s"},
+                    onMouseEnter:function(e){if(!isLoading)e.currentTarget.style.borderColor='#10b981';},
+                    onMouseLeave:function(e){e.currentTarget.style.borderColor='#2a2a2a';}},
+                    (m.thumbUrl||_thumbMemCache[m.id]||m.thumb)?ce("img",{src:_thumbMemCache[m.id]||m.thumbUrl||m.thumb,style:{width:"100%",display:"block",height:"auto"},draggable:false,onError:function(e){e.target.style.display="none";}})
+                      :ce("div",{style:{width:"100%",height:60,background:"#222",display:"flex",
+                        alignItems:"center",justifyContent:"center",color:"#555",fontSize:10}},"no preview"),
+                    ce("div",{style:{padding:"5px 7px"}},
+                      ce("div",{style:{fontSize:11,fontWeight:600,color:"#ddd",
+                        overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},m.name||''),
+                      ce("div",{style:{fontSize:9,color:"#666",marginTop:2}},
+                        isLoading?'読込中…':(m.savedAt?new Date(m.savedAt).toLocaleDateString():''))
+                    )
+                  );
+                })
+          )
+        )
+      )
+    ),
+    document.body
+  );
+}
+
 function DataChart(props){
   /* B2+: 歩み値JSON → Canvas描画 (HSBI2色、ズーム・パン対応、十字カーソル、時刻+価格ベース描画) */
   var data=props.data;
@@ -1523,7 +1658,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   ctx.fillRect(0,0,W,H);
 
   // レイアウト
-  var padL=10, padR=60, padT=34, padB=22;
+  var padL=10, padR=60, padT=10, padB=22;
   var volH=Math.max(44,Math.round((H-padT-padB)*0.13));
   var priceH=H-padT-padB-volH-6;
   var chartW=W-padL-padR;
@@ -1661,26 +1796,8 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     });
   }
 
-  // ヘッダー (上段: タイトル、下段: 凡例)
+  // ヘッダー描画は廃止（ticker+date は panel 上部の HTML メタ行に表示済み）
   var last=bars[bars.length-1];
-  ctx.textBaseline='top'; ctx.textAlign='left';
-  ctx.font='bold 12px -apple-system,Helvetica,sans-serif';
-  ctx.fillStyle='#ddd';
-  var title=(data.ticker||'')+'  '+(data.date||'')+'   '+bars.length+'本 '+(tf==='5m'?'5分':'1分');
-  ctx.fillText(title,padL+2,4);
-  // 凡例 (EMA/VWAP の現在値 — 直近の可視バー基準)
-  var legendBase=visibleBars[visibleBars.length-1]||last;
-  ctx.font='11px -apple-system,Helvetica,sans-serif';
-  var lx=padL+2;
-  lines.forEach(function(line){
-    if(legendBase[line.k]==null)return;
-    var txt=line.label+' '+legendBase[line.k].toFixed(1);
-    ctx.fillStyle=line.col;
-    ctx.fillRect(lx,20,8,8);
-    ctx.fillStyle='#ccc';
-    ctx.fillText(txt,lx+12,18);
-    lx+=ctx.measureText(txt).width+30;
-  });
 
   // 直近終値の水平ライン + ラベル (右端)
   var lastY=pToY(last.c);
@@ -1917,6 +2034,10 @@ function ImageAnnotator(props){
   /* 分析モード用 state */
   var stATI=useState(null);  var analysisTextInput=stATI[0],setAnalysisTextInput=stATI[1];
   var stFPA=useState(null);  var floatPosAnalysis=stFPA[0],setFloatPosAnalysis=stFPA[1];
+  /* F1: 過去チャート参照 (null=閉じている / object=開いている) */
+  var stRA=useState(null);   var refAnalysis=stRA[0],setRefAnalysis=stRA[1];
+  /* F1: 過去チャート選択モーダルの表示 */
+  var stRPicker=useState(false); var showRefAnalysisPicker=stRPicker[0],setShowRefAnalysisPicker=stRPicker[1];
   var stRP=useState(null);   var refPanel=stRP[0],setRefPanel=stRP[1]; // null | {url:string|null}
   var stRD=useState(null);   var refImgDim=stRD[0],setRefImgDim=stRD[1]; // ref画像の自然サイズ
   var stRS=useState(false);  var refSlideMode=stRS[0],setRefSlideMode=stRS[1]; // true=縦スライド操作中
@@ -3285,6 +3406,20 @@ function ImageAnnotator(props){
           })
         ),
         modeTab==='analysis' && analysisData && ce("button",{
+          onClick:function(){
+            if(refAnalysis){
+              // 開いている → 閉じる
+              setRefAnalysis(null);
+            }else{
+              // 閉じている → 選択モーダル表示
+              setShowRefAnalysisPicker(true);
+            }
+          },
+          style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",
+            background:refAnalysis?"#16a34a":"#7c3aed",
+            color:refAnalysis?"#bbf7d0":"#e9d5ff"})
+        },refAnalysis?"閉じる":"過去チャートを開く"),
+        modeTab==='analysis' && analysisData && ce("button",{
           onClick:function(){if(confirm('別のJSONを読み込む? 現在のデータは破棄されます')){var empty={'1m':[],'5m':[]};setAnalysisData(null);setAnalysisStrokes(empty);analysisHistRef.current={'1m':[[]],'5m':[[]]};analysisFutRef.current={'1m':[],'5m':[]};setCanUndo(false);setCanRedo(false);}},
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#2a2a2a",color:"#aaa"})
         },"🔄 別のJSON"),
@@ -3590,30 +3725,33 @@ function ImageAnnotator(props){
           }
         })
       ),
-      /* データ読込済: 薄いメタ行 (ticker+stats) + DataChart
-         ※ 描画ツール・色・線幅・濃さ・十字・1m5m・別JSON は共通ツールバーへ移動 */
+      /* データ読込済: 横並び(現在 + 過去) + floating undo/redo */
       analysisData && ce(Fragment,null,
-        ce("div",{style:{display:"flex",alignItems:"center",gap:10,padding:"6px 12px",
-          background:"#111",borderBottom:"1px solid #222",flexShrink:0}},
-          ce("div",{style:{fontSize:13,fontWeight:700,color:"#ddd"}},
-            (analysisData.ticker||'?')+'　'+(analysisData.date||'')
-          ),
-          ce("div",{style:{fontSize:11,color:"#666"}},
-            (analysisData.stats?
-              'O'+analysisData.stats.open.toFixed(0)+' H'+analysisData.stats.high.toFixed(0)+
-              ' L'+analysisData.stats.low.toFixed(0)+' C'+analysisData.stats.close.toFixed(0)+
-              '  VWAP'+analysisData.stats.vwap.toFixed(1)
-              :'')
-          )
-        ),
-        ce(DataChart,{
-          data:analysisData, tf:analysisTf, showCrosshair:showCrosshair,
-          drawTool:tool, drawColor:color, drawWidth:lineW, drawOpacity:opacity,
-          drawFontSize:fontSize, drawFontBold:fontBold,
-          horiz:horiz,
-          strokes:(analysisStrokes&&analysisStrokes[analysisTf])||[],
-          editingTextIdx:analysisTextInput&&analysisTextInput.editIdx>=0?analysisTextInput.editIdx:-1,
-          textInputActive:!!analysisTextInput,
+        /* 横並びコンテナ (両チャートで横スクロール) */
+        ce("div",{style:{flex:1,display:"flex",flexDirection:"row",overflowX:"auto",overflowY:"hidden",WebkitOverflowScrolling:"touch"}},
+          /* ── 現在チャート ── */
+          ce("div",{style:{
+            display:"flex",flexDirection:"column",
+            flex:refAnalysis?"0 0 auto":"1 1 auto",
+            minWidth:refAnalysis?(IS_TOUCH?480:600):"100%",
+            height:"100%",
+            borderRight:refAnalysis?"1px solid #333":"none"
+          }},
+            /* メタ行 (ticker + date のみ) */
+            ce("div",{style:{display:"flex",alignItems:"center",gap:10,padding:"6px 12px",
+              background:"#111",borderBottom:"1px solid #222",flexShrink:0}},
+              ce("div",{style:{fontSize:13,fontWeight:700,color:"#ddd"}},
+                (analysisData.ticker||'?')+'　'+(analysisData.date||'')
+              )
+            ),
+            ce(DataChart,{
+              data:analysisData, tf:analysisTf, showCrosshair:showCrosshair,
+              drawTool:tool, drawColor:color, drawWidth:lineW, drawOpacity:opacity,
+              drawFontSize:fontSize, drawFontBold:fontBold,
+              horiz:horiz,
+              strokes:(analysisStrokes&&analysisStrokes[analysisTf])||[],
+              editingTextIdx:analysisTextInput&&analysisTextInput.editIdx>=0?analysisTextInput.editIdx:-1,
+              textInputActive:!!analysisTextInput,
           onStrokeAdd:function(s){
             var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
             var curArr=(curObj[analysisTf]||[]).slice();
@@ -3676,7 +3814,52 @@ function ImageAnnotator(props){
               tf:analysisTf
             });
           }
-        }),
+        })
+        ), /* end 現在チャート container div */
+        /* ── 過去チャート (refAnalysis時のみ) ── */
+        refAnalysis && ce("div",{style:{
+          display:"flex",flexDirection:"column",
+          flex:"0 0 auto",
+          minWidth:IS_TOUCH?480:600,
+          height:"100%"
+        }},
+          /* メタ行 (ticker + date + 他のチャートに変更 + ✕) */
+          ce("div",{style:{display:"flex",alignItems:"center",gap:10,padding:"6px 12px",
+            background:"#111",borderBottom:"1px solid #222",flexShrink:0}},
+            ce("div",{style:{fontSize:13,fontWeight:700,color:"#ddd",flex:1}},
+              (refAnalysis.analysisData&&refAnalysis.analysisData.ticker||refAnalysis.ticker||'?')+'　'+
+              (refAnalysis.analysisData&&refAnalysis.analysisData.date||'')
+            ),
+            ce("button",{
+              onClick:function(){setShowRefAnalysisPicker(true);},
+              title:"他のチャートに変更",
+              style:{padding:"4px 10px",fontSize:11,fontWeight:700,border:"none",borderRadius:5,
+                background:"#2a2a2a",color:"#aaa",cursor:"pointer",fontFamily:"inherit"}
+            },"他のチャートに変更"),
+            ce("button",{
+              onClick:function(){setRefAnalysis(null);},
+              title:"過去チャートを閉じる",
+              style:{padding:"4px 9px",fontSize:13,fontWeight:700,border:"none",borderRadius:5,
+                background:"#2a2a2a",color:"#888",cursor:"pointer",fontFamily:"inherit"}
+            },"✕")
+          ),
+          /* F1段階: 過去チャート DataChart (静的表示、描画・連動なし) */
+          ce(DataChart,{
+            data:refAnalysis.analysisData,
+            tf:analysisTf,             // F2で両方向連動させるまで、現在と同じtfを渡す(表示のみ)
+            showCrosshair:showCrosshair,
+            drawTool:'pan',            // F3まで描画不可
+            drawColor:color, drawWidth:lineW, drawOpacity:opacity,
+            drawFontSize:fontSize, drawFontBold:fontBold,
+            horiz:false,
+            strokes:(refAnalysis.analysisStrokes&&refAnalysis.analysisStrokes[analysisTf])||[],
+            editingTextIdx:-1,
+            textInputActive:false,
+            onStrokeAdd:function(){}, onStrokeDelete:function(){}, onStrokeDeleteMany:function(){},
+            onStrokeUpdate:function(){}, onRequestTextInput:function(){}, onEraserSessionEnd:function(){}
+          })
+        ) /* end 過去チャート container div */
+        ), /* end 横並びコンテナ */
         /* floating undo/redo (分析モード用、画像モードと同スタイル) */
         ce("div",{
           style:Object.assign(
@@ -4411,6 +4594,16 @@ function ImageAnnotator(props){
         compImg.src=dataUrl;
       },
       onClose:function(){setShowRefPicker(false);}
+    }),
+
+    /* ── F1: 過去チャート(分析)ピッカー ── */
+    showRefAnalysisPicker&&ce(RefAnalysisPicker,{
+      fbCfg:props.fbCfg,
+      onSelect:function(ref){
+        setRefAnalysis(ref);
+        setShowRefAnalysisPicker(false);
+      },
+      onClose:function(){setShowRefAnalysisPicker(false);}
     })
 
   ); /* end return */
