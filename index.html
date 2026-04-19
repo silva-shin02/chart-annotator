@@ -3869,9 +3869,9 @@ function ImageAnnotator(props){
           /* ── 現在チャート ── */
           ce("div",{style:{
             display:"flex",flexDirection:"column",
-            flex:refAnalysis?"0 0 auto":"1 1 auto",
-            minWidth:refAnalysis?(IS_TOUCH?480:600):"100%",
-            alignSelf:"stretch",    // バグA対策: 親flex row経由で高さ継承 (タブレット対応)
+            // バグA根治: 幅を flex-basis で明示指定 — minWidth:auto + flex:0 0 auto の循環参照でタブレットcanvas width暴走 (33M px化) を防ぐ
+            flex:refAnalysis?("0 0 "+(IS_TOUCH?480:600)+"px"):"1 1 100%",
+            alignSelf:"stretch",    // 親flex row経由で高さ継承
             minHeight:0,            // flex child のminHeight default 'auto' を上書き
             borderRight:refAnalysis?"1px solid #333":"none"
           }},
@@ -3966,9 +3966,8 @@ function ImageAnnotator(props){
         /* ── 過去チャート (refAnalysis時のみ) ── */
         refAnalysis && ce("div",{style:{
           display:"flex",flexDirection:"column",
-          flex:"0 0 auto",
-          minWidth:IS_TOUCH?480:600,
-          alignSelf:"stretch",    // バグA対策: 親flex row経由で高さ継承 (タブレット対応)
+          flex:"0 0 "+(IS_TOUCH?480:600)+"px",   // バグA根治: 幅を flex-basis で明示指定
+          alignSelf:"stretch",
           minHeight:0
         }},
           /* メタ行 (ticker + date + 他のチャートに変更 + ✕) */
