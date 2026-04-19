@@ -800,7 +800,7 @@ function DataChart(props){
      props: { data, tf, showCrosshair }    */
   var data=props.data;
   var tf=props.tf||'1m';
-  var showCrosshair=props.showCrosshair&&HAS_HOVER;  // マウスhover可能な端末のみ
+  var showCrosshair=props.showCrosshair;  // 親からの ON/OFF のみで判定
   var barsKey=tf==='5m'?'bars_5m':'bars_1m';
   var bars=(data&&data[barsKey])||[];
 
@@ -1254,8 +1254,8 @@ function ImageAnnotator(props){
   var analysisData=stAD[0],setAnalysisData=stAD[1];
   var stAT=useState('1m'); var analysisTf=stAT[0],setAnalysisTf=stAT[1];
   var analysisFileRef=useRef(null);
-  /* 十字カーソル表示 ON/OFF (マウスhover可能な端末限定) */
-  var stAX=useState(HAS_HOVER); var showCrosshair=stAX[0],setShowCrosshair=stAX[1];
+  /* 十字カーソル表示 ON/OFF (デフォルトON、端末問わず) */
+  var stAX=useState(true); var showCrosshair=stAX[0],setShowCrosshair=stAX[1];
   var analysisDataRef=useRef(analysisData);  // triggerAutoSave内で最新値参照用
   useEffect(function(){analysisDataRef.current=analysisData;},[analysisData]);
   var st0=useState("pan");   var tool=st0[0],setTool=st0[1];
@@ -2842,8 +2842,8 @@ function ImageAnnotator(props){
               :'')
           ),
           ce("div",{style:{flex:1}}),
-          /* 十字カーソル ON/OFF (hover可能な端末) */
-          HAS_HOVER && ce("button",{
+          /* 十字カーソル ON/OFF (常時ボタン表示、PCで機能) */
+          ce("button",{
             onClick:function(){setShowCrosshair(!showCrosshair);},
             title:"十字カーソル表示",
             style:{padding:"5px 10px",fontSize:11,fontWeight:700,border:"none",borderRadius:5,
