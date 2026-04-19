@@ -45,6 +45,7 @@ var Fragment   = R.Fragment;
 var ce         = R.createElement;   // ← h ではなく ce を使う
 
 var IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+var HAS_HOVER = typeof matchMedia!=='undefined' && matchMedia('(hover: hover)').matches;
 
 /* ─── IndexedDB キャッシュ（localStorage 5MB制限回避）──────── */
 var _idb=null, _idbReady=false, _idbQueue=[];
@@ -799,7 +800,7 @@ function DataChart(props){
      props: { data, tf, showCrosshair }    */
   var data=props.data;
   var tf=props.tf||'1m';
-  var showCrosshair=props.showCrosshair&&!IS_TOUCH;  // PC限定
+  var showCrosshair=props.showCrosshair&&HAS_HOVER;  // マウスhover可能な端末のみ
   var barsKey=tf==='5m'?'bars_5m':'bars_1m';
   var bars=(data&&data[barsKey])||[];
 
@@ -839,19 +840,30 @@ function DataChart(props){
     setView({s:540,e:930}); setPShift(0);
   },[tf,data]);
 
-  // コンテナサイズ追従
+  // コンテナサイズ追従 (ResizeObserver で display:none → 表示切替も捉える)
   useEffect(function(){
+    var el=containerRef.current; if(!el)return;
     function update(){
-      var el=containerRef.current; if(!el)return;
       var r=el.getBoundingClientRect();
-      var w=Math.max(400,Math.floor(r.width));
-      var h=Math.max(300,Math.floor(r.height));
+      // 非表示中 (display:none や極小) は更新しない — blur回避
+      if(r.width<100||r.height<100)return;
+      var w=Math.floor(r.width);
+      var h=Math.floor(r.height);
       setDim(function(prev){return(prev.w===w&&prev.h===h)?prev:{w:w,h:h};});
     }
     update();
     var t=setTimeout(update,50);
+    var ro=null;
+    if(typeof ResizeObserver!=='undefined'){
+      ro=new ResizeObserver(update);
+      ro.observe(el);
+    }
     window.addEventListener('resize',update);
-    return function(){clearTimeout(t);window.removeEventListener('resize',update);};
+    return function(){
+      clearTimeout(t);
+      if(ro)ro.disconnect();
+      window.removeEventListener('resize',update);
+    };
   },[]);
 
   // メインチャート描画
@@ -1104,7 +1116,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef)
     chartW:chartW,priceTop:priceTop,priceBot:priceBot,volTop:volTop,volBot:volBot,
     priceH:priceH,pmin:pmin,pmax:pmax,vS:vS,vE:vE};
 
-  // 10円固定グリッド + 全10円ラベル (HSBI2準拠、薄い横点線)
+  // 10円固定グリッド + 全10円ラベル (HSBI2準拠、実線の薄い横線)
   ctx.font='10px -apple-system,Helvetica,sans-serif';
   ctx.textBaseline='middle'; ctx.textAlign='right';
   var pStep=10;
@@ -1115,18 +1127,15 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef)
   var labelEvery=pxPerStep>=12?1 : pxPerStep>=6?2 : pxPerStep>=3?5 : 10;
   for(var p=pStart;p<=pEnd;p+=pStep){
     var y=pToY(p);
-    // 薄い横点線 (HSBI2レイアウト準拠)
-    ctx.strokeStyle='#202020'; ctx.lineWidth=0.5;
-    ctx.setLineDash([1,3]);
-    ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(padL+chartW,y); ctx.stroke();
+    // 薄い横実線 (HSBI2レイアウト準拠、全10円毎)
+    ctx.strokeStyle='#262626'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(padL,Math.round(y)+0.5); ctx.lineTo(padL+chartW,Math.round(y)+0.5); ctx.stroke();
     // ラベル (10円毎が基本、スペースなければ20/50円毎に間引き)
     if((p/pStep)%labelEvery===0){
       ctx.fillStyle='#888';
-      ctx.setLineDash([]);
       ctx.fillText(p.toFixed(0),padL+chartW+52,y);
     }
   }
-  ctx.setLineDash([]);
 
   // 時間グリッド: ズーム率に応じてステップ可変
   ctx.textBaseline='top'; ctx.textAlign='center';
@@ -1245,8 +1254,8 @@ function ImageAnnotator(props){
   var analysisData=stAD[0],setAnalysisData=stAD[1];
   var stAT=useState('1m'); var analysisTf=stAT[0],setAnalysisTf=stAT[1];
   var analysisFileRef=useRef(null);
-  /* 十字カーソル表示 ON/OFF (PC限定) */
-  var stAX=useState(!IS_TOUCH); var showCrosshair=stAX[0],setShowCrosshair=stAX[1];
+  /* 十字カーソル表示 ON/OFF (マウスhover可能な端末限定) */
+  var stAX=useState(HAS_HOVER); var showCrosshair=stAX[0],setShowCrosshair=stAX[1];
   var analysisDataRef=useRef(analysisData);  // triggerAutoSave内で最新値参照用
   useEffect(function(){analysisDataRef.current=analysisData;},[analysisData]);
   var st0=useState("pan");   var tool=st0[0],setTool=st0[1];
@@ -2833,8 +2842,8 @@ function ImageAnnotator(props){
               :'')
           ),
           ce("div",{style:{flex:1}}),
-          /* 十字カーソル ON/OFF (PC限定) */
-          !IS_TOUCH && ce("button",{
+          /* 十字カーソル ON/OFF (hover可能な端末) */
+          HAS_HOVER && ce("button",{
             onClick:function(){setShowCrosshair(!showCrosshair);},
             title:"十字カーソル表示",
             style:{padding:"5px 10px",fontSize:11,fontWeight:700,border:"none",borderRadius:5,
