@@ -1947,6 +1947,20 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     ctx.fillStyle='#000';
     ctx.fillText(lbl,padL+chartW+6,lastY);
   }
+
+  // C2+: hasRef時、各chart領域の左上に日付ラベル (仕様⑤(d) + Q2(c))
+  if(hasRef){
+    ctx.textAlign='left'; ctx.textBaseline='top';
+    ctx.font='bold 10px -apple-system,Helvetica,sans-serif';
+    ctx.fillStyle='rgba(200,200,200,0.7)';
+    var refDate=(refData&&refData.date)||'';
+    var curDate=(data&&data.date)||'';
+    if(refDate)ctx.fillText(refDate, padL+4, priceTop+3);
+    if(curDate){
+      var curX=padL+((tmVisSpan+gapVis)/uTotal)*chartW + 4;
+      ctx.fillText(curDate, curX, priceTop+3);
+    }
+  }
 }
 
 /* B-drawing: 時刻+価格座標ストロークの描画 (画像画面と同等のツール群)
@@ -3917,11 +3931,14 @@ function ImageAnnotator(props){
             minHeight:0,            // flex child のminHeight default 'auto' を上書き
             borderRight:(refAnalysis&&!USE_UNIFIED_CHART)?"1px solid #333":"none"
           }},
-            /* メタ行 (ticker + date のみ) */
+            /* メタ行 (ticker + date のみ) — C2+: refあり時は両日付連結 */
             ce("div",{style:{display:"flex",alignItems:"center",gap:10,padding:"6px 12px",
               background:"#111",borderBottom:"1px solid #222",flexShrink:0}},
               ce("div",{style:{fontSize:13,fontWeight:700,color:"#ddd"}},
-                (analysisData.ticker||'?')+'　'+(analysisData.date||'')
+                (analysisData.ticker||'?')+'　'+
+                ((USE_UNIFIED_CHART&&refAnalysis&&refAnalysis.analysisData)
+                  ?((refAnalysis.analysisData.date||'')+' ⇄ '+(analysisData.date||''))
+                  :(analysisData.date||''))
               )
             ),
             ce(DataChart,{
