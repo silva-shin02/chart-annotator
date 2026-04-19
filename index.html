@@ -796,19 +796,26 @@ function RefChartPicker(props){
 }
 
 function DataChart(props){
-  /* B2+: 歩み値JSON → Canvas描画 (HSBI2色、ズーム・パン対応、十字カーソル)
-     props: { data, tf, showCrosshair }    */
+  /* B2+: 歩み値JSON → Canvas描画 (HSBI2色、ズーム・パン対応、十字カーソル、時刻+価格ベース描画) */
   var data=props.data;
   var tf=props.tf||'1m';
   var showCrosshair=props.showCrosshair;  // 親からの ON/OFF のみで判定
+  var drawTool=props.drawTool||'pan';     // 'pan'|'horizontal'|'line'|'eraser'
+  var drawColor=props.drawColor||'#ff3b30';
+  var drawWidth=props.drawWidth||2;
+  var drawOpacity=props.drawOpacity!=null?props.drawOpacity:1;
+  var strokes=props.strokes||[];
+  var onStrokeAdd=props.onStrokeAdd;
+  var onStrokeDelete=props.onStrokeDelete;
   var barsKey=tf==='5m'?'bars_5m':'bars_1m';
   var bars=(data&&data[barsKey])||[];
 
   var canvasRef=useRef(null);
-  var overlayRef=useRef(null);     // 十字カーソル専用オーバーレイ
+  var overlayRef=useRef(null);     // 十字カーソル + 描画プレビュー兼用
   var layoutRef=useRef(null);      // drawDataChart が書き込むレイアウト情報
   var cursorRef=useRef(null);      // {x,y} or null
   var rafRef=useRef(null);
+  var drawStartRef=useRef(null);   // 描画開始点 {tm, p} (2点ツール用)
   var containerRef=useRef(null);
   var sD=useState({w:800,h:520}); var dim=sD[0],setDim=sD[1];
   /* 時間軸ビューレンジ (分, 540=09:00, 930=15:30) */
@@ -869,10 +876,10 @@ function DataChart(props){
   // メインチャート描画
   useEffect(function(){
     var canvas=canvasRef.current; if(!canvas||!bars.length||!priceRange)return;
-    drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef);
+    drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes);
     // 描画直後に十字カーソルも再描画 (リサイズ・ズーム等でレイアウト変わった時)
     drawCrosshair();
-  },[data,bars,dim,tf,view,pShift,priceRange]);
+  },[data,bars,dim,tf,view,pShift,priceRange,strokes]);
 
   // showCrosshair 切替時: OFFなら消す、ONなら再描画
   useEffect(function(){
@@ -991,12 +998,88 @@ function DataChart(props){
     return function(){el.removeEventListener('wheel',handler);};
   },[]);
 
-  // パン: ドラッグで時間軸横スライド
+  /* Pointer → 時刻+価格に変換 */
+  function pxToTimePrice(clientX,clientY){
+    var L=layoutRef.current; if(!L)return null;
+    var rect=containerRef.current.getBoundingClientRect();
+    var cx=clientX-rect.left, cy=clientY-rect.top;
+    if(cx<L.padL||cx>L.padL+L.chartW)return null;
+    var tm=L.vS+((cx-L.padL)/L.chartW)*(L.vE-L.vS);
+    var price;
+    if(cy>=L.priceTop&&cy<=L.priceBot){
+      price=L.pmax-((cy-L.priceTop)/L.priceH)*(L.pmax-L.pmin);
+    } else {
+      price=null; // 価格パネル外
+    }
+    return {tm:tm, p:price, cx:cx, cy:cy};
+  }
+
+  /* ヒットテスト: クリック位置に近いストロークを返す */
+  function hitTestStroke(clientX,clientY){
+    var L=layoutRef.current; if(!L||!strokes||!strokes.length)return null;
+    var rect=containerRef.current.getBoundingClientRect();
+    var cx=clientX-rect.left, cy=clientY-rect.top;
+    var TOL=8; // 8px tolerance
+    function minToXloc(m){return L.padL+((m-L.vS)/(L.vE-L.vS))*L.chartW;}
+    function pToYloc(p){return L.priceTop+(1-(p-L.pmin)/(L.pmax-L.pmin))*L.priceH;}
+    for(var i=strokes.length-1;i>=0;i--){
+      var s=strokes[i]; if(!s||!s.anchors||!s.anchors.length)continue;
+      if(s.tool==='horizontal'){
+        var y=pToYloc(s.anchors[0].p);
+        if(Math.abs(cy-y)<=TOL)return i;
+      } else if(s.tool==='line'&&s.anchors.length>=2){
+        var a1=s.anchors[0], a2=s.anchors[1];
+        var x1=minToXloc(a1.tm), y1=pToYloc(a1.p);
+        var x2=minToXloc(a2.tm), y2=pToYloc(a2.p);
+        // 線分との距離
+        var dx=x2-x1, dy=y2-y1;
+        var lenSq=dx*dx+dy*dy; if(lenSq===0)continue;
+        var t=Math.max(0,Math.min(1,((cx-x1)*dx+(cy-y1)*dy)/lenSq));
+        var px=x1+t*dx, py=y1+t*dy;
+        if(Math.hypot(cx-px,cy-py)<=TOL)return i;
+      }
+    }
+    return null;
+  }
+
+  // パン: ドラッグで時間軸横スライド (drawTool='pan' 時のみ)
   function onMouseDown(e){
-    panStartRef.current={x:e.clientX,y:e.clientY,s:view.s,e:view.e,ps:pShift};
+    if(drawTool==='pan'){
+      panStartRef.current={x:e.clientX,y:e.clientY,s:view.s,e:view.e,ps:pShift};
+      return;
+    }
+    // 描画モード
+    var tp=pxToTimePrice(e.clientX,e.clientY);
+    if(!tp)return;
+    if(drawTool==='horizontal'){
+      // 単発クリックで水平線確定
+      if(tp.p==null)return;
+      var stroke={id:'s_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),
+        tool:'horizontal',anchors:[{tm:0,p:tp.p}],
+        color:drawColor,width:drawWidth,opacity:drawOpacity};
+      if(onStrokeAdd)onStrokeAdd(stroke);
+    } else if(drawTool==='line'){
+      // 2点クリック: 1回目=始点記録、2回目=終点で確定
+      if(tp.p==null)return;
+      if(!drawStartRef.current){
+        drawStartRef.current={tm:tp.tm,p:tp.p};
+      } else {
+        var stroke={id:'s_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),
+          tool:'line',anchors:[drawStartRef.current,{tm:tp.tm,p:tp.p}],
+          color:drawColor,width:drawWidth,opacity:drawOpacity};
+        drawStartRef.current=null;
+        if(onStrokeAdd)onStrokeAdd(stroke);
+      }
+    } else if(drawTool==='eraser'){
+      var idx=hitTestStroke(e.clientX,e.clientY);
+      if(idx!=null&&onStrokeDelete)onStrokeDelete(idx);
+    }
   }
   function onMouseMove(e){
+    // 描画中プレビュー (line ツールで始点設定後) は overlay に出す
+    onChartMouseMove(e); // 十字 + プレビュー
     var p=panStartRef.current; if(!p)return;
+    if(drawTool!=='pan'){panStartRef.current=null;return;}
     var rect=containerRef.current.getBoundingClientRect();
     var padL=10, padR=60;
     var chartW=rect.width-padL-padR;
@@ -1015,14 +1098,23 @@ function DataChart(props){
     }
   }
   function onMouseUp(){panStartRef.current=null;}
-  // タッチ (iPad) 同等
+  // タッチ (iPad) 同等 — 描画モード時はpanしない
   function onTouchStart(e){
+    if(drawTool!=='pan'){
+      // タッチで描画: 1本指タップのみ
+      if(e.touches.length!==1)return;
+      var t=e.touches[0];
+      // clientX/Yでマウス相当処理
+      onMouseDown({clientX:t.clientX,clientY:t.clientY});
+      return;
+    }
     if(e.touches.length!==1)return;
     var t=e.touches[0];
     panStartRef.current={x:t.clientX,y:t.clientY,s:view.s,e:view.e,ps:pShift};
   }
   function onTouchMove(e){
     var p=panStartRef.current; if(!p||!e.touches.length)return;
+    if(drawTool!=='pan'){panStartRef.current=null;return;}
     var t=e.touches[0];
     var rect=containerRef.current.getBoundingClientRect();
     var padL=10, padR=60;
@@ -1040,8 +1132,7 @@ function DataChart(props){
       setPShift(p.ps + (t.clientY-p.y)*yenPerPx2);
     }
   }
-  // ダブルクリック/タップ: リセット
-  function onDblClick(){setView({s:540,e:930}); setPShift(0);}
+  // ダブルクリック: (機能削除、ユーザー要望)
 
   if(!data||!bars.length){
     return ce("div",{ref:containerRef,style:{flex:1,display:"flex",alignItems:"center",justifyContent:"center",color:"#555"}},
@@ -1051,13 +1142,12 @@ function DataChart(props){
   return ce("div",{
     ref:containerRef,
     onMouseDown:onMouseDown,
-    onMouseMove:function(e){onMouseMove(e);onChartMouseMove(e);},
+    onMouseMove:onMouseMove,
     onMouseUp:onMouseUp,
     onMouseLeave:function(){onMouseUp();onChartMouseLeave();},
     onTouchStart:onTouchStart,
     onTouchMove:onTouchMove,
     onTouchEnd:onMouseUp,
-    onDoubleClick:onDblClick,
     style:{flex:1,position:"relative",background:"#000000",overflow:"hidden",cursor:"grab",touchAction:"none",userSelect:"none"}
   },
     ce("canvas",{ref:canvasRef,style:{display:"block",width:"100%",height:"100%",pointerEvents:"none"}}),
@@ -1065,12 +1155,12 @@ function DataChart(props){
     ce("canvas",{ref:overlayRef,style:{position:"absolute",inset:0,width:"100%",height:"100%",pointerEvents:"none"}}),
     /* ズーム倍率表示 (右下) */
     ce("div",{style:{position:"absolute",right:8,bottom:6,fontSize:10,color:"#555",pointerEvents:"none"}},
-      (390/(view.e-view.s)).toFixed(1)+'×  '+'ダブルクリックでリセット')
+      (390/(view.e-view.s)).toFixed(1)+'×')
   );
 }
 
-/* DataChart 描画関数 (Canvas 2D 直接描画、HSBI2色、ズーム対応、10円固定グリッド) */
-function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef){
+/* DataChart 描画関数 (Canvas 2D 直接描画、HSBI2色、ズーム対応、10円固定グリッド、時刻+価格ストローク) */
+function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes){
   var dpr=window.devicePixelRatio||1;
   var W=dim.w, H=dim.h;
   canvas.width=Math.round(W*dpr);
@@ -1202,6 +1292,45 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef)
     ctx.stroke();
   });
 
+  /* B-drawing: 時刻+価格座標ストローク描画 (ズーム・パンに追従) */
+  if(strokes&&strokes.length){
+    strokes.forEach(function(s){
+      if(!s||!s.anchors||!s.anchors.length)return;
+      ctx.globalAlpha=(s.opacity!=null?s.opacity:1);
+      ctx.strokeStyle=s.color||'#ff3b30';
+      ctx.fillStyle=s.color||'#ff3b30';
+      ctx.lineWidth=s.width||2;
+      if(s.dash)ctx.setLineDash(s.dash); else ctx.setLineDash([]);
+      if(s.tool==='horizontal'){
+        // 水平線: 価格だけ使う (tm無視)、全幅に引く
+        var y=pToY(s.anchors[0].p);
+        if(y>=priceTop-2&&y<=priceBot+2){
+          ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(padL+chartW,y); ctx.stroke();
+          // 右端に価格ラベル
+          var lbl=s.anchors[0].p.toFixed(0);
+          ctx.font='bold 10px -apple-system,Helvetica,sans-serif';
+          ctx.textBaseline='middle'; ctx.textAlign='left';
+          var lw=ctx.measureText(lbl).width+8;
+          ctx.globalAlpha=1;
+          ctx.fillRect(padL+chartW+2,y-7,lw,14);
+          ctx.fillStyle='#000';
+          ctx.fillText(lbl,padL+chartW+6,y);
+          ctx.globalAlpha=(s.opacity!=null?s.opacity:1);
+        }
+      } else if(s.tool==='line'){
+        // 直線: 2点を結ぶ
+        if(s.anchors.length>=2){
+          var a1=s.anchors[0], a2=s.anchors[1];
+          var x1=minToX(a1.tm), y1=pToY(a1.p);
+          var x2=minToX(a2.tm), y2=pToY(a2.p);
+          ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+        }
+      }
+      ctx.setLineDash([]);
+      ctx.globalAlpha=1;
+    });
+  }
+
   // ヘッダー (上段: タイトル、下段: 凡例)
   var last=bars[bars.length-1];
   ctx.textBaseline='top'; ctx.textAlign='left';
@@ -1258,6 +1387,11 @@ function ImageAnnotator(props){
   var stAX=useState(true); var showCrosshair=stAX[0],setShowCrosshair=stAX[1];
   var analysisDataRef=useRef(analysisData);  // triggerAutoSave内で最新値参照用
   useEffect(function(){analysisDataRef.current=analysisData;},[analysisData]);
+  /* B-drawing: 分析画面の描画ストローク (時刻+価格座標) */
+  var sAS=useState(function(){return (img&&Array.isArray(img.analysisStrokes))?img.analysisStrokes:[];});
+  var analysisStrokes=sAS[0],setAnalysisStrokes=sAS[1];
+  var analysisStrokesRef=useRef(analysisStrokes);
+  useEffect(function(){analysisStrokesRef.current=analysisStrokes;},[analysisStrokes]);
   var st0=useState("pan");   var tool=st0[0],setTool=st0[1];
   var st1=useState("#E53935"); var color=st1[0],setColor=st1[1];
   var st2=useState([]);      var colorHist=st2[0],setColorHist=st2[1];
@@ -1663,6 +1797,8 @@ function ImageAnnotator(props){
           :{orig_base64:b64,orig_mt:mt,strokes:strokes,name:img._name||img.name||'chart'};
         /* B2+: 分析データがあれば同梱 (Firebase同期対応) */
         if(analysisDataRef.current)draftData.analysisData=analysisDataRef.current;
+        /* B-drawing: 分析画面のストロークも同梱 */
+        if(analysisStrokesRef.current&&analysisStrokesRef.current.length)draftData.analysisStrokes=analysisStrokesRef.current;
         var dataBody=JSON.stringify(draftData);fetch(draftDataBase+'/'+draftId+'.json'+auth,{method:'PUT',
           headers:{'Content-Type':'application/json'},body:dataBody})
           .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);
@@ -1707,6 +1843,12 @@ function ImageAnnotator(props){
     if(analysisDataInitSkip.current){analysisDataInitSkip.current=false;return;}
     triggerAutoSave();
   },[analysisData]);
+  /* B-drawing: ストローク変更時も自動保存 */
+  var analysisStrokesInitSkip=useRef(true);
+  useEffect(function(){
+    if(analysisStrokesInitSkip.current){analysisStrokesInitSkip.current=false;return;}
+    triggerAutoSave();
+  },[analysisStrokes]);
 
   // ── 別端末同期ポーリング（60秒ごとにタイムスタンプを確認）──
   useEffect(function(){
@@ -1738,6 +1880,11 @@ function ImageAnnotator(props){
                 if(fbData.analysisData!==undefined){
                   analysisDataInitSkip.current=true;
                   setAnalysisData(fbData.analysisData||null);
+                }
+                /* B-drawing: 分析ストロークも同期 */
+                if(fbData.analysisStrokes!==undefined){
+                  analysisStrokesInitSkip.current=true;
+                  setAnalysisStrokes(Array.isArray(fbData.analysisStrokes)?fbData.analysisStrokes:[]);
                 }
                 loadedSavedAtRef.current=remoteT;
                 setRemoteUpdate(false);
@@ -2358,6 +2505,7 @@ function ImageAnnotator(props){
           ?{imageUrl:imageUrl,orig_mt:mt,strokes:strokesRef.current,name:chartName}
           :{orig_base64:b64,orig_mt:mt,strokes:strokesRef.current,name:chartName};
         if(analysisDataRef.current)dbData.analysisData=analysisDataRef.current;  /* B2+: JSON同梱 */
+        if(analysisStrokesRef.current&&analysisStrokesRef.current.length)dbData.analysisStrokes=analysisStrokesRef.current;  /* B-drawing */
         var dataBody=JSON.stringify(dbData);fetch(draftDataBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
           body:dataBody}).catch(function(e){console.error('fbSyncDraft data:',e);});
       });
@@ -2638,6 +2786,11 @@ function ImageAnnotator(props){
                 analysisDataInitSkip.current=true;
                 setAnalysisData(fbData.analysisData||null);
               }
+              /* B-drawing: 分析ストロークも反映 */
+              if(fbData.analysisStrokes!==undefined){
+                analysisStrokesInitSkip.current=true;
+                setAnalysisStrokes(Array.isArray(fbData.analysisStrokes)?fbData.analysisStrokes:[]);
+              }
               loadedSavedAtRef.current=Date.now();
             }).catch(function(e){console.error('[反映する] fetch error:',e);});
         },
@@ -2842,6 +2995,30 @@ function ImageAnnotator(props){
               :'')
           ),
           ce("div",{style:{flex:1}}),
+          /* B-drawing: 描画ツール選択 */
+          ce("div",{style:{display:"flex",gap:2,marginRight:6}},
+            [
+              {k:'pan',lbl:'🖐'},
+              {k:'horizontal',lbl:'━ 水平'},
+              {k:'line',lbl:'╱ 直線'},
+              {k:'eraser',lbl:'🧹'}
+            ].map(function(t){
+              return ce("button",{key:t.k,onClick:function(){setTool(t.k);},
+                title:t.k,
+                style:{padding:"5px 8px",fontSize:11,fontWeight:600,border:"none",borderRadius:5,
+                  background:tool===t.k?'#f59e0b':'#2a2a2a',
+                  color:tool===t.k?'#fff':'#aaa',cursor:"pointer",fontFamily:"inherit"}},
+                t.lbl);
+            })
+          ),
+          /* 色選択 (簡易クイックパレット) */
+          ce("div",{style:{display:"flex",gap:2,marginRight:6}},
+            ['#ff3b30','#ffcc00','#34c759','#4a9de3','#ffffff'].map(function(c){
+              return ce("button",{key:c,onClick:function(){setColor(c);},
+                style:{width:20,height:20,padding:0,border:color===c?'2px solid #fff':'1px solid #333',
+                  borderRadius:10,background:c,cursor:'pointer'}});
+            })
+          ),
           /* 十字カーソル ON/OFF (常時ボタン表示、PCで機能) */
           ce("button",{
             onClick:function(){setShowCrosshair(!showCrosshair);},
@@ -2868,7 +3045,17 @@ function ImageAnnotator(props){
               background:"#2a2a2a",color:"#888",cursor:"pointer",fontFamily:"inherit"}
           },"🔄 別のJSON")
         ),
-        ce(DataChart,{data:analysisData,tf:analysisTf,showCrosshair:showCrosshair})
+        ce(DataChart,{
+          data:analysisData, tf:analysisTf, showCrosshair:showCrosshair,
+          drawTool:tool, drawColor:color, drawWidth:lineW, drawOpacity:opacity,
+          strokes:analysisStrokes,
+          onStrokeAdd:function(s){setAnalysisStrokes(analysisStrokesRef.current.concat([s]));},
+          onStrokeDelete:function(idx){
+            var next=analysisStrokesRef.current.slice();
+            next.splice(idx,1);
+            setAnalysisStrokes(next);
+          }
+        })
       )
     ),
 
@@ -3926,7 +4113,8 @@ function DraftLibrary(props){
             if(d&&(d.orig_base64||d.base64)){
               var merged={orig_base64:d.orig_base64||d.base64,orig_mt:d.orig_mt||d.mt||fbData.orig_mt||'image/png',
                 strokes:fbData.strokes||[],name:fbData.name||'',
-                analysisData:fbData.analysisData||null};  /* B2+: Firebase同期されたJSON */
+                analysisData:fbData.analysisData||null,
+                analysisStrokes:Array.isArray(fbData.analysisStrokes)?fbData.analysisStrokes:[]};  /* B-drawing */
               caSaveData(id,merged);setSyncStatus(null);
               onOpen(Object.assign({},merged,extra));return;
             }
@@ -3934,7 +4122,8 @@ function DraftLibrary(props){
           return storageUrlToBase64(fbData.imageUrl).then(function(res){
             var localData={orig_base64:res.base64,orig_mt:res.mt||fbData.orig_mt||'image/png',
               strokes:fbData.strokes||[],name:fbData.name||'',
-              analysisData:fbData.analysisData||null};  /* B2+ */
+              analysisData:fbData.analysisData||null,
+              analysisStrokes:Array.isArray(fbData.analysisStrokes)?fbData.analysisStrokes:[]};  /* B-drawing */
             caSaveData(id,localData);setSyncStatus(null);
             onOpen(Object.assign({},localData,extra));
           }).catch(function(e){
@@ -3948,7 +4137,8 @@ function DraftLibrary(props){
                 try{
                   var du=tc.toDataURL('image/png');var b64=du.split(',')[1];
                   var localData={orig_base64:b64,orig_mt:'image/png',strokes:fbData.strokes||[],name:fbData.name||'',
-                    analysisData:fbData.analysisData||null};  /* B2+ */
+                    analysisData:fbData.analysisData||null,
+                    analysisStrokes:Array.isArray(fbData.analysisStrokes)?fbData.analysisStrokes:[]};  /* B-drawing */
                   caSaveData(id,localData);setSyncStatus(null);
                   onOpen(Object.assign({},localData,extra));resolve();
                 }catch(e2){reject(e2);}
