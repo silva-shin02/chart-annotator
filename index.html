@@ -3871,7 +3871,8 @@ function ImageAnnotator(props){
             display:"flex",flexDirection:"column",
             flex:refAnalysis?"0 0 auto":"1 1 auto",
             minWidth:refAnalysis?(IS_TOUCH?480:600):"100%",
-            height:"100%",
+            alignSelf:"stretch",    // バグA対策: 親flex row経由で高さ継承 (タブレット対応)
+            minHeight:0,            // flex child のminHeight default 'auto' を上書き
             borderRight:refAnalysis?"1px solid #333":"none"
           }},
             /* メタ行 (ticker + date のみ) */
@@ -3967,7 +3968,8 @@ function ImageAnnotator(props){
           display:"flex",flexDirection:"column",
           flex:"0 0 auto",
           minWidth:IS_TOUCH?480:600,
-          height:"100%"
+          alignSelf:"stretch",    // バグA対策: 親flex row経由で高さ継承 (タブレット対応)
+          minHeight:0
         }},
           /* メタ行 (ticker + date + 他のチャートに変更 + ✕) */
           ce("div",{style:{display:"flex",alignItems:"center",gap:10,padding:"6px 12px",
