@@ -798,25 +798,29 @@ function RefChartPicker(props){
 /* ─── RefAnalysisPicker（F1: 過去の分析データを選択） ───────── */
 function RefAnalysisPicker(props){
   var onSelect=props.onSelect, onClose=props.onClose, fbCfg=props.fbCfg||{};
-  var s0=useState(caLoadTickers); var tickers=s0[0];
-  var s1=useState(null);          var selTicker=s1[0],setSelTicker=s1[1];
+  var currentTicker=props.currentTicker;        // 現在分析中の ticker (必須)
+  var currentDraftId=props.currentDraftId;      // 現在開いてる draft の id (自分自身を除外用)
   var s2=useState(caLoadMeta);    var meta=s2[0];
   var s3=useState(null);          var loading=s3[0],setLoading=s3[1];
   var BT2={border:"none",cursor:"pointer",fontFamily:"inherit"};
 
-  var charts=selTicker?meta.filter(function(m){return m.ticker===selTicker;}).sort(function(a,b){return(b.savedAt||0)-(a.savedAt||0);}):[];
+  // 現在のticker かつ 自分自身以外 のチャートのみ表示、保存日時の降順
+  var charts=meta.filter(function(m){
+    if(!currentTicker||m.ticker!==currentTicker)return false;
+    if(currentDraftId&&m.id===currentDraftId)return false;
+    return true;
+  }).sort(function(a,b){return(b.savedAt||0)-(a.savedAt||0);});
 
   function pickAnalysis(id, chartMeta){
     setLoading(id);
     // ローカル (IndexedDB) から取得試行
     caLoadDataAsync(id, function(d){
       if(d && d.analysisData){
-        // 紐付き analysisData あり
         setLoading(null);
         onSelect({
           id:id, ticker:chartMeta.ticker, name:chartMeta.name,
           analysisData:d.analysisData,
-          analysisStrokes:d.analysisStrokes||null,  // 過去側strokes (null許容)
+          analysisStrokes:d.analysisStrokes||null,
           savedAt:chartMeta.savedAt||0
         });
         return;
@@ -830,7 +834,6 @@ function RefAnalysisPicker(props){
             var fbData=txt?JSON.parse(txt):null;
             setLoading(null);
             if(fbData && fbData.analysisData){
-              // Firebase から取得成功
               onSelect({
                 id:id, ticker:chartMeta.ticker, name:chartMeta.name,
                 analysisData:fbData.analysisData,
@@ -861,68 +864,48 @@ function RefAnalysisPicker(props){
           display:"flex",flexDirection:"column",overflow:"hidden"}},
         /* header */
         ce("div",{style:{padding:"16px 18px",borderBottom:"1px solid #2a2a2a",display:"flex",alignItems:"center",gap:10,flexShrink:0}},
-          ce("span",{style:{fontSize:16,fontWeight:700,color:"#fff",flex:1}},"📊 過去チャートを開く"),
+          ce("span",{style:{fontSize:16,fontWeight:700,color:"#fff",flex:1}},
+            "📊 過去チャートを開く — "+(currentTicker||'(ticker未設定)')
+          ),
           ce("button",{onClick:onClose,style:Object.assign({},BT2,{fontSize:13,fontWeight:700,
             background:"#2a2a2a",color:"#aaa",padding:"7px 14px",borderRadius:8})},"閉じる")
         ),
-        /* body */
-        ce("div",{style:{display:"flex",flex:1,overflow:"hidden"}},
-          /* ticker list */
-          ce("div",{style:{width:IS_TOUCH?120:140,background:"#161616",borderRight:"1px solid #2a2a2a",
-            overflowY:"auto",flexShrink:0}},
-            tickers.length===0
-              ?ce("div",{style:{color:"#555",fontSize:12,textAlign:"center",padding:20}},"銘柄なし")
-              :tickers.map(function(t){
-                var cnt=meta.filter(function(m){return m.ticker===t;}).length;
-                var isS=selTicker===t;
-                return ce("div",{key:t,onClick:function(){setSelTicker(t);},
-                  style:{padding:"10px 10px",borderBottom:"1px solid #1e1e1e",cursor:"pointer",
-                    background:isS?"#1e2a3a":"transparent",
-                    borderLeft:isS?"3px solid #10b981":"3px solid transparent"}},
-                  ce("div",{style:{fontSize:12,fontWeight:isS?700:400,color:isS?"#6ee7b7":"#ccc",
-                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},t),
-                  ce("div",{style:{fontSize:10,color:"#555",marginTop:1}},cnt+"件")
-                );
-              })
-          ),
-          /* chart grid */
-          ce("div",{style:{flex:1,overflowY:"auto",padding:10,
-            display:"flex",flexWrap:"wrap",gap:8,alignContent:"flex-start"}},
-            selTicker===null
-              ?ce("div",{style:{width:"100%",textAlign:"center",color:"#555",fontSize:13,paddingTop:40}},"← 銘柄を選択")
-              :charts.length===0
-                ?ce(Fragment,null,
-                    ce("div",{style:{width:"100%",textAlign:"center",color:"#888",fontSize:13,paddingTop:40}},"過去のデータがありません"),
-                    ce("div",{style:{width:"100%",textAlign:"center",marginTop:20}},
-                      ce("button",{
-                        onClick:function(){alert('F5機能: 過去データを追加する、は未実装です。');},
-                        style:{padding:"10px 20px",fontSize:13,fontWeight:700,border:"none",borderRadius:8,
-                          background:"#10b981",color:"#fff",cursor:"pointer",fontFamily:"inherit"}
-                      },"📥 過去データを追加する")
-                    )
-                  )
-                :charts.map(function(m){
-                  var isLoading=loading===m.id;
-                  return ce("div",{key:m.id,
-                    onClick:function(){if(!isLoading)pickAnalysis(m.id,m);},
-                    style:{width:IS_TOUCH?200:220,background:"#1a1a1a",borderRadius:8,
-                      border:"1px solid #2a2a2a",overflow:"hidden",cursor:isLoading?"wait":"pointer",flexShrink:0,
-                      opacity:isLoading?0.5:1,
-                      transition:"border-color .15s"},
-                    onMouseEnter:function(e){if(!isLoading)e.currentTarget.style.borderColor='#10b981';},
-                    onMouseLeave:function(e){e.currentTarget.style.borderColor='#2a2a2a';}},
-                    (m.thumbUrl||_thumbMemCache[m.id]||m.thumb)?ce("img",{src:_thumbMemCache[m.id]||m.thumbUrl||m.thumb,style:{width:"100%",display:"block",height:"auto"},draggable:false,onError:function(e){e.target.style.display="none";}})
-                      :ce("div",{style:{width:"100%",height:60,background:"#222",display:"flex",
-                        alignItems:"center",justifyContent:"center",color:"#555",fontSize:10}},"no preview"),
-                    ce("div",{style:{padding:"5px 7px"}},
-                      ce("div",{style:{fontSize:11,fontWeight:600,color:"#ddd",
-                        overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},m.name||''),
-                      ce("div",{style:{fontSize:9,color:"#666",marginTop:2}},
-                        isLoading?'読込中…':(m.savedAt?new Date(m.savedAt).toLocaleDateString():''))
-                    )
-                  );
-                })
-          )
+        /* body: 過去データ一覧 */
+        ce("div",{style:{flex:1,overflowY:"auto",padding:14,
+          display:"flex",flexWrap:"wrap",gap:10,alignContent:"flex-start"}},
+          charts.length===0
+            ?ce(Fragment,null,
+                ce("div",{style:{width:"100%",textAlign:"center",color:"#888",fontSize:14,paddingTop:40}},"過去のデータがありません"),
+                ce("div",{style:{width:"100%",textAlign:"center",color:"#555",fontSize:11,marginTop:8}},currentTicker+" に紐付いた他のチャートは見つかりません"),
+                ce("div",{style:{width:"100%",textAlign:"center",marginTop:24}},
+                  ce("button",{
+                    onClick:function(){alert('F5機能: 過去データを追加する、は未実装です。');},
+                    style:{padding:"11px 22px",fontSize:13,fontWeight:700,border:"none",borderRadius:8,
+                      background:"#10b981",color:"#fff",cursor:"pointer",fontFamily:"inherit"}
+                  },"📥 過去データを追加する")
+                )
+              )
+            :charts.map(function(m){
+              var isLoading=loading===m.id;
+              return ce("div",{key:m.id,
+                onClick:function(){if(!isLoading)pickAnalysis(m.id,m);},
+                style:{width:IS_TOUCH?200:220,background:"#1a1a1a",borderRadius:8,
+                  border:"1px solid #2a2a2a",overflow:"hidden",cursor:isLoading?"wait":"pointer",flexShrink:0,
+                  opacity:isLoading?0.5:1,
+                  transition:"border-color .15s"},
+                onMouseEnter:function(e){if(!isLoading)e.currentTarget.style.borderColor='#10b981';},
+                onMouseLeave:function(e){e.currentTarget.style.borderColor='#2a2a2a';}},
+                (m.thumbUrl||_thumbMemCache[m.id]||m.thumb)?ce("img",{src:_thumbMemCache[m.id]||m.thumbUrl||m.thumb,style:{width:"100%",display:"block",height:"auto"},draggable:false,onError:function(e){e.target.style.display="none";}})
+                  :ce("div",{style:{width:"100%",height:60,background:"#222",display:"flex",
+                    alignItems:"center",justifyContent:"center",color:"#555",fontSize:10}},"no preview"),
+                ce("div",{style:{padding:"5px 7px"}},
+                  ce("div",{style:{fontSize:11,fontWeight:600,color:"#ddd",
+                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},m.name||''),
+                  ce("div",{style:{fontSize:9,color:"#666",marginTop:2}},
+                    isLoading?'読込中…':(m.savedAt?new Date(m.savedAt).toLocaleDateString():''))
+                )
+              );
+            })
         )
       )
     ),
@@ -959,18 +942,29 @@ function DataChart(props){
   var pinchRef=useRef(null);       // 2本指ピンチ状態 {d0,s0,e0,ps0,tmC,midX,midY,active}
   var containerRef=useRef(null);
   var sD=useState({w:800,h:520}); var dim=sD[0],setDim=sD[1];
-  /* 時間軸ビューレンジ (分, 540=09:00, 930=15:30) */
-  var sV=useState({s:540,e:930}); var view=sV[0],setView=sV[1];
+  /* 時間軸ビューレンジ (分, 540=09:00, 930=15:30)
+     controlled: props.view / props.onViewChange があればそれを使う (両チャート連動用) */
+  var sV=useState({s:540,e:930}); var viewLocal=sV[0],setViewLocal=sV[1];
+  var view=props.view!==undefined?props.view:viewLocal;
+  var setView=props.onViewChange||setViewLocal;
   var panStartRef=useRef(null);
-  /* 価格軸の縦シフト (yen単位、タイム軸ズーム非依存) */
-  var sPY=useState(0); var pShift=sPY[0],setPShift=sPY[1];
+  /* 価格軸の縦シフト (yen単位、タイム軸ズーム非依存)
+     controlled: props.pShift / props.onPShiftChange があればそれを使う */
+  var sPY=useState(0); var pShiftLocal=sPY[0],setPShiftLocal=sPY[1];
+  var pShift=props.pShift!==undefined?props.pShift:pShiftLocal;
+  var setPShift=props.onPShiftChange||setPShiftLocal;
   /* 価格レンジ (全バーから算出、タイム軸ズーム・パンに影響されない固定値) */
   var sPR=useState(null); var priceRange=sPR[0],setPriceRange=sPR[1];
   /* 選択ストロークの index (lasso用) */
   var sSI=useState(null); var selectedIdx=sSI[0],setSelectedIdx=sSI[1];
 
   // データロード時: 全バーから priceRange を算出 (10円境界に丸める)
+  // F2: props.priceRangeOverride があれば、それを優先して使用 (yenPerPx統一用)
   useEffect(function(){
+    if(props.priceRangeOverride){
+      setPriceRange(props.priceRangeOverride);
+      return;
+    }
     if(!bars.length){setPriceRange(null);return;}
     var mn=Infinity, mx=-Infinity;
     bars.forEach(function(b){
@@ -982,8 +976,11 @@ function DataChart(props){
     // 10円境界に丸める + 余白 (±5円: 10円1マスが画面上広く見えるよう最小限)
     mn=Math.floor(mn/10)*10 - 5;
     mx=Math.ceil(mx/10)*10 + 5;
-    setPriceRange({min:mn, max:mx});
-  },[data,tf]);
+    var pr={min:mn, max:mx};
+    setPriceRange(pr);
+    // F2: 親へ自前算出 priceRange を通知 (連動チャートが yenPerPx を揃えるため)
+    if(props.onBaseRangeComputed)props.onBaseRangeComputed(pr);
+  },[data,tf,props.priceRangeOverride]);
 
   // tf 変更時にビューリセット
   useEffect(function(){
@@ -1028,6 +1025,12 @@ function DataChart(props){
   useEffect(function(){
     drawCrosshair();
   },[showCrosshair]);
+  // F2: 親(他チャート)が cursor を更新したら自分も再描画
+  useEffect(function(){
+    if(!rafRef.current){
+      rafRef.current=requestAnimationFrame(function(){drawCrosshair();rafRef.current=null;});
+    }
+  },[props.externalCursorBump]);
 
   // 十字カーソル + 描画プレビュー (オーバーレイCanvas)
   function drawCrosshair(){
@@ -1083,10 +1086,25 @@ function DataChart(props){
 
     /* 十字カーソル */
     if(!showCrosshair||!L)return;
-    var pos=cursorRef.current; if(!pos)return;
-    var cx=pos.x, cy=pos.y;
-    if(cx<L.padL||cx>L.padL+L.chartW)return;
-    if(cy<L.padT||cy>L.volBot)return;
+    /* F2: 連動cursor が親から来ていればそれを自分の画面座標に変換して描く。
+       無ければ従来の cursorRef (自分のpointer位置) を使う */
+    var cx, cy, tmForLabel;
+    var extRef=props.externalCursorRef;
+    if(extRef&&extRef.current){
+      var ec=extRef.current;
+      cx=L.padL+((ec.tm-L.vS)/(L.vE-L.vS))*L.chartW;
+      cy=L.priceTop+ec.yOffset;
+      tmForLabel=ec.tm;
+      // 縦線は時間軸外なら描かない (view範囲外)
+      if(cx<L.padL||cx>L.padL+L.chartW)return;
+    } else {
+      var pos=cursorRef.current; if(!pos)return;
+      cx=pos.x; cy=pos.y;
+      if(cx<L.padL||cx>L.padL+L.chartW)return;
+      if(cy<L.padT||cy>L.volBot)return;
+      var fracXL=(cx-L.padL)/L.chartW;
+      tmForLabel=L.vS+fracXL*(L.vE-L.vS);
+    }
     var CROSS='#4a9de3';
     ctx.strokeStyle=CROSS; ctx.setLineDash([3,3]); ctx.lineWidth=1;
     ctx.beginPath();
@@ -1100,9 +1118,7 @@ function DataChart(props){
       ctx.stroke();
     }
     ctx.setLineDash([]);
-    var fracX=(cx-L.padL)/L.chartW;
-    var minAt=L.vS+fracX*(L.vE-L.vS);
-    var hh=Math.floor(minAt/60), mm=Math.round(minAt%60);
+    var hh=Math.floor(tmForLabel/60), mm=Math.round(tmForLabel%60);
     if(mm>=60){hh++;mm-=60;}
     var tStr=(data.date?data.date.replace(/-/g,'/')+' ':'')+(hh<10?'0':'')+hh+':'+(mm<10?'0':'')+mm;
     ctx.font='bold 11px -apple-system,Helvetica,sans-serif';
@@ -1126,10 +1142,20 @@ function DataChart(props){
     }
   }
 
+  // F2: 自分の cursorRef.current から親に {tm, yOffset} を通知 (両チャート連動)
+  function notifyExternalCursorFromLocal(){
+    var onCh=props.onExternalCursorChange; if(!onCh)return;
+    var L=layoutRef.current; var p=cursorRef.current;
+    if(!p||!L){onCh(null);return;}
+    if(p.x<L.padL||p.x>L.padL+L.chartW||p.y<L.padT||p.y>L.volBot){onCh(null);return;}
+    var tm=L.vS+((p.x-L.padL)/L.chartW)*(L.vE-L.vS);
+    onCh({tm:tm, yOffset:p.y-L.priceTop});
+  }
   // マウスムーブハンドラ (十字カーソル座標更新専用)
   function onChartMouseMove(e){
     var rect=containerRef.current.getBoundingClientRect();
     cursorRef.current={x:e.clientX-rect.left,y:e.clientY-rect.top};
+    notifyExternalCursorFromLocal();
     if(!rafRef.current){
       rafRef.current=requestAnimationFrame(function(){
         drawCrosshair();
@@ -1139,6 +1165,7 @@ function DataChart(props){
   }
   function onChartMouseLeave(){
     cursorRef.current=null;
+    if(props.onExternalCursorChange)props.onExternalCursorChange(null);
     drawCrosshair();
   }
 
@@ -1354,6 +1381,7 @@ function DataChart(props){
     if(containerRef.current){
       var rect=containerRef.current.getBoundingClientRect();
       cursorRef.current={x:e.clientX-rect.left,y:e.clientY-rect.top};
+      notifyExternalCursorFromLocal();
     }
     // lasso 移動中
     if(moveRef.current){
@@ -1588,6 +1616,7 @@ function DataChart(props){
     if(!containerRef.current)return;
     var rect=containerRef.current.getBoundingClientRect();
     cursorRef.current={x:e.clientX-rect.left,y:e.clientY-rect.top};
+    notifyExternalCursorFromLocal();
     if(!rafRef.current){
       rafRef.current=requestAnimationFrame(function(){drawCrosshair();rafRef.current=null;});
     }
@@ -1631,7 +1660,11 @@ function DataChart(props){
     onPointerMove:onPointerMoveHover,
     onPointerLeave:function(e){
       // ペンのホバーがチャート外に出たら十字カーソル消す
-      if(e.pointerType==='pen'){cursorRef.current=null;drawCrosshair();}
+      if(e.pointerType==='pen'){
+        cursorRef.current=null;
+        if(props.onExternalCursorChange)props.onExternalCursorChange(null);
+        drawCrosshair();
+      }
     },
     style:{flex:1,position:"relative",background:"#000000",overflow:"hidden",cursor:"grab",touchAction:"none",userSelect:"none"}
   },
@@ -2038,6 +2071,19 @@ function ImageAnnotator(props){
   var stRA=useState(null);   var refAnalysis=stRA[0],setRefAnalysis=stRA[1];
   /* F1: 過去チャート選択モーダルの表示 */
   var stRPicker=useState(false); var showRefAnalysisPicker=stRPicker[0],setShowRefAnalysisPicker=stRPicker[1];
+  /* F2: 両チャート連動用の共有 state */
+  var stAV=useState({s:540,e:930});  var analysisView=stAV[0],setAnalysisView=stAV[1];         // 時間軸ビュー (両チャート共有)
+  var stAPS=useState(0);             var analysisPShift=stAPS[0],setAnalysisPShift=stAPS[1];   // 現在チャートの pShift
+  var stRPS=useState(0);             var refPShift=stRPS[0],setRefPShift=stRPS[1];             // 過去チャートの pShift (独立)
+  /* F2: yenPerPx統一用 — 現在chartの自前算出 priceRange を保持し、過去chart にレンジ幅を強制 */
+  var stCBR=useState(null); var curBaseRange=stCBR[0],setCurBaseRange=stCBR[1];
+  /* F2: 十字カーソル共有 ({tm, yOffset}) — tmは絶対時刻(分)、yOffsetはpriceTop基準のcanvas内y */
+  var analysisCursorRef=useRef(null);
+  var stCB=useState(0); var cursorBump=stCB[0],setCursorBump=stCB[1];
+  function notifyAnalysisCursor(c){
+    analysisCursorRef.current=c;
+    setCursorBump(function(b){return (b+1)&65535;});
+  }
   var stRP=useState(null);   var refPanel=stRP[0],setRefPanel=stRP[1]; // null | {url:string|null}
   var stRD=useState(null);   var refImgDim=stRD[0],setRefImgDim=stRD[1]; // ref画像の自然サイズ
   var stRS=useState(false);  var refSlideMode=stRS[0],setRefSlideMode=stRS[1]; // true=縦スライド操作中
@@ -3749,6 +3795,14 @@ function ImageAnnotator(props){
               drawTool:tool, drawColor:color, drawWidth:lineW, drawOpacity:opacity,
               drawFontSize:fontSize, drawFontBold:fontBold,
               horiz:horiz,
+              /* F2: 時間軸ビュー / pShift controlled (両チャート連動) */
+              view:analysisView, onViewChange:setAnalysisView,
+              pShift:analysisPShift, onPShiftChange:setAnalysisPShift,
+              /* F2: 十字カーソル連動 */
+              externalCursorRef:analysisCursorRef, externalCursorBump:cursorBump,
+              onExternalCursorChange:notifyAnalysisCursor,
+              /* F2: 自前算出 priceRange を親に通知 (yenPerPx統一用) */
+              onBaseRangeComputed:setCurBaseRange,
               strokes:(analysisStrokes&&analysisStrokes[analysisTf])||[],
               editingTextIdx:analysisTextInput&&analysisTextInput.editIdx>=0?analysisTextInput.editIdx:-1,
               textInputActive:!!analysisTextInput,
@@ -3843,11 +3897,37 @@ function ImageAnnotator(props){
                 background:"#2a2a2a",color:"#888",cursor:"pointer",fontFamily:"inherit"}
             },"✕")
           ),
-          /* F1段階: 過去チャート DataChart (静的表示、描画・連動なし) */
+          /* F2段階: 過去チャート DataChart (連動: view/tf/cursor、独立: pShift) */
           ce(DataChart,{
             data:refAnalysis.analysisData,
-            tf:analysisTf,             // F2で両方向連動させるまで、現在と同じtfを渡す(表示のみ)
+            tf:analysisTf,
             showCrosshair:showCrosshair,
+            /* 連動 */
+            view:analysisView, onViewChange:setAnalysisView,
+            externalCursorRef:analysisCursorRef, externalCursorBump:cursorBump,
+            onExternalCursorChange:notifyAnalysisCursor,
+            /* yenPerPx 統一: 現在chartと同じレンジ幅に強制、中心は過去データの自前中心
+               (priceHは両chartで同じなので、レンジ幅が同じなら yenPerPx も一致) */
+            priceRangeOverride:(function(){
+              if(!curBaseRange||!refAnalysis.analysisData)return null;
+              var bk=analysisTf==='5m'?'bars_5m':'bars_1m';
+              var rbars=refAnalysis.analysisData[bk]||[];
+              if(!rbars.length)return null;
+              var rmn=Infinity, rmx=-Infinity;
+              rbars.forEach(function(b){
+                if(b.l<rmn)rmn=b.l; if(b.h>rmx)rmx=b.h;
+                ['ema9','ema22','ema50','ema200','vwap'].forEach(function(k){
+                  var v=b[k]; if(v!=null){if(v<rmn)rmn=v;if(v>rmx)rmx=v;}
+                });
+              });
+              var refCenter=(rmn+rmx)/2;
+              var width=curBaseRange.max-curBaseRange.min;
+              // 中心を10円境界に丸めてからレンジ確保
+              var centerSnap=Math.round(refCenter/10)*10;
+              return {min:centerSnap-width/2, max:centerSnap+width/2};
+            })(),
+            /* 独立 */
+            pShift:refPShift, onPShiftChange:setRefPShift,
             drawTool:'pan',            // F3まで描画不可
             drawColor:color, drawWidth:lineW, drawOpacity:opacity,
             drawFontSize:fontSize, drawFontBold:fontBold,
@@ -4599,6 +4679,8 @@ function ImageAnnotator(props){
     /* ── F1: 過去チャート(分析)ピッカー ── */
     showRefAnalysisPicker&&ce(RefAnalysisPicker,{
       fbCfg:props.fbCfg,
+      currentTicker:img._ticker||(analysisData&&analysisData.ticker)||'',
+      currentDraftId:img._draftId||savedDraftIdRef.current||null,
       onSelect:function(ref){
         setRefAnalysis(ref);
         setShowRefAnalysisPicker(false);
