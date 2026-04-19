@@ -48,7 +48,8 @@ var ce         = R.createElement;   // ← h ではなく ce を使う
 var IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
 var HAS_HOVER = typeof matchMedia!=='undefined' && matchMedia('(hover: hover)').matches;
 /* C-uaxis+C6+C7: 過去chartと現在chartを同一キャンバスに連結表示 (旧左右分離レイアウトはC7で削除) */
-var UNIFIED_GAP_VIS = 5;  // 過去と現在の間のgap (仮想分単位、圧縮軸上)
+/* C8a: 隙間幅はローソク足1本分 (1m=1分, 5m=5分)。昼休み(60分)と夜間gapの両方に適用 */
+function getCandleGap(tf){ return tf==='1m'?1:5; }
 
 /* ─── IndexedDB キャッシュ（localStorage 5MB制限回避）──────── */
 var _idb=null, _idbReady=false, _idbQueue=[];
@@ -946,16 +947,19 @@ function DataChart(props){
   var rafRef=useRef(null);
   var drawRef=useRef({on:false});  // ドラッグ式描画状態 {on, sTM, sP, cTM, cP, pts(freehand用)}
   var ctrlPanRef=useRef(false);    // Ctrl+drag パン状態
-  // 昼休み(11:30=690〜12:30=750)の60分を5分に圧縮した仮想時間軸 — drawDataChart と同じ定義
+  /* C8a: 昼休み(11:30=690〜12:30=750)の60分を g分(=ローソク1本分) に圧縮した仮想時間軸
+     drawDataChart と同じ定義 (props.tf依存) */
   function tmToVis(t){
+    var g=getCandleGap(tf);
     if(t<=690)return t;
-    if(t<=750)return 690+(t-690)*(5/60);  // 60min→5min
-    return t-55;                           // 12:30以降 -55分シフト (60-5)
+    if(t<=750)return 690+(t-690)*(g/60);   // 60min→g min
+    return t-(60-g);                        // 12:30以降 -(60-g) 分シフト
   }
   function visToTm(v){
+    var g=getCandleGap(tf);
     if(v<=690)return v;
-    if(v<=695)return 690+(v-690)*12;       // tmVis 690-695 → tm 690-750 (12倍展開)
-    return v+55;
+    if(v<=690+g)return 690+(v-690)*(60/g);  // tmVis 690〜690+g → tm 690〜750 展開
+    return v+(60-g);
   }
   /* C-uaxis: layoutRefベースで u軸対応の tm→x 変換 (side='cur'|'ref')
      DataChart内 hitTest/crosshair/applyHorizSnap 等から使う */
@@ -968,25 +972,44 @@ function DataChart(props){
     else u=tv+L.tmVisSpan+L.gapVis;
     return L.padL+(u-L.uS)/L.uSpan*L.chartW;
   }
-  /* x(canvas内 px) → {side,tm,u} 変換 — hasRef時は ref/gap/cur を区別 */
+  /* x(canvas内 px) → {side,tm,u} 変換
+     C8a: hasRef時 gap領域 [tmVisSpan, tmVisSpan+gapVis] は近い側にclamp
+          gap前半 (ref側寄り) → side='ref', tm=15:30
+          gap後半 (cur側寄り) → side='cur', tm=9:00
+          pan/cursorは自由通過、書込時は境界tmで止まる */
   function xToSideTm(xLocal){
     var L=layoutRef.current; if(!L)return {side:null,tm:null,u:null};
     var u=L.uS+(xLocal-L.padL)/L.chartW*L.uSpan;
     if(!L.hasRef)return {side:'cur',tm:visToTm(u+L.tmVisStart),u:u};
     if(u<L.tmVisSpan)return {side:'ref',tm:visToTm(u+L.tmVisStart),u:u};
-    if(u<L.tmVisSpan+L.gapVis)return {side:'gap',tm:null,u:u};
+    if(u<L.tmVisSpan+L.gapVis){
+      /* gap帯: 中央より手前はref境界(15:30)、以降はcur境界(9:00)にclamp */
+      var half=L.tmVisSpan+L.gapVis/2;
+      if(u<half)return {side:'ref',tm:visToTm(L.tmVisSpan+L.tmVisStart),u:u};  // ref側15:30
+      return {side:'cur',tm:visToTm(L.tmVisStart),u:u};                         // cur側9:00
+    }
     return {side:'cur',tm:visToTm(u-L.tmVisSpan-L.gapVis+L.tmVisStart),u:u};
   }
   var moveRef=useRef(null);        // lasso: 選択ストローク移動状態 {idx, startTM, startP, origAnchors}
   var pinchRef=useRef(null);       // 2本指ピンチ状態 {d0,s0,e0,ps0,tmC,midX,midY,active}
   var containerRef=useRef(null);
   var sD=useState({w:800,h:520}); var dim=sD[0],setDim=sD[1];
+  /* C8a: tf依存の tmVisSpan (390 - (60-g)) と uTotal計算helper */
+  function getTmVisSpan(){
+    var g=getCandleGap(tf);
+    return 390-(60-g);  // 9:00-15:30全体 390分 - 昼休み圧縮分
+  }
+  function getUTotal(hasRefFlag){
+    var tvs=getTmVisSpan();
+    var g=getCandleGap(tf);
+    return hasRefFlag?(tvs*2+g):tvs;
+  }
   /* C-uaxis: 時間軸ビューレンジを u軸単位で管理 {uS, uE}
-     u軸: 0..uTotal (hasRef無時 uTotal=335、hasRef時 675=335+5+335)
-     初期値は hasRef無時の全体表示 {uS:0, uE:335}
+     u軸: 0..uTotal (hasRef無時 uTotal=tmVisSpan、hasRef時 tmVisSpan*2+gap)
+     初期値は hasRef無時の全体表示
      refAnalysis の open/close で親 (ImageAnnotator) が reset する
      controlled: props.view / props.onViewChange があればそれを使う */
-  var sV=useState({uS:0,uE:335}); var viewLocal=sV[0],setViewLocal=sV[1];
+  var sV=useState({uS:0,uE:getTmVisSpan()}); var viewLocal=sV[0],setViewLocal=sV[1];
   var view=props.view!==undefined?props.view:viewLocal;
   var setView=props.onViewChange||setViewLocal;
   var panStartRef=useRef(null);
@@ -1029,9 +1052,9 @@ function DataChart(props){
     setPriceRange(pr);
   },[data,tf,refData,hasRef]);
 
-  // tf 変更時にビューリセット (controlled 時は親が制御するのでスキップ)
+  // tf 変更時にビューリセット (controlled 時は親が制御するのでスキップ) — C8a: tf依存uTotal
   useEffect(function(){
-    if(props.view===undefined)setView({uS:0,uE:hasRef?675:335});
+    if(props.view===undefined)setView({uS:0,uE:getUTotal(hasRef)});
     if(props.pShift===undefined)setPShift(0);
   },[tf,data]);
 
@@ -1064,7 +1087,7 @@ function DataChart(props){
   // メインチャート描画
   useEffect(function(){
     var canvas=canvasRef.current; if(!canvas||!bars.length||!priceRange)return;
-    drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx,refBars,refData,UNIFIED_GAP_VIS,refStrokes);
+    drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx,refBars,refData,getCandleGap(tf),refStrokes);
     // 描画直後に十字カーソルも再描画 (リサイズ・ズーム等でレイアウト変わった時)
     drawCrosshair();
   },[data,bars,dim,tf,view,pShift,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes]);
@@ -1156,9 +1179,8 @@ function DataChart(props){
       cx=pos.x; cy=pos.y;
       if(cx<L.padL||cx>L.padL+L.chartW)return;
       if(cy<L.padT||cy>L.volBot)return;
-      /* C5+: u軸対応でtm算出、gap領域ではcursor非表示 */
+      /* C8a: u軸対応でtm算出。xToSideTmがgap帯も近い側に境界clampするのでそのまま使える */
       var xst=xToSideTm(cx);
-      if(xst.side==='gap')return;
       tmForLabel=xst.tm;
     }
     var CROSS='#4a9de3';
@@ -1207,7 +1229,7 @@ function DataChart(props){
     if(!p||!L){onCh(null);return;}
     if(p.x<L.padL||p.x>L.padL+L.chartW||p.y<L.padT||p.y>L.volBot){onCh(null);return;}
     var xst=xToSideTm(p.x);
-    if(xst.side==='gap'||xst.tm==null){onCh(null);return;}
+    if(xst.tm==null){onCh(null);return;}
     onCh({tm:xst.tm, yOffset:p.y-L.priceTop});
   }
   // マウスムーブハンドラ (十字カーソル座標更新専用)
@@ -1240,13 +1262,8 @@ function DataChart(props){
       var cx=cxAbs-padL;
       if(cx<0||cx>chartW)return;
       var L=layoutRef.current;
-      /* gap中心は無反応 (仕様) */
-      if(L&&L.hasRef){
-        var uCursor=L.uS+(cx/chartW)*L.uSpan;
-        if(uCursor>=L.tmVisSpan&&uCursor<L.tmVisSpan+L.gapVis)return;
-      }
       setView(function(v){
-        var uS=v.uS||0, uE=v.uE!=null?v.uE:(L?L.uTotal:335);
+        var uS=v.uS||0, uE=v.uE!=null?v.uE:(L?L.uTotal:getTmVisSpan());
         var uSpan=uE-uS;
         var frac=cx/chartW;
         var uCenter=uS+frac*uSpan;
@@ -1255,7 +1272,7 @@ function DataChart(props){
           setPShift(function(p){return p + (e.deltaY>0?-0.02:0.02);});
           return v;
         }
-        var uTotalNow=(L&&L.uTotal)||(hasRef?675:335);
+        var uTotalNow=(L&&L.uTotal)||getUTotal(hasRef);
         var factor=e.deltaY<0?0.85:1/0.85;
         var newUSpan=Math.max(2,Math.min(uTotalNow,uSpan*factor));
         var newUS=uCenter-frac*newUSpan;
@@ -1294,11 +1311,11 @@ function DataChart(props){
     var L=layoutRef.current; if(!L)return null;
     var rect=containerRef.current.getBoundingClientRect();
     var cx=clientX-rect.left, cy=clientY-rect.top;
-    /* C6: クリック側を判定、gap/null は対象外 */
+    /* C6+C8a: クリック側を判定。xToSideTmがgap帯も近い側に境界clampするので 'gap'返しは無し */
     var clickSide='cur';
     if(L.hasRef){
       var xst=xToSideTm(cx);
-      if(xst.side==='gap'||xst.side==null)return null;
+      if(xst.side==null)return null;
       clickSide=xst.side;
     }
     var targetArr=(clickSide==='ref')?(refStrokes||[]):(strokes||[]);
@@ -1406,7 +1423,7 @@ function DataChart(props){
     }
     var tp=pxToTimePrice(e.clientX,e.clientY);
     if(!tp||tp.p==null)return;
-    /* C6: gap領域での書込は block (eraser/lasso/text は hit側に任せるので通す) */
+    /* C8a: xToSideTmでgap帯は近い側に境界clamp済み — gap block不要 */
     var tpSide=tp.side||'cur';
     if(drawTool==='eraser'){
       // 即時削除: hit を見つけたら silent で消し、ドラッグ中ずっと続ける
@@ -1444,8 +1461,6 @@ function DataChart(props){
             editSideT=hitT.side;
           }
         }
-        /* C6: gapでの新規text作成はblock */
-        if(editIdxT<0&&tpSide==='gap')return;
         props.onRequestTextInput({
           tm:tp.tm, p:tp.p,
           screenX:e.clientX, screenY:e.clientY,
@@ -1455,8 +1470,6 @@ function DataChart(props){
       }
       return;
     }
-    /* C6: 描画系 (freehand / 2点ツール) はgap開始をblock */
-    if(tpSide==='gap')return;
     if(drawTool==='freehand'){
       drawRef.current={on:true, freehand:true, side:tpSide, pts:[{tm:tp.tm,p:tp.p}]};
       drawCrosshair();
@@ -1509,28 +1522,32 @@ function DataChart(props){
       }
       return;
     }
-    // ドラッグ描画中
+    // ドラッグ描画中 — C8a: cursor が描画開始と逆side に行ったら境界tmでclamp
     if(drawRef.current.on){
       var tp=pxToTimePrice(e.clientX,e.clientY);
-      /* C6: gap位置の点は追加しない (描画side側のtmしか意味がないため) */
-      if(tp&&tp.p!=null&&tp.side!=='gap'){
+      if(tp&&tp.p!=null){
+        /* drawRef.side と tp.side が違う場合、drawRef.side の境界tmにclamp
+           ref側描画中にcur側へ → tm=930(15:30)、cur側描画中にref側へ → tm=540(9:00) */
+        var dSide=drawRef.current.side||'cur';
+        var etm=tp.tm;
+        if(tp.side!==dSide){
+          etm=(dSide==='ref')?930:540;
+        }
         if(drawRef.current.freehand){
           // freehand: 距離閾値超えたら点追加 — C6: u軸対応
           var pts=drawRef.current.pts;
           var last=pts[pts.length-1];
           var L1=layoutRef.current;
           if(L1){
-            var fSide=drawRef.current.side||'cur';
-            var fx0=minToXWithSide(last.tm,fSide);
-            var fx1=minToXWithSide(tp.tm,fSide);
+            var fx0=minToXWithSide(last.tm,dSide);
+            var fx1=minToXWithSide(etm,dSide);
             var dxp=Math.abs(fx1-fx0);
             var dyp=Math.abs(((tp.p-last.p)/(L1.pmax-L1.pmin))*L1.priceH);
-            if(Math.hypot(dxp,dyp)>=1.5)pts.push({tm:tp.tm,p:tp.p});
+            if(Math.hypot(dxp,dyp)>=1.5)pts.push({tm:etm,p:tp.p});
           }
         } else {
           // 2点ツール
           var ep=tp.p;
-          var etm=tp.tm;
           if(props.horiz){
             var snapped=applyHorizSnap(drawRef.current.sTM,drawRef.current.sP,etm,ep);
             etm=snapped.tm; ep=snapped.p;
@@ -1568,7 +1585,7 @@ function DataChart(props){
     var dU=-(e.clientX-p.x)/chartW*uSpan0;
     var newUS=p.uS+dU, newUE=p.uE+dU;
     var L=layoutRef.current;
-    var uTotalNow=(L&&L.uTotal)||(hasRef?675:335);
+    var uTotalNow=(L&&L.uTotal)||getUTotal(hasRef);
     if(newUS<0){newUS=0;newUE=newUS+uSpan0;}
     if(newUE>uTotalNow){newUE=uTotalNow;newUS=newUE-uSpan0;}
     if(newUS<0)newUS=0;
@@ -1655,8 +1672,7 @@ function DataChart(props){
       var d0=Math.hypot(dx,dy);
       var cx0=(t1.clientX+t2.clientX)/2, cy0=(t1.clientY+t2.clientY)/2;
       var tpC=pxToTimePrice(cx0,cy0);
-      /* C-uaxis: gap中心は pinch 開始しない (仕様 gap無反応) */
-      if(tpC&&tpC.side==='gap')return;
+      /* C8a: gap帯も pinch 中心OK (xToSideTmが境界にclamp済) */
       if(!tpC||tpC.u==null)return;
       pinchRef.current={
         d0:d0, cx0:cx0, cy0:cy0,
@@ -1664,7 +1680,7 @@ function DataChart(props){
         uSpan0:view.uE-view.uS,
         uCenter:tpC.u,           // ピンチ開始時の指位置のu値 (ズーム中この u が cxRatio位置に固定)
         pCenter:tpC.p,           // ピンチ中心の価格
-        side:tpC.side             // 参考 (cur/ref) — gap は既に弾いた
+        side:tpC.side             // 参考 (cur/ref)
       };
       // 既存の描画/パン/移動をキャンセル
       drawRef.current={on:false};
@@ -1692,7 +1708,7 @@ function DataChart(props){
       var L=layoutRef.current;
       if(!L||!containerRef.current){return;}
       /* C-uaxis: u軸ズーム — uCenter を cxRatio 位置に固定 */
-      var uTotalNow=L.uTotal||(hasRef?675:335);
+      var uTotalNow=L.uTotal||getUTotal(hasRef);
       var newUSpan=pr.uSpan0/r;
       if(newUSpan<2)newUSpan=2;
       if(newUSpan>uTotalNow)newUSpan=uTotalNow;
@@ -1787,7 +1803,7 @@ function DataChart(props){
     ce("canvas",{ref:overlayRef,style:{position:"absolute",inset:0,width:"100%",height:"100%",pointerEvents:"none"}}),
     /* ズーム倍率表示 (右下) — C-uaxis: uTotal/uSpan */
     ce("div",{style:{position:"absolute",right:8,bottom:6,fontSize:10,color:"#555",pointerEvents:"none"}},
-      (((hasRef?675:335)/((view.uE||0)-(view.uS||0)||1))).toFixed(1)+'×')
+      ((getUTotal(hasRef)/((view.uE||0)-(view.uS||0)||1))).toFixed(1)+'×')
   );
 }
 
@@ -1815,23 +1831,26 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
 
   // 統合chart判定
   var hasRef=!!(refBars&&refBars.length);
+  /* C8a: gapVis は tf依存 (1m=1, 5m=5) で呼び出し側から受け取る */
   gapVis=gapVis||5;
+  var lunchVis=gapVis;  // 昼休み圧縮もローソク1本分
 
-  // 昼休み(11:30=690〜12:30=750)の60分を5分に圧縮した仮想時間軸 tmVis
+  // C8a: 昼休み(11:30=690〜12:30=750)の60分を lunchVis分に圧縮した仮想時間軸 tmVis
   function tmToVis(t){
     if(t<=690)return t;
-    if(t<=750)return 690+(t-690)*(5/60);
-    return t-55;
+    if(t<=750)return 690+(t-690)*(lunchVis/60);
+    return t-(60-lunchVis);
   }
   function visToTm(v){
     if(v<=690)return v;
-    if(v<=695)return 690+(v-690)*12;
-    return v+55;
+    if(v<=690+lunchVis)return 690+(v-690)*(60/lunchVis);
+    return v+(60-lunchVis);
   }
   /* C-uaxis: u軸 — ref [0, tmVisSpan] + gap [tmVisSpan, tmVisSpan+gapVis] + cur [tmVisSpan+gapVis, uTotal]
-     hasRef無時は [0, tmVisSpan] (cur のみ) */
+     hasRef無時は [0, tmVisSpan] (cur のみ)
+     C8a: tmVisSpan = 390分 - (60 - lunchVis) */
   var tmVisStart=540;         // 09:00 の tmVis値
-  var tmVisSpan=335;          // tmToVis(930)-tmToVis(540) (9:00-15:30、昼5min圧縮後: (930-55)-540=335)
+  var tmVisSpan=390-(60-lunchVis);  // 5m=335, 1m=331
   var uTotal=hasRef?(tmVisSpan*2+gapVis):tmVisSpan;
 
   // view は u軸単位 {uS, uE}。fallback: 未設定なら全体表示
@@ -2329,15 +2348,23 @@ function ImageAnnotator(props){
   /* F1: 過去チャート選択モーダルの表示 */
   var stRPicker=useState(false); var showRefAnalysisPicker=stRPicker[0],setShowRefAnalysisPicker=stRPicker[1];
   /* F2: 両チャート連動用の共有 state */
-  var stAV=useState({uS:0,uE:335});  var analysisView=stAV[0],setAnalysisView=stAV[1];         // 時間軸ビュー u軸 (両chart共通、hasRef時uE=675)
+  /* C8a: uTotal計算helper (tf依存、ImageAnnotator内でview計算に使用) */
+  function getUTotalIA(tf,hasR){
+    var g=(tf==='1m')?1:5;
+    var tvs=390-(60-g);
+    return hasR?(tvs*2+g):tvs;
+  }
+  var stAV=useState({uS:0,uE:getUTotalIA('1m',false)});  var analysisView=stAV[0],setAnalysisView=stAV[1];         // 時間軸ビュー u軸 (両chart共通)
   var stAPS=useState(0);             var analysisPShift=stAPS[0],setAnalysisPShift=stAPS[1];   // 現在チャートの pShift
-  /* C-uaxis: analysisData/analysisTf/refAnalysis 変更時に view/pShift をリセット (u軸、uTotal変化に追従) */
+  /* C-uaxis: analysisData/analysisTf/refAnalysis(id) 変更時に view/pShift をリセット (u軸、uTotal変化に追従)
+     C8a-bugfix: deps を refAnalysis.id に絞る — refAnalysis全体だと setRefAnalysis(...analysisStrokes...) のたびに発火して
+                 ref側書込直後に view が全体表示にreset され、書いた線が画面外にスクロール (=消えたように見える) する */
   useEffect(function(){
     if(modeTab==='analysis'&&analysisData){
-      setAnalysisView({uS:0,uE:refAnalysis?675:335});
+      setAnalysisView({uS:0,uE:getUTotalIA(analysisTf,!!refAnalysis)});
       setAnalysisPShift(0);
     }
-  },[analysisData,analysisTf,refAnalysis]);
+  },[analysisData,analysisTf,refAnalysis?refAnalysis.id:null]);
   /* F2: 十字カーソル共有 ({tm, yOffset}) — tmは絶対時刻(分)、yOffsetはpriceTop基準のcanvas内y */
   var analysisCursorRef=useRef(null);
   var stCB=useState(0); var cursorBump=stCB[0],setCursorBump=stCB[1];
@@ -4272,11 +4299,11 @@ function ImageAnnotator(props){
         /* F2: VirtualJoystick (タッチデバイスのみ、分析モードのpan制御) */
         IS_TOUCH&&ce(VirtualJoystick,{
           onPanDelta:function(dx,dy){
-            // C-uaxis: u軸上で pan (1400px swipe = 1 uSpan分の pan)
+            // C-uaxis+C8a: u軸上で pan (1400px swipe = 1 uSpan分の pan) — tf依存uTotal
             setAnalysisView(function(v){
-              var uS=v.uS||0, uE=v.uE||335;
+              var uTotal=getUTotalIA(analysisTf,!!refAnalysisRef.current);
+              var uS=v.uS||0, uE=v.uE||uTotal;
               var uSpan=uE-uS;
-              var uTotal=refAnalysisRef.current?675:335;
               var dU=dx*(uSpan/1400);  // バグB: 速度半減
               var newUS=uS+dU, newUE=uE+dU;
               if(newUS<0){newUE-=newUS; newUS=0;}
