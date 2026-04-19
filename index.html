@@ -813,8 +813,26 @@ function DataChart(props){
   /* 時間軸ビューレンジ (分, 540=09:00, 930=15:30) */
   var sV=useState({s:540,e:930}); var view=sV[0],setView=sV[1];
   var panStartRef=useRef(null);
-  /* 価格軸も画面に収まらなくなった時用の縦シフト */
+  /* 価格軸の縦シフト (yen単位、タイム軸ズーム非依存) */
   var sPY=useState(0); var pShift=sPY[0],setPShift=sPY[1];
+  /* 価格レンジ (全バーから算出、タイム軸ズーム・パンに影響されない固定値) */
+  var sPR=useState(null); var priceRange=sPR[0],setPriceRange=sPR[1];
+
+  // データロード時: 全バーから priceRange を算出 (10円境界に丸める)
+  useEffect(function(){
+    if(!bars.length){setPriceRange(null);return;}
+    var mn=Infinity, mx=-Infinity;
+    bars.forEach(function(b){
+      if(b.l<mn)mn=b.l; if(b.h>mx)mx=b.h;
+      ['ema9','ema22','ema50','ema200','vwap'].forEach(function(k){
+        var v=b[k]; if(v!=null){if(v<mn)mn=v;if(v>mx)mx=v;}
+      });
+    });
+    // 10円境界に丸める + 余白
+    mn=Math.floor(mn/10)*10 - 10;
+    mx=Math.ceil(mx/10)*10 + 10;
+    setPriceRange({min:mn, max:mx});
+  },[data,tf]);
 
   // tf 変更時にビューリセット
   useEffect(function(){
@@ -838,11 +856,11 @@ function DataChart(props){
 
   // メインチャート描画
   useEffect(function(){
-    var canvas=canvasRef.current; if(!canvas||!bars.length)return;
-    drawDataChart(canvas,bars,data,dim,tf,view,pShift,layoutRef);
+    var canvas=canvasRef.current; if(!canvas||!bars.length||!priceRange)return;
+    drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef);
     // 描画直後に十字カーソルも再描画 (リサイズ・ズーム等でレイアウト変わった時)
     drawCrosshair();
-  },[data,bars,dim,tf,view,pShift]);
+  },[data,bars,dim,tf,view,pShift,priceRange]);
 
   // showCrosshair 切替時: OFFなら消す、ONなら再描画
   useEffect(function(){
@@ -972,12 +990,17 @@ function DataChart(props){
     var chartW=rect.width-padL-padR;
     var span=p.e-p.s;
     var dxMin=-(e.clientX-p.x)/chartW*span;
-    var dyFrac=(e.clientY-p.y)/rect.height;
     var newS=p.s+dxMin, newE=p.e+dxMin;
     if(newS<540){newS=540;newE=newS+span;}
     if(newE>930){newE=930;newS=newE-span;}
     setView({s:newS,e:newE});
-    setPShift(p.ps+dyFrac*0.4);
+    // 縦ドラッグ: yen単位シフト (10円ピクセル幅は固定のまま)
+    if(priceRange){
+      var L=layoutRef.current;
+      var priceH=L?L.priceH:(rect.height-34-22-Math.max(50,Math.round((rect.height-56)*0.18))-6);
+      var yenPerPx=(priceRange.max-priceRange.min)/priceH;
+      setPShift(p.ps + (e.clientY-p.y)*yenPerPx);
+    }
   }
   function onMouseUp(){panStartRef.current=null;}
   // タッチ (iPad) 同等
@@ -994,12 +1017,16 @@ function DataChart(props){
     var chartW=rect.width-padL-padR;
     var span=p.e-p.s;
     var dxMin=-(t.clientX-p.x)/chartW*span;
-    var dyFrac=(t.clientY-p.y)/rect.height;
     var newS=p.s+dxMin, newE=p.e+dxMin;
     if(newS<540){newS=540;newE=newS+span;}
     if(newE>930){newE=930;newS=newE-span;}
     setView({s:newS,e:newE});
-    setPShift(p.ps+dyFrac*0.4);
+    if(priceRange){
+      var L2=layoutRef.current;
+      var priceH2=L2?L2.priceH:(rect.height-34-22-Math.max(50,Math.round((rect.height-56)*0.18))-6);
+      var yenPerPx2=(priceRange.max-priceRange.min)/priceH2;
+      setPShift(p.ps + (t.clientY-p.y)*yenPerPx2);
+    }
   }
   // ダブルクリック/タップ: リセット
   function onDblClick(){setView({s:540,e:930}); setPShift(0);}
@@ -1030,8 +1057,8 @@ function DataChart(props){
   );
 }
 
-/* DataChart 描画関数 (Canvas 2D 直接描画、HSBI2色、ズーム対応、10円グリッド) */
-function drawDataChart(canvas,bars,data,dim,tf,view,pShift,layoutRef){
+/* DataChart 描画関数 (Canvas 2D 直接描画、HSBI2色、ズーム対応、10円固定グリッド) */
+function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef){
   var dpr=window.devicePixelRatio||1;
   var W=dim.w, H=dim.h;
   canvas.width=Math.round(W*dpr);
@@ -1057,23 +1084,13 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,layoutRef){
   function tToX(t){return padL+((tToMin(t)-vS)/vSpan)*chartW;}
   function minToX(m){return padL+((m-vS)/vSpan)*chartW;}
 
-  // 表示範囲内のバーだけで価格レンジ算出
+  // 表示範囲内のバー (時間軸フィルタのみ、価格レンジは全バー基準)
   var visibleBars=bars.filter(function(b){var m=tToMin(b.t);return m>=vS&&m<=vE;});
   if(visibleBars.length===0) visibleBars=bars;
-  var pmin=Infinity, pmax=-Infinity;
-  visibleBars.forEach(function(b){
-    if(b.l<pmin)pmin=b.l;
-    if(b.h>pmax)pmax=b.h;
-    ['ema9','ema22','ema50','ema200','vwap'].forEach(function(k){
-      var v=b[k]; if(v!=null){if(v<pmin)pmin=v; if(v>pmax)pmax=v;}
-    });
-  });
-  var ppad=(pmax-pmin)*0.05;
-  pmin-=ppad; pmax+=ppad;
-  // 垂直シフト (pShift: -1..1 相当)
-  var pRange=pmax-pmin;
-  pmin+=pShift*pRange;
-  pmax+=pShift*pRange;
+
+  // 価格軸: 固定の priceRange + 縦シフト (タイム軸操作では変化しない)
+  var pmin=priceRange.min + pShift;
+  var pmax=priceRange.max + pShift;
   function pToY(p){return priceTop+(1-(p-pmin)/(pmax-pmin))*priceH;}
 
   // 出来高レンジ (表示範囲内)
@@ -1087,27 +1104,29 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,layoutRef){
     chartW:chartW,priceTop:priceTop,priceBot:priceBot,volTop:volTop,volBot:volBot,
     priceH:priceH,pmin:pmin,pmax:pmax,vS:vS,vE:vE};
 
-  // 水平価格グリッド (10円固定、ラベル密度自動調整)
+  // 10円固定グリッド + 全10円ラベル (HSBI2準拠、薄い横点線)
   ctx.font='10px -apple-system,Helvetica,sans-serif';
   ctx.textBaseline='middle'; ctx.textAlign='right';
   var pStep=10;
-  var pxPerStep=(priceH/(pmax-pmin))*pStep;
-  var labelEvery=pxPerStep>=18?1 : pxPerStep>=9?2 : pxPerStep>=5?5 : 10;  // 1=全部, 2=20円毎, 5=50円毎, 10=100円毎
   var pStart=Math.ceil(pmin/pStep)*pStep;
   var pEnd=Math.floor(pmax/pStep)*pStep;
-  var pIdx=0;
+  // ラベル重複回避: 次のラベル位置が最小12px離れてなければ間引く
+  var pxPerStep=(priceH/(pmax-pmin))*pStep;
+  var labelEvery=pxPerStep>=12?1 : pxPerStep>=6?2 : pxPerStep>=3?5 : 10;
   for(var p=pStart;p<=pEnd;p+=pStep){
     var y=pToY(p);
-    // グリッドライン (細めの線、10円毎)
-    ctx.strokeStyle='#1a1a1a'; ctx.lineWidth=0.5;
+    // 薄い横点線 (HSBI2レイアウト準拠)
+    ctx.strokeStyle='#202020'; ctx.lineWidth=0.5;
+    ctx.setLineDash([1,3]);
     ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(padL+chartW,y); ctx.stroke();
-    // ラベル (密度に応じて間引き)
+    // ラベル (10円毎が基本、スペースなければ20/50円毎に間引き)
     if((p/pStep)%labelEvery===0){
       ctx.fillStyle='#888';
+      ctx.setLineDash([]);
       ctx.fillText(p.toFixed(0),padL+chartW+52,y);
     }
-    pIdx++;
   }
+  ctx.setLineDash([]);
 
   // 時間グリッド: ズーム率に応じてステップ可変
   ctx.textBaseline='top'; ctx.textAlign='center';
