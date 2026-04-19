@@ -795,14 +795,19 @@ function RefChartPicker(props){
 }
 
 function DataChart(props){
-  /* B2+: 歩み値JSON → Canvas描画 (HSBI2色、ズーム・パン対応)
-     props: { data, tf }    data=JSON全体, tf='1m'|'5m' */
+  /* B2+: 歩み値JSON → Canvas描画 (HSBI2色、ズーム・パン対応、十字カーソル)
+     props: { data, tf, showCrosshair }    */
   var data=props.data;
   var tf=props.tf||'1m';
+  var showCrosshair=props.showCrosshair&&!IS_TOUCH;  // PC限定
   var barsKey=tf==='5m'?'bars_5m':'bars_1m';
   var bars=(data&&data[barsKey])||[];
 
   var canvasRef=useRef(null);
+  var overlayRef=useRef(null);     // 十字カーソル専用オーバーレイ
+  var layoutRef=useRef(null);      // drawDataChart が書き込むレイアウト情報
+  var cursorRef=useRef(null);      // {x,y} or null
+  var rafRef=useRef(null);
   var containerRef=useRef(null);
   var sD=useState({w:800,h:520}); var dim=sD[0],setDim=sD[1];
   /* 時間軸ビューレンジ (分, 540=09:00, 930=15:30) */
@@ -831,11 +836,96 @@ function DataChart(props){
     return function(){clearTimeout(t);window.removeEventListener('resize',update);};
   },[]);
 
-  // 描画
+  // メインチャート描画
   useEffect(function(){
     var canvas=canvasRef.current; if(!canvas||!bars.length)return;
-    drawDataChart(canvas,bars,data,dim,tf,view,pShift);
+    drawDataChart(canvas,bars,data,dim,tf,view,pShift,layoutRef);
+    // 描画直後に十字カーソルも再描画 (リサイズ・ズーム等でレイアウト変わった時)
+    drawCrosshair();
   },[data,bars,dim,tf,view,pShift]);
+
+  // showCrosshair 切替時: OFFなら消す、ONなら再描画
+  useEffect(function(){
+    drawCrosshair();
+  },[showCrosshair]);
+
+  // 十字カーソル描画 (オーバーレイCanvas)
+  function drawCrosshair(){
+    var overlay=overlayRef.current; if(!overlay)return;
+    var dpr=window.devicePixelRatio||1;
+    var W=dim.w, H=dim.h;
+    overlay.width=Math.round(W*dpr);
+    overlay.height=Math.round(H*dpr);
+    var ctx=overlay.getContext('2d');
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.clearRect(0,0,W,H);
+    if(!showCrosshair)return;
+    var L=layoutRef.current; if(!L)return;
+    var pos=cursorRef.current; if(!pos)return;
+    var cx=pos.x, cy=pos.y;
+    // チャート領域内か
+    if(cx<L.padL||cx>L.padL+L.chartW)return;
+    if(cy<L.padT||cy>L.volBot)return;
+    // 色
+    var CROSS='#4a9de3';
+    // 縦線 (価格~出来高 フル高)
+    ctx.strokeStyle=CROSS; ctx.setLineDash([3,3]); ctx.lineWidth=1;
+    ctx.beginPath();
+    ctx.moveTo(Math.round(cx)+0.5,L.priceTop);
+    ctx.lineTo(Math.round(cx)+0.5,L.volBot);
+    ctx.stroke();
+    // 横線 (価格パネル内のみ)
+    if(cy>=L.priceTop&&cy<=L.priceBot){
+      ctx.beginPath();
+      ctx.moveTo(L.padL,Math.round(cy)+0.5);
+      ctx.lineTo(L.padL+L.chartW,Math.round(cy)+0.5);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    // 時刻ラベル (縦線とX軸の交点 → 出来高パネル下)
+    var fracX=(cx-L.padL)/L.chartW;
+    var minAt=L.vS+fracX*(L.vE-L.vS);
+    var hh=Math.floor(minAt/60), mm=Math.round(minAt%60);
+    if(mm>=60){hh++;mm-=60;}
+    var tStr=(data.date?data.date.replace(/-/g,'/')+' ':'')+(hh<10?'0':'')+hh+':'+(mm<10?'0':'')+mm;
+    ctx.font='bold 11px -apple-system,Helvetica,sans-serif';
+    ctx.textBaseline='middle'; ctx.textAlign='center';
+    var tw=ctx.measureText(tStr).width+10;
+    var ty=L.priceBot+3;  // 価格と出来高の間
+    ctx.fillStyle=CROSS;
+    ctx.fillRect(cx-tw/2,ty,tw,14);
+    ctx.fillStyle='#fff';
+    ctx.fillText(tStr,cx,ty+7);
+    // 価格ラベル (右Y軸)
+    if(cy>=L.priceTop&&cy<=L.priceBot){
+      var fracY=(cy-L.priceTop)/L.priceH;
+      var priceAt=L.pmax-fracY*(L.pmax-L.pmin);
+      var pStr=priceAt.toFixed(0);
+      var pw=ctx.measureText(pStr).width+10;
+      ctx.textAlign='left';
+      ctx.fillStyle=CROSS;
+      ctx.fillRect(L.padL+L.chartW+2,cy-8,pw,16);
+      ctx.fillStyle='#fff';
+      ctx.fillText(pStr,L.padL+L.chartW+7,cy);
+    }
+  }
+
+  // マウスムーブハンドラ
+  function onChartMouseMove(e){
+    if(!showCrosshair)return;
+    var rect=containerRef.current.getBoundingClientRect();
+    cursorRef.current={x:e.clientX-rect.left,y:e.clientY-rect.top};
+    if(!rafRef.current){
+      rafRef.current=requestAnimationFrame(function(){
+        drawCrosshair();
+        rafRef.current=null;
+      });
+    }
+  }
+  function onChartMouseLeave(){
+    cursorRef.current=null;
+    drawCrosshair();
+  }
 
   // ホイール: ズーム (カーソル位置中心)
   useEffect(function(){
@@ -922,9 +1012,9 @@ function DataChart(props){
   return ce("div",{
     ref:containerRef,
     onMouseDown:onMouseDown,
-    onMouseMove:onMouseMove,
+    onMouseMove:function(e){onMouseMove(e);onChartMouseMove(e);},
     onMouseUp:onMouseUp,
-    onMouseLeave:onMouseUp,
+    onMouseLeave:function(){onMouseUp();onChartMouseLeave();},
     onTouchStart:onTouchStart,
     onTouchMove:onTouchMove,
     onTouchEnd:onMouseUp,
@@ -932,14 +1022,16 @@ function DataChart(props){
     style:{flex:1,position:"relative",background:"#000000",overflow:"hidden",cursor:"grab",touchAction:"none",userSelect:"none"}
   },
     ce("canvas",{ref:canvasRef,style:{display:"block",width:"100%",height:"100%",pointerEvents:"none"}}),
+    /* 十字カーソル用オーバーレイ (常に配置、showCrosshair=false時は空) */
+    ce("canvas",{ref:overlayRef,style:{position:"absolute",inset:0,width:"100%",height:"100%",pointerEvents:"none"}}),
     /* ズーム倍率表示 (右下) */
     ce("div",{style:{position:"absolute",right:8,bottom:6,fontSize:10,color:"#555",pointerEvents:"none"}},
       (390/(view.e-view.s)).toFixed(1)+'×  '+'ダブルクリックでリセット')
   );
 }
 
-/* DataChart 描画関数 (Canvas 2D 直接描画、HSBI2色、ズーム対応) */
-function drawDataChart(canvas,bars,data,dim,tf,view,pShift){
+/* DataChart 描画関数 (Canvas 2D 直接描画、HSBI2色、ズーム対応、10円グリッド) */
+function drawDataChart(canvas,bars,data,dim,tf,view,pShift,layoutRef){
   var dpr=window.devicePixelRatio||1;
   var W=dim.w, H=dim.h;
   canvas.width=Math.round(W*dpr);
@@ -990,17 +1082,31 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift){
   if(vmax<=0) vmax=1;
   function vToY(v){return volBot-(v/vmax)*volH;}
 
-  // 水平価格グリッド
+  /* レイアウト情報を ref に書き出し (十字カーソル計算用) */
+  if(layoutRef)layoutRef.current={padL:padL,padR:padR,padT:padT,padB:padB,
+    chartW:chartW,priceTop:priceTop,priceBot:priceBot,volTop:volTop,volBot:volBot,
+    priceH:priceH,pmin:pmin,pmax:pmax,vS:vS,vE:vE};
+
+  // 水平価格グリッド (10円固定、ラベル密度自動調整)
   ctx.font='10px -apple-system,Helvetica,sans-serif';
   ctx.textBaseline='middle'; ctx.textAlign='right';
-  var pSteps=6;
-  for(var i=0;i<=pSteps;i++){
-    var p=pmin+(pmax-pmin)*(i/pSteps);
+  var pStep=10;
+  var pxPerStep=(priceH/(pmax-pmin))*pStep;
+  var labelEvery=pxPerStep>=18?1 : pxPerStep>=9?2 : pxPerStep>=5?5 : 10;  // 1=全部, 2=20円毎, 5=50円毎, 10=100円毎
+  var pStart=Math.ceil(pmin/pStep)*pStep;
+  var pEnd=Math.floor(pmax/pStep)*pStep;
+  var pIdx=0;
+  for(var p=pStart;p<=pEnd;p+=pStep){
     var y=pToY(p);
+    // グリッドライン (細めの線、10円毎)
     ctx.strokeStyle='#1a1a1a'; ctx.lineWidth=0.5;
     ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(padL+chartW,y); ctx.stroke();
-    ctx.fillStyle='#666';
-    ctx.fillText(p.toFixed(0),padL+chartW+52,y);
+    // ラベル (密度に応じて間引き)
+    if((p/pStep)%labelEvery===0){
+      ctx.fillStyle='#888';
+      ctx.fillText(p.toFixed(0),padL+chartW+52,y);
+    }
+    pIdx++;
   }
 
   // 時間グリッド: ズーム率に応じてステップ可変
@@ -1120,6 +1226,8 @@ function ImageAnnotator(props){
   var analysisData=stAD[0],setAnalysisData=stAD[1];
   var stAT=useState('1m'); var analysisTf=stAT[0],setAnalysisTf=stAT[1];
   var analysisFileRef=useRef(null);
+  /* 十字カーソル表示 ON/OFF (PC限定) */
+  var stAX=useState(!IS_TOUCH); var showCrosshair=stAX[0],setShowCrosshair=stAX[1];
   var analysisDataRef=useRef(analysisData);  // triggerAutoSave内で最新値参照用
   useEffect(function(){analysisDataRef.current=analysisData;},[analysisData]);
   var st0=useState("pan");   var tool=st0[0],setTool=st0[1];
@@ -2706,6 +2814,14 @@ function ImageAnnotator(props){
               :'')
           ),
           ce("div",{style:{flex:1}}),
+          /* 十字カーソル ON/OFF (PC限定) */
+          !IS_TOUCH && ce("button",{
+            onClick:function(){setShowCrosshair(!showCrosshair);},
+            title:"十字カーソル表示",
+            style:{padding:"5px 10px",fontSize:11,fontWeight:700,border:"none",borderRadius:5,
+              background:showCrosshair?'#4a9de3':'#2a2a2a',
+              color:showCrosshair?'#fff':'#888',cursor:"pointer",fontFamily:"inherit"}
+          },"✛ 十字"),
           /* 1m/5m 切替 */
           ce("div",{style:{display:"flex",gap:2}},
             ['1m','5m'].map(function(t){
@@ -2724,7 +2840,7 @@ function ImageAnnotator(props){
               background:"#2a2a2a",color:"#888",cursor:"pointer",fontFamily:"inherit"}
           },"🔄 別のJSON")
         ),
-        ce(DataChart,{data:analysisData,tf:analysisTf})
+        ce(DataChart,{data:analysisData,tf:analysisTf,showCrosshair:showCrosshair})
       )
     ),
 
