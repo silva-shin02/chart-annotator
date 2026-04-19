@@ -883,10 +883,10 @@ function DataChart(props){
   // メインチャート描画
   useEffect(function(){
     var canvas=canvasRef.current; if(!canvas||!bars.length||!priceRange)return;
-    drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx);
+    drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx);
     // 描画直後に十字カーソルも再描画 (リサイズ・ズーム等でレイアウト変わった時)
     drawCrosshair();
-  },[data,bars,dim,tf,view,pShift,priceRange,strokes,selectedIdx]);
+  },[data,bars,dim,tf,view,pShift,priceRange,strokes,selectedIdx,props.editingTextIdx]);
 
   // showCrosshair 切替時: OFFなら消す、ONなら再描画
   useEffect(function(){
@@ -942,6 +942,35 @@ function DataChart(props){
         }
         drawSelectionHighlight(ctx,shifted,minToXloc2,pToYloc2,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
       }
+    }
+    /* eraser ドラッグ中プレビュー (削除予定 stroke を赤枠で囲う) */
+    if(L&&drawRef.current&&drawRef.current.on&&drawRef.current.eraser&&drawRef.current.deletedIdxs){
+      function minToXlocE(mm){return L.padL+((mm-L.vS)/(L.vE-L.vS))*L.chartW;}
+      function pToYlocE(pp){return L.priceTop+(1-(pp-L.pmin)/(L.pmax-L.pmin))*L.priceH;}
+      ctx.save();
+      ctx.strokeStyle='#ff3b30'; ctx.lineWidth=2; ctx.setLineDash([3,3]); ctx.globalAlpha=0.85;
+      drawRef.current.deletedIdxs.forEach(function(ei){
+        var es=strokes[ei]; if(!es||!es.anchors||!es.anchors.length)return;
+        var tpe=es.type||es.tool;
+        if(tpe==='horizontal'){
+          var yy=pToYlocE(es.anchors[0].p);
+          ctx.strokeRect(L.padL-2,yy-4,L.chartW+4,8);
+        }else if(tpe==='text'){
+          var ax=es.anchors[0];
+          var ex=minToXlocE(ax.tm), ey=pToYlocE(ax.p);
+          var efs=es.fontSize||18;
+          ctx.strokeRect(ex-4,ey-4,(es.text||'').length*efs*0.6+8,efs*1.3+8);
+        }else if(es.anchors.length>=2){
+          var mnX=Infinity,mxX=-Infinity,mnY=Infinity,mxY=-Infinity;
+          es.anchors.forEach(function(a){
+            var x=minToXlocE(a.tm), y=pToYlocE(a.p);
+            if(x<mnX)mnX=x; if(x>mxX)mxX=x;
+            if(y<mnY)mnY=y; if(y>mxY)mxY=y;
+          });
+          ctx.strokeRect(mnX-4,mnY-4,(mxX-mnX)+8,(mxY-mnY)+8);
+        }
+      });
+      ctx.restore();
     }
 
     /* 十字カーソル */
@@ -1147,6 +1176,8 @@ function DataChart(props){
   /* ───── ドラッグ式 描画ハンドラ ─────
      画像画面と同じ: 押下→ドラッグ→離すで1本のストロークを確定 */
   function onMouseDown(e){
+    // テキスト入力中はpan/zoom/描画をすべてロック
+    if(props.textInputActive)return;
     // Ctrl+ドラッグ = どのツールでもパン
     if(e.ctrlKey||e.metaKey){
       panStartRef.current={x:e.clientX,y:e.clientY,s:view.s,e:view.e,ps:pShift};
@@ -1160,8 +1191,11 @@ function DataChart(props){
     var tp=pxToTimePrice(e.clientX,e.clientY);
     if(!tp||tp.p==null)return;
     if(drawTool==='eraser'){
-      var idx=hitTestStroke(e.clientX,e.clientY);
-      if(idx!=null&&onStrokeDelete)onStrokeDelete(idx);
+      // ドラッグ範囲削除: 開始、最初のヒットを deletedIdxs に入れる
+      drawRef.current={on:true, eraser:true, deletedIdxs:new Set()};
+      var eIdx=hitTestStroke(e.clientX,e.clientY);
+      if(eIdx!=null)drawRef.current.deletedIdxs.add(eIdx);
+      drawCrosshair();
       return;
     }
     if(drawTool==='lasso'){
@@ -1177,15 +1211,18 @@ function DataChart(props){
       return;
     }
     if(drawTool==='text'){
-      // テキスト入力プロンプト
-      var txt=prompt('テキストを入力:','');
-      if(txt!=null&&txt.trim()!==''){
-        var stroke={id:'s_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),
-          type:'text',anchors:[{tm:tp.tm,p:tp.p}],
-          color:drawColor,opacity:drawOpacity,
-          fontSize:drawFontSize,fontBold:drawFontBold,
-          text:txt};
-        if(onStrokeAdd)onStrokeAdd(stroke);
+      // インライン編集: 画面座標をImageAnnotatorに通知
+      if(props.onRequestTextInput){
+        var hitT=hitTestStroke(e.clientX,e.clientY);
+        var editIdxT=-1;
+        if(hitT!=null&&strokes[hitT]&&(strokes[hitT].type||strokes[hitT].tool)==='text'){
+          editIdxT=hitT;
+        }
+        props.onRequestTextInput({
+          tm:tp.tm, p:tp.p,
+          screenX:e.clientX, screenY:e.clientY,
+          editIdx:editIdxT
+        });
       }
       return;
     }
@@ -1202,6 +1239,7 @@ function DataChart(props){
     }
   }
   function onMouseMove(e){
+    if(props.textInputActive)return;
     // 十字カーソル座標更新 (hoverでも描画中でも)
     if(containerRef.current){
       var rect=containerRef.current.getBoundingClientRect();
@@ -1222,6 +1260,15 @@ function DataChart(props){
           if(!mref.moving&&Math.hypot(dxPx,dyPx)>=3)mref.moving=true;
         }
       }
+      if(!rafRef.current){
+        rafRef.current=requestAnimationFrame(function(){drawCrosshair();rafRef.current=null;});
+      }
+      return;
+    }
+    // eraser ドラッグ中: ヒットしたstrokeをdeletedIdxsに追加
+    if(drawRef.current.on&&drawRef.current.eraser){
+      var ehi=hitTestStroke(e.clientX,e.clientY);
+      if(ehi!=null)drawRef.current.deletedIdxs.add(ehi);
       if(!rafRef.current){
         rafRef.current=requestAnimationFrame(function(){drawCrosshair();rafRef.current=null;});
       }
@@ -1291,6 +1338,21 @@ function DataChart(props){
     }
   }
   function onMouseUp(){
+    // eraser ドラッグ終了 → 削除を一括コミット
+    if(drawRef.current.on&&drawRef.current.eraser){
+      var del=Array.from(drawRef.current.deletedIdxs||[]);
+      if(del.length){
+        if(props.onStrokeDeleteMany){
+          props.onStrokeDeleteMany(del);
+        }else if(onStrokeDelete){
+          // フォールバック: 降順で1件ずつ
+          del.sort(function(a,b){return b-a;}).forEach(function(i){onStrokeDelete(i);});
+        }
+      }
+      drawRef.current={on:false};
+      drawCrosshair();
+      return;
+    }
     // lasso 移動終了 → 確定
     if(moveRef.current){
       var m=moveRef.current;
@@ -1401,7 +1463,7 @@ function DataChart(props){
 }
 
 /* DataChart 描画関数 (Canvas 2D 直接描画、HSBI2色、ズーム対応、10円固定グリッド、時刻+価格ストローク) */
-function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx){
+function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,editingTextIdx){
   var dpr=window.devicePixelRatio||1;
   var W=dim.w, H=dim.h;
   canvas.width=Math.round(W*dpr);
@@ -1536,6 +1598,8 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   /* B-drawing: 時刻+価格座標ストローク描画 (ズーム・パンに追従) */
   if(strokes&&strokes.length){
     strokes.forEach(function(s,idx){
+      // 編集中のテキストは重複描画を避けるためスキップ (portal 側でプレビュー)
+      if(editingTextIdx!=null&&editingTextIdx>=0&&idx===editingTextIdx)return;
       var tp=s.type||s.tool;
       if(tp==='freehand'||tp==='text'){
         drawAnalysisStrokeExt(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
@@ -1782,6 +1846,9 @@ function ImageAnnotator(props){
   var st9=useState(false);   var fontBold=st9[0],setFontBold=st9[1];
   var stTI=useState(null);   var textInputState=stTI[0],setTextInputState=stTI[1];
   var stFP=useState(null);   var floatPos=stFP[0],setFloatPos=stFP[1];
+  /* 分析モード用 state */
+  var stATI=useState(null);  var analysisTextInput=stATI[0],setAnalysisTextInput=stATI[1];
+  var stFPA=useState(null);  var floatPosAnalysis=stFPA[0],setFloatPosAnalysis=stFPA[1];
   var stRP=useState(null);   var refPanel=stRP[0],setRefPanel=stRP[1]; // null | {url:string|null}
   var stRD=useState(null);   var refImgDim=stRD[0],setRefImgDim=stRD[1]; // ref画像の自然サイズ
   var stRS=useState(false);  var refSlideMode=stRS[0],setRefSlideMode=stRS[1]; // true=縦スライド操作中
@@ -1843,8 +1910,21 @@ function ImageAnnotator(props){
   var toolRef=useRef("pan"); // tool stateのミラー（pointerイベント用）
   var toolMemRef=useRef({}); // ツール別の色・線幅・透明度を記憶
   var prevHorizRef=useRef(false); // dotted切替前の水平スナップ状態
+  /* 分析モード用 ref */
+  var analysisHistRef=useRef([[]]);           // 分析モード用 undo 履歴
+  var analysisFutRef=useRef([]);              // 分析モード用 redo 未来
+  var analysisTextInputRef=useRef(null);      // stale closure 回避
+  var analysisFloatDragRef=useRef(null);      // 分析モード floating undo/redo のドラッグ
+  var analysisTextareaRef=useRef(null);       // 分析モード text 入力 textarea
   useEffect(function(){toolRef.current=tool;},[tool]);
   useEffect(function(){zoomRef.current=zoom;},[zoom]);
+  useEffect(function(){analysisTextInputRef.current=analysisTextInput;},[analysisTextInput]);
+  /* マウント時: 分析モード履歴を現在の analysisStrokes で初期化
+     (img から復元された初期strokesを「操作前の状態」として保持) */
+  useEffect(function(){
+    analysisHistRef.current=[analysisStrokesRef.current.slice()];
+    analysisFutRef.current=[];
+  },[]);
 
   // textInputRef を最新の textInputState に同期 + ライブプレビュー描画
   useEffect(function(){
@@ -2275,7 +2355,22 @@ function ImageAnnotator(props){
     var timer=setInterval(poll,15000);
     return function(){clearInterval(timer);};
   },[]);
+  /* 分析モード用: ストローク変更を履歴に commit */
+  function analysisCommit(strks){
+    analysisHistRef.current=analysisHistRef.current.slice(-19).concat([strks]);
+    analysisFutRef.current=[];
+    if(modeTab==='analysis'){setCanUndo(true); setCanRedo(false);}
+  }
   function undo(){
+    if(modeTab==='analysis'){
+      if(analysisHistRef.current.length<=1)return;
+      var prevA=analysisHistRef.current[analysisHistRef.current.length-2];
+      analysisFutRef.current=[analysisStrokesRef.current.slice()].concat(analysisFutRef.current.slice(0,19));
+      analysisHistRef.current=analysisHistRef.current.slice(0,-1);
+      setAnalysisStrokes(prevA);
+      setCanUndo(analysisHistRef.current.length>1); setCanRedo(true);
+      return;
+    }
     if(histRef.current.length<=1)return;
     var prev=histRef.current[histRef.current.length-2];
     futRef.current=[strokesRef.current].concat(futRef.current.slice(0,19));
@@ -2285,6 +2380,15 @@ function ImageAnnotator(props){
     setCanUndo(histRef.current.length>1); setCanRedo(true);
   }
   function redo(){
+    if(modeTab==='analysis'){
+      if(!analysisFutRef.current.length)return;
+      var nextA=analysisFutRef.current[0], restA=analysisFutRef.current.slice(1);
+      analysisFutRef.current=restA;
+      analysisHistRef.current=analysisHistRef.current.concat([nextA]);
+      setAnalysisStrokes(nextA);
+      setCanUndo(true); setCanRedo(restA.length>0);
+      return;
+    }
     if(!futRef.current.length)return;
     var next=futRef.current[0], rest=futRef.current.slice(1);
     futRef.current=rest;
@@ -2293,6 +2397,16 @@ function ImageAnnotator(props){
     setSelIdxs(new Set()); setSelBounds(null); rebuild(next);
     setCanUndo(true); setCanRedo(rest.length>0);
   }
+  /* modeTab 切替時: canUndo/canRedo を現在モードに同期 */
+  useEffect(function(){
+    if(modeTab==='analysis'){
+      setCanUndo(analysisHistRef.current.length>1);
+      setCanRedo(analysisFutRef.current.length>0);
+    }else{
+      setCanUndo(histRef.current.length>1);
+      setCanRedo(futRef.current.length>0);
+    }
+  },[modeTab]);
 
   function getPos(e){
     var c=canvasRef.current, r=c.getBoundingClientRect();
@@ -3017,20 +3131,30 @@ function ImageAnnotator(props){
         /* B1: 以下は画像モード時のみ表示 */
         modeTab==='image' && ce("div",{style:{display:"flex",gap:IS_TOUCH?3:5,flexWrap:"nowrap",flexShrink:0}},
           TOOLS.map(function(t){
-            return ce("button",{key:t.id,onClick:function(){switchTool(t.id);},
+            return ce("button",{key:'img_'+t.id,onClick:function(){switchTool(t.id);},
               style:Object.assign({},TS,{fontSize:IS_TOUCH?11:12,padding:IS_TOUCH?"5px 7px":"6px 10px",
                 background:tool===t.id?(t.id==="eraser"?"#E65100":t.id==="lasso"?"#007AFF":t.id==="text"?"#D4AC0D":"#6366F1"):"#2a2a2a",
                 color:tool===t.id?(t.id==="text"?"#1a1a1a":"#fff"):"#aaa"})},
               t.label);
           })
         ),
-        modeTab==='image' && ce("div",{style:{width:1,height:20,background:"#333",flexShrink:0,margin:"0 4px"}}),
-        /* ⇺ 水平スナップ */
-        modeTab==='image' && ce("button",{
+        /* 分析モード時: 描画ツール (画像と同じ TOOLS+switchTool を利用 → toolMemRef 共通) */
+        modeTab==='analysis' && analysisData && ce("div",{style:{display:"flex",gap:IS_TOUCH?3:5,flexWrap:"nowrap",flexShrink:0}},
+          TOOLS.map(function(t){
+            return ce("button",{key:'ana_'+t.id,onClick:function(){switchTool(t.id);},
+              style:Object.assign({},TS,{fontSize:IS_TOUCH?11:12,padding:IS_TOUCH?"5px 7px":"6px 10px",
+                background:tool===t.id?(t.id==="eraser"?"#E65100":t.id==="lasso"?"#007AFF":t.id==="text"?"#D4AC0D":"#6366F1"):"#2a2a2a",
+                color:tool===t.id?(t.id==="text"?"#1a1a1a":"#fff"):"#aaa"})},
+              t.label);
+          })
+        ),
+        (modeTab==='image'||(modeTab==='analysis'&&analysisData)) && ce("div",{style:{width:1,height:20,background:"#333",flexShrink:0,margin:"0 4px"}}),
+        /* ⇺ 水平スナップ (両モード) */
+        (modeTab==='image'||(modeTab==='analysis'&&analysisData)) && ce("button",{
           onClick:function(){setHoriz(function(h2){return !h2;});},
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:horiz?"#D4AC0D":"#2a2a2a",color:horiz?"#1a1a1a":"#aaa"})
         },"⇺水平"),
-        /* 📂 過去チャートを参照 */
+        /* 📂 過去チャートを参照 (画像モードのみ) */
         modeTab==='image' && ce("button",{
           onClick:function(){
             if(refPanel){if(refPanel._isBlob)try{URL.revokeObjectURL(refPanel.url);}catch(e3){}setRefPanel(null);setRefImgDim(null);setRefSlideMode(false);setRefOffsetY(0);}
@@ -3040,7 +3164,7 @@ function ImageAnnotator(props){
             background:refPanel?"#16a34a":"#2a2a2a",
             color:refPanel?"#bbf7d0":"#aaa"})
         },"過去チャートを参照"),
-        /* ↕ 上下スライド / ここで固定 (参照画像がある時だけ表示) */
+        /* ↕ 上下スライド / ここで固定 (画像モードのみ、参照画像がある時だけ表示) */
         modeTab==='image' && refPanel&&refPanel.url&&!refSlideMode&&ce("button",{
           onClick:function(){setRefSlideMode(true);},
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#7c3aed",color:"#e9d5ff"})
@@ -3049,6 +3173,27 @@ function ImageAnnotator(props){
           onClick:function(){setRefSlideMode(false);},
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#b45309",color:"#fef3c7",fontWeight:700})
         },"📌 ここで固定"),
+        /* 分析モード固有: 十字 / 1m・5m / 別JSON (analysisData 読込済みの時のみ) */
+        modeTab==='analysis' && analysisData && ce("button",{
+          onClick:function(){setShowCrosshair(!showCrosshair);},
+          title:"十字カーソル表示",
+          style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",
+            background:showCrosshair?"#4a9de3":"#2a2a2a",
+            color:showCrosshair?"#fff":"#aaa"})
+        },"✛ 十字"),
+        modeTab==='analysis' && analysisData && ce("div",{style:{display:"flex",gap:2,flexShrink:0}},
+          ['1m','5m'].map(function(t){
+            return ce("button",{key:t,onClick:function(){setAnalysisTf(t);},
+              style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",
+                background:analysisTf===t?'#10b981':'#2a2a2a',
+                color:analysisTf===t?'#fff':'#aaa'})},
+              t==='1m'?'1分':'5分');
+          })
+        ),
+        modeTab==='analysis' && analysisData && ce("button",{
+          onClick:function(){if(confirm('別のJSONを読み込む? 現在のデータは破棄されます')){setAnalysisData(null);setAnalysisStrokes([]);analysisHistRef.current=[[]];analysisFutRef.current=[];setCanUndo(false);setCanRedo(false);}},
+          style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#2a2a2a",color:"#aaa"})
+        },"🔄 別のJSON"),
         /* spacer */
         ce("div",{style:{flex:1}}),
         /* 手動保存 status badge */
@@ -3067,8 +3212,8 @@ function ImageAnnotator(props){
         ce("button",{onClick:function(){setCancelConfirm(true);},style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#333",color:"#ccc"})},"分析を終了する"),
         ce("button",{onClick:saveAndExport,style:Object.assign({},TS,{fontSize:12,padding:"6px 12px",background:"#2563eb",color:"#fff",fontWeight:700})},"💾 保存・出力")
       ),
-      /* Row 2: color + lineW + opacity + zoom — B1: 画像モード時のみ */
-      modeTab==='image' && ce("div",{style:{display:"flex",gap:IS_TOUCH?6:14,alignItems:"center",padding:IS_TOUCH?"5px 8px":"10px 14px",
+      /* Row 2: color + lineW + opacity + zoom — ColorPicker/線幅/濃さは両モード共通、zoomは画像モードのみ */
+      (modeTab==='image'||(modeTab==='analysis'&&analysisData)) && ce("div",{style:{display:"flex",gap:IS_TOUCH?6:14,alignItems:"center",padding:IS_TOUCH?"5px 8px":"10px 14px",
         flexWrap:"nowrap",overflowX:IS_TOUCH?"auto":"visible",WebkitOverflowScrolling:"touch",
         justifyContent:IS_TOUCH?"flex-start":"center",touchAction:"pan-x"}},
         ce(ColorPicker,{value:color,onChange:setColor,
@@ -3098,8 +3243,8 @@ function ImageAnnotator(props){
             style:{padding:"2px 7px",borderRadius:5,cursor:"pointer",fontSize:12,fontWeight:700,background:"#2a2a2a",color:"#fff",userSelect:"none"}},"+"),
           ce("span",{style:{fontSize:10,color:"#666",minWidth:28,flexShrink:0}},Math.round(opacity*100)+"%")
         ),
-        /* zoom */
-        ce("div",{style:{display:"flex",gap:5,alignItems:"center"}},
+        /* zoom (画像モードのみ) */
+        modeTab==='image' && ce("div",{style:{display:"flex",gap:5,alignItems:"center"}},
           ce("button",{onClick:function(){setZoom(function(z){return cZ(z/1.25);});},
             style:Object.assign({},TS,{fontSize:12,padding:"5px 8px",background:"#2a2a2a",color:"#fff"})},"−"),
           ce("span",{style:{fontSize:11,color:"#666",minWidth:34,textAlign:"center"}},Math.round(zoom*100)+"%"),
@@ -3110,7 +3255,7 @@ function ImageAnnotator(props){
           ce("button",{onClick:function(){setZoom(1);setPan({x:0,y:0});},
             style:Object.assign({},TS,{fontSize:11,padding:"5px 7px",background:"#2a2a2a",color:"#888"})},"fit")
         ),
-        /* text options */
+        /* text options (両モード、tool==='text'時のみ) */
         tool==="text"&&ce(Fragment,null,
           ce("div",{style:{display:"flex",gap:5,alignItems:"center"}},
             ce("span",{style:{fontSize:10,color:"#666",flexShrink:0}},"サイズ"),
@@ -3351,9 +3496,10 @@ function ImageAnnotator(props){
           }
         })
       ),
-      /* データ読込済: ヘッダ + DataChart */
+      /* データ読込済: 薄いメタ行 (ticker+stats) + DataChart
+         ※ 描画ツール・色・線幅・濃さ・十字・1m5m・別JSON は共通ツールバーへ移動 */
       analysisData && ce(Fragment,null,
-        ce("div",{style:{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",
+        ce("div",{style:{display:"flex",alignItems:"center",gap:10,padding:"6px 12px",
           background:"#111",borderBottom:"1px solid #222",flexShrink:0}},
           ce("div",{style:{fontSize:13,fontWeight:700,color:"#ddd"}},
             (analysisData.ticker||'?')+'　'+(analysisData.date||'')
@@ -3364,88 +3510,7 @@ function ImageAnnotator(props){
               ' L'+analysisData.stats.low.toFixed(0)+' C'+analysisData.stats.close.toFixed(0)+
               '  VWAP'+analysisData.stats.vwap.toFixed(1)
               :'')
-          ),
-          ce("div",{style:{flex:1}}),
-          /* B-drawing: 描画ツール選択 (画像画面と同等) */
-          ce("div",{style:{display:"flex",gap:2,marginRight:6,flexWrap:"wrap"}},
-            [
-              {k:'pan',lbl:'✋'},
-              {k:'line',lbl:'直線'},
-              {k:'dotted',lbl:'点線'},
-              {k:'arrow',lbl:'矢印'},
-              {k:'rect',lbl:'四角'},
-              {k:'circle',lbl:'丸'},
-              {k:'marker',lbl:'マーカー'},
-              {k:'freehand',lbl:'フリー'},
-              {k:'text',lbl:'Ｔ'},
-              {k:'lasso',lbl:'選択'},
-              {k:'eraser',lbl:'🧹'}
-            ].map(function(t){
-              return ce("button",{key:t.k,onClick:function(){setTool(t.k);},
-                title:t.k,
-                style:{padding:"5px 8px",fontSize:11,fontWeight:600,border:"none",borderRadius:5,
-                  background:tool===t.k?'#f59e0b':'#2a2a2a',
-                  color:tool===t.k?'#fff':'#aaa',cursor:"pointer",fontFamily:"inherit"}},
-                t.lbl);
-            })
-          ),
-          /* 水平スナップ トグル (画像画面と同じ) */
-          ce("button",{
-            onClick:function(){setHoriz(!horiz);},
-            title:"水平スナップ (直線・点線・矢印・四角・丸でドラッグを水平/垂直に制約)",
-            style:{padding:"5px 8px",fontSize:11,fontWeight:700,border:"none",borderRadius:5,
-              background:horiz?'#10b981':'#2a2a2a',
-              color:horiz?'#fff':'#888',cursor:"pointer",fontFamily:"inherit",marginRight:6}
-          },"⇺水平"),
-          /* 色選択 (簡易クイックパレット) */
-          ce("div",{style:{display:"flex",gap:2,marginRight:6}},
-            ['#ff3b30','#ffcc00','#34c759','#4a9de3','#ffffff'].map(function(c){
-              return ce("button",{key:c,onClick:function(){setColor(c);},
-                style:{width:20,height:20,padding:0,border:color===c?'2px solid #fff':'1px solid #333',
-                  borderRadius:10,background:c,cursor:'pointer'}});
-            })
-          ),
-          /* 線幅スライダ */
-          ce("div",{style:{display:"flex",alignItems:"center",gap:4,marginRight:6,fontSize:10,color:'#888'}},
-            ce("span",null,"幅"),
-            ce("input",{type:"range",min:1,max:10,step:1,value:lineW,
-              onChange:function(e){setLineW(parseInt(e.target.value,10));},
-              style:{width:60}}),
-            ce("span",{style:{minWidth:14,textAlign:"right",color:'#ccc'}},lineW)
-          ),
-          /* 不透明度スライダ (marker主用途) */
-          ce("div",{style:{display:"flex",alignItems:"center",gap:4,marginRight:6,fontSize:10,color:'#888'}},
-            ce("span",null,"濃"),
-            ce("input",{type:"range",min:0.1,max:1,step:0.1,value:opacity,
-              onChange:function(e){setOpacity(parseFloat(e.target.value));},
-              style:{width:50}}),
-            ce("span",{style:{minWidth:22,textAlign:"right",color:'#ccc'}},opacity.toFixed(1))
-          ),
-          /* 十字カーソル ON/OFF (常時ボタン表示、PCで機能) */
-          ce("button",{
-            onClick:function(){setShowCrosshair(!showCrosshair);},
-            title:"十字カーソル表示",
-            style:{padding:"5px 10px",fontSize:11,fontWeight:700,border:"none",borderRadius:5,
-              background:showCrosshair?'#4a9de3':'#2a2a2a',
-              color:showCrosshair?'#fff':'#888',cursor:"pointer",fontFamily:"inherit"}
-          },"✛ 十字"),
-          /* 1m/5m 切替 */
-          ce("div",{style:{display:"flex",gap:2}},
-            ['1m','5m'].map(function(t){
-              return ce("button",{key:t,onClick:function(){setAnalysisTf(t);},
-                style:{padding:"5px 12px",fontSize:11,fontWeight:700,border:"none",borderRadius:5,
-                  background:analysisTf===t?'#10b981':'#2a2a2a',
-                  color:analysisTf===t?'#fff':'#888',cursor:"pointer",fontFamily:"inherit"}},
-                t==='1m'?'1分':'5分');
-            })
-          ),
-          ce("button",{
-            onClick:function(){
-              if(confirm('別のJSONを読み込む? 現在のデータは破棄されます'))setAnalysisData(null);
-            },
-            style:{padding:"5px 10px",fontSize:11,border:"none",borderRadius:5,
-              background:"#2a2a2a",color:"#888",cursor:"pointer",fontFamily:"inherit"}
-          },"🔄 別のJSON")
+          )
         ),
         ce(DataChart,{
           data:analysisData, tf:analysisTf, showCrosshair:showCrosshair,
@@ -3453,18 +3518,106 @@ function ImageAnnotator(props){
           drawFontSize:fontSize, drawFontBold:fontBold,
           horiz:horiz,
           strokes:analysisStrokes,
-          onStrokeAdd:function(s){setAnalysisStrokes(analysisStrokesRef.current.concat([s]));},
+          editingTextIdx:analysisTextInput&&analysisTextInput.editIdx>=0?analysisTextInput.editIdx:-1,
+          textInputActive:!!analysisTextInput,
+          onStrokeAdd:function(s){
+            var next=analysisStrokesRef.current.concat([s]);
+            setAnalysisStrokes(next);
+            analysisCommit(next);
+          },
           onStrokeDelete:function(idx){
             var next=analysisStrokesRef.current.slice();
             next.splice(idx,1);
             setAnalysisStrokes(next);
+            analysisCommit(next);
+          },
+          onStrokeDeleteMany:function(idxs){
+            if(!idxs||!idxs.length)return;
+            var skip=new Set(idxs);
+            var next=analysisStrokesRef.current.filter(function(_,i){return !skip.has(i);});
+            if(next.length===analysisStrokesRef.current.length)return;
+            setAnalysisStrokes(next);
+            analysisCommit(next);
           },
           onStrokeUpdate:function(idx,newStroke){
             var next=analysisStrokesRef.current.slice();
             next[idx]=newStroke;
             setAnalysisStrokes(next);
+            analysisCommit(next);
+          },
+          onRequestTextInput:function(req){
+            // 入力中にpan/zoomをロックするため、現状のtoolを覚えておく必要はないが
+            // editIdx>=0なら既存テキスト編集、そうでなければ新規
+            var initText='', initFS=fontSize, initBold=fontBold, initColor=color, initOp=opacity;
+            if(req.editIdx>=0){
+              var es=analysisStrokesRef.current[req.editIdx];
+              if(es){
+                initText=es.text||'';
+                initFS=es.fontSize||fontSize;
+                initBold=!!es.fontBold;
+                initColor=es.color||color;
+                initOp=es.opacity!=null?es.opacity:opacity;
+              }
+            }
+            setAnalysisTextInput({
+              tm:req.tm, p:req.p,
+              screenX:req.screenX, screenY:req.screenY,
+              text:initText,
+              fontSize:initFS, fontBold:initBold,
+              color:initColor, opacity:initOp,
+              editIdx: req.editIdx>=0?req.editIdx:-1
+            });
           }
-        })
+        }),
+        /* floating undo/redo (分析モード用、画像モードと同スタイル) */
+        ce("div",{
+          style:Object.assign(
+            floatPosAnalysis?{position:"absolute",left:floatPosAnalysis.x,top:floatPosAnalysis.y}:{position:"absolute",top:IS_TOUCH?12:8,right:12},
+            {display:"flex",flexDirection:"column",gap:0,zIndex:10004,pointerEvents:"auto",userSelect:"none",touchAction:"none"}
+          )
+        },
+          ce("div",{
+            onMouseDown:function(e){
+              e.stopPropagation();e.preventDefault();
+              var panel=e.currentTarget.parentNode.parentNode; // analysis panel div
+              var aRect=panel.getBoundingClientRect();
+              var fRect=e.currentTarget.parentNode.getBoundingClientRect();
+              analysisFloatDragRef.current={
+                startX:e.clientX,startY:e.clientY,
+                ox:fRect.left-aRect.left,oy:fRect.top-aRect.top
+              };
+              function mv(ev){
+                if(!analysisFloatDragRef.current)return;
+                var d=analysisFloatDragRef.current;
+                setFloatPosAnalysis({x:d.ox+ev.clientX-d.startX,y:d.oy+ev.clientY-d.startY});
+              }
+              function up(){analysisFloatDragRef.current=null;document.removeEventListener("mousemove",mv);document.removeEventListener("mouseup",up);}
+              document.addEventListener("mousemove",mv);document.addEventListener("mouseup",up);
+            },
+            style:{height:IS_TOUCH?18:14,display:"flex",alignItems:"center",justifyContent:"center",cursor:"grab",
+              background:"rgba(255,255,255,0.7)",borderRadius:"10px 10px 0 0",border:"1px solid rgba(0,0,0,0.1)",
+              borderBottom:"none",letterSpacing:2,fontSize:IS_TOUCH?11:9,color:"rgba(0,0,0,0.35)",backdropFilter:"blur(16px)"}
+          },"⋯"),
+          ce("div",{style:{display:"flex",borderRadius:"0 0 10px 10px",overflow:"hidden",
+            border:"1px solid rgba(0,0,0,0.12)",borderTop:"none",
+            boxShadow:"0 4px 20px rgba(0,0,0,0.25),0 0 0 0.5px rgba(255,255,255,0.15),inset 0 1px 0 rgba(255,255,255,0.35)",
+            backdropFilter:"blur(16px)",background:"rgba(255,255,255,0.82)"}},
+            ce("button",{onClick:undo,disabled:!canUndo,
+              onMouseDown:function(e){e.stopPropagation();},onTouchStart:function(e){e.stopPropagation();},
+              style:{width:IS_TOUCH?62:52,height:IS_TOUCH?36:30,border:"none",borderRight:"1px solid rgba(0,0,0,0.12)",
+                background:canUndo?"rgba(0,0,0,0.06)":"transparent",color:canUndo?"rgba(0,0,0,0.85)":"rgba(0,0,0,0.2)",
+                fontSize:IS_TOUCH?20:16,cursor:canUndo?"pointer":"default",display:"flex",alignItems:"center",justifyContent:"center",
+                transition:"background .15s,color .15s"}},
+              "↩"),
+            ce("button",{onClick:redo,disabled:!canRedo,
+              onMouseDown:function(e){e.stopPropagation();},onTouchStart:function(e){e.stopPropagation();},
+              style:{width:IS_TOUCH?62:52,height:IS_TOUCH?36:30,border:"none",
+                background:canRedo?"rgba(0,0,0,0.06)":"transparent",color:canRedo?"rgba(0,0,0,0.85)":"rgba(0,0,0,0.2)",
+                fontSize:IS_TOUCH?20:16,cursor:canRedo?"pointer":"default",display:"flex",alignItems:"center",justifyContent:"center",
+                transition:"background .15s,color .15s"}},
+              "↪")
+          )
+        )
       )
     ),
 
@@ -3838,6 +3991,183 @@ function ImageAnnotator(props){
               })
             })
           )
+        );
+      })(),
+      document.body
+    ),
+
+    /* ── 分析モード テキスト入力 portal ── */
+    analysisTextInput&&ReactDOM.createPortal(
+      (function(){
+        var ati=analysisTextInput;
+        var fontFamily="-apple-system,'Helvetica Neue',sans-serif";
+        function confirmAnalysisText(){
+          var txt=(analysisTextareaRef.current&&analysisTextareaRef.current.value)||ati.text||'';
+          if(!txt.trim()){
+            // 空入力: 既存編集ならそのまま削除、新規なら何もしない
+            if(ati.editIdx>=0){
+              var next0=analysisStrokesRef.current.slice();
+              next0.splice(ati.editIdx,1);
+              setAnalysisStrokes(next0);
+              analysisCommit(next0);
+            }
+            setAnalysisTextInput(null);
+            return;
+          }
+          if(ati.editIdx>=0){
+            var es0=analysisStrokesRef.current[ati.editIdx];
+            if(es0){
+              var updated=Object.assign({},es0,{
+                text:txt, color:ati.color, opacity:ati.opacity,
+                fontSize:ati.fontSize, fontBold:ati.fontBold,
+                anchors:[{tm:ati.tm,p:ati.p}]
+              });
+              var next1=analysisStrokesRef.current.slice();
+              next1[ati.editIdx]=updated;
+              setAnalysisStrokes(next1);
+              analysisCommit(next1);
+            }
+          } else {
+            var stroke={id:'s_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),
+              type:'text', anchors:[{tm:ati.tm,p:ati.p}],
+              color:ati.color, opacity:ati.opacity,
+              fontSize:ati.fontSize, fontBold:ati.fontBold,
+              text:txt};
+            var next2=analysisStrokesRef.current.concat([stroke]);
+            setAnalysisStrokes(next2);
+            analysisCommit(next2);
+          }
+          setAnalysisTextInput(null);
+        }
+        function deleteAnalysisText(){
+          if(ati.editIdx>=0){
+            var next=analysisStrokesRef.current.slice();
+            next.splice(ati.editIdx,1);
+            setAnalysisStrokes(next);
+            analysisCommit(next);
+          }
+          setAnalysisTextInput(null);
+        }
+        function cancelAnalysisText(){setAnalysisTextInput(null);}
+        var sx=ati.screenX||0, sy=ati.screenY||0;
+        var maxW=Math.max(120,window.innerWidth-sx-20);
+        return ce(Fragment,null,
+          /* 全画面クリックで確定 */
+          ce("div",{
+            onMouseDown:function(e){if(e.target===e.currentTarget)confirmAnalysisText();},
+            onTouchStart:function(e){if(e.target===e.currentTarget)confirmAnalysisText();},
+            style:{position:"fixed",inset:0,zIndex:10998}
+          }),
+          /* 上部カラーバー */
+          ce("div",{
+            onMouseDown:function(e){e.preventDefault();e.stopPropagation();},
+            onTouchStart:function(e){e.stopPropagation();},
+            style:{
+              position:"fixed",
+              left:Math.max(4,sx),top:Math.max(4,sy-46),
+              zIndex:11003,display:"flex",gap:5,alignItems:"center",
+              background:"rgba(18,18,18,.96)",borderRadius:10,
+              padding:"6px 10px",boxShadow:"0 4px 20px rgba(0,0,0,.6)",
+              backdropFilter:"blur(10px)",maxWidth:"calc(100vw - 8px)",
+              overflowX:"auto",WebkitOverflowScrolling:"touch"
+            }
+          },
+            ce("span",{style:{fontSize:10,color:"#888",flexShrink:0}},"色"),
+            quickColors.map(function(qc,qi){
+              var isA=ati.color===qc;
+              var QS=IS_TOUCH?24:20;
+              return ce("span",{key:qi,
+                onMouseDown:function(e){e.preventDefault();e.stopPropagation();},
+                onTouchStart:function(e){e.stopPropagation();},
+                onClick:function(){
+                  setAnalysisTextInput(Object.assign({},analysisTextInputRef.current||ati,{color:qc}));
+                  if(analysisTextareaRef.current)analysisTextareaRef.current.focus();
+                },
+                style:{width:QS,height:QS,borderRadius:"50%",background:qc,cursor:"pointer",flexShrink:0,
+                  boxShadow:isA?"0 0 0 2px #111,0 0 0 3.5px #6366F1":"0 1px 3px rgba(0,0,0,.4)",
+                  border:"1.5px solid rgba(255,255,255,.4)",
+                  transform:isA?"scale(1.15)":"scale(1)",transition:"transform .1s"}
+              });
+            }),
+            ce("label",{
+              onMouseDown:function(e){e.preventDefault();e.stopPropagation();},
+              style:{cursor:"pointer",position:"relative",width:IS_TOUCH?22:18,height:IS_TOUCH?22:18,
+                borderRadius:"50%",background:"conic-gradient(red,yellow,lime,cyan,blue,magenta,red)",
+                border:"1.5px solid rgba(255,255,255,.3)",display:"block",flexShrink:0}},
+              ce("input",{type:"color",value:ati.color||"#ff3b30",
+                onChange:function(e){setAnalysisTextInput(Object.assign({},analysisTextInputRef.current||ati,{color:e.target.value}));},
+                style:{position:"absolute",opacity:0,width:1,height:1}})
+            ),
+            ce("div",{style:{width:1,height:16,background:"#444",margin:"0 2px"}}),
+            ce("span",{style:{fontSize:10,color:"#888",flexShrink:0}},"サイズ"),
+            ce("span",{
+              onMouseDown:function(e){e.preventDefault();e.stopPropagation();},
+              onClick:function(){setAnalysisTextInput(Object.assign({},analysisTextInputRef.current||ati,{fontSize:Math.max(1,(ati.fontSize||18)-1)}));if(analysisTextareaRef.current)analysisTextareaRef.current.focus();},
+              style:{padding:"2px 7px",borderRadius:4,cursor:"pointer",fontSize:12,fontWeight:700,background:"#2a2a2a",color:"#fff",userSelect:"none",flexShrink:0}},"−"),
+            ce("span",{style:{fontSize:12,color:"#ccc",minWidth:22,textAlign:"center",flexShrink:0}},ati.fontSize||18),
+            ce("span",{
+              onMouseDown:function(e){e.preventDefault();e.stopPropagation();},
+              onClick:function(){setAnalysisTextInput(Object.assign({},analysisTextInputRef.current||ati,{fontSize:Math.min(200,(ati.fontSize||18)+1)}));if(analysisTextareaRef.current)analysisTextareaRef.current.focus();},
+              style:{padding:"2px 7px",borderRadius:4,cursor:"pointer",fontSize:12,fontWeight:700,background:"#2a2a2a",color:"#fff",userSelect:"none",flexShrink:0}},"+"),
+            ce("span",{
+              onMouseDown:function(e){e.preventDefault();e.stopPropagation();},
+              onClick:function(){setAnalysisTextInput(Object.assign({},analysisTextInputRef.current||ati,{fontBold:!ati.fontBold}));if(analysisTextareaRef.current)analysisTextareaRef.current.focus();},
+              style:{padding:"2px 9px",borderRadius:4,cursor:"pointer",fontSize:13,fontWeight:900,
+                background:ati.fontBold?"#D4AC0D":"#2a2a2a",color:ati.fontBold?"#1a1a1a":"#aaa",
+                border:"none",flexShrink:0,userSelect:"none"}},"B"),
+            ce("div",{style:{width:1,height:16,background:"#444",margin:"0 2px"}}),
+            ce("button",{
+              onMouseDown:function(e){e.preventDefault();e.stopPropagation();},
+              onClick:confirmAnalysisText,
+              style:{padding:"4px 12px",fontSize:12,fontWeight:700,background:"#6366F1",
+                color:"#fff",border:"none",borderRadius:6,cursor:"pointer",flexShrink:0}},"✓ 確定"),
+            ati.editIdx>=0&&ce("button",{
+              onMouseDown:function(e){e.preventDefault();e.stopPropagation();},
+              onClick:deleteAnalysisText,
+              style:{padding:"4px 10px",fontSize:12,fontWeight:700,background:"#7f1d1d",color:"#fca5a5",
+                border:"none",borderRadius:6,cursor:"pointer",flexShrink:0}},"🗑 削除"),
+            ce("button",{
+              onMouseDown:function(e){e.preventDefault();e.stopPropagation();},
+              onClick:cancelAnalysisText,
+              style:{padding:"4px 10px",fontSize:12,background:"#2a2a2a",color:"#aaa",
+                border:"none",borderRadius:6,cursor:"pointer",flexShrink:0}},"✕")
+          ),
+          /* textarea */
+          ce("textarea",{
+            ref:analysisTextareaRef,
+            autoFocus:true,
+            defaultValue:ati.text||"",
+            rows:1,
+            onKeyDown:function(e){
+              if(e.key==="Escape"){e.preventDefault();cancelAnalysisText();}
+              else if((e.ctrlKey||e.metaKey)&&e.key==="Enter"){e.preventDefault();confirmAnalysisText();}
+            },
+            onInput:function(){
+              var el=analysisTextareaRef.current; if(!el)return;
+              el.style.height="auto";
+              el.style.height=el.scrollHeight+"px";
+            },
+            style:{
+              position:"fixed",
+              left:sx, top:sy,
+              width:maxW+"px",
+              maxWidth:maxW+"px",
+              minHeight:(ati.fontSize||18)*1.6+"px",
+              background:"rgba(0,0,0,0.55)",
+              border:"1.5px dashed #4a9de3",borderRadius:3,
+              color:ati.color||"#ff3b30",
+              caretColor:ati.color||"#ff3b30",
+              fontSize:(ati.fontSize||18)+"px",
+              fontWeight:ati.fontBold?"700":"400",
+              fontFamily:fontFamily,
+              lineHeight:1.3,
+              resize:"none",overflow:"hidden",
+              padding:"2px 4px",margin:0,
+              zIndex:11000,pointerEvents:"auto",
+              outline:"none",boxShadow:"none",
+              whiteSpace:"pre-wrap",wordBreak:"break-all"
+            }
+          })
         );
       })(),
       document.body
