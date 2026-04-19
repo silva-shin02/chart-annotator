@@ -1065,6 +1065,7 @@ function ImageAnnotator(props){
       setRefImgDim({w:ri.naturalWidth,h:ri.naturalHeight});
       var dim=canvasDimRef.current;
       if(!dim||!dim.w)return;
+      // メイン画像: 左半分に独自フィット
       var aw=window.innerWidth*0.45*0.96;
       var ah=(window.innerHeight-130)*0.96;
       var sc=Math.min(1,aw/dim.w,ah/dim.h);
@@ -2174,12 +2175,14 @@ function ImageAnnotator(props){
         transform:"translate("+pan.x+"px,"+pan.y+"px) scale("+zoom+")",
         transformOrigin:"center center"
       }},
-        /* 参照画像（左に連結） */
+        /* 参照画像（左に連結・独自サイズ） */
         refPanel&&refPanel.url&&refImgDim&&(function(){
-          var mNatH=canvasDimRef.current&&canvasDimRef.current.h||1;
-          var sc=dispH/mNatH;
-          var rDispW=Math.round(refImgDim.w*sc);
-          var rDispH=Math.round(refImgDim.h*sc);
+          // 参照画像は右半分(45%)の幅と利用可能な高さに独自フィット
+          var refAw=window.innerWidth*0.45*0.96;
+          var refAh=(window.innerHeight-130)*0.96;
+          var refSc=Math.min(1,refAw/refImgDim.w,refAh/refImgDim.h);
+          var rDispW=Math.round(refImgDim.w*refSc);
+          var rDispH=Math.round(refImgDim.h*refSc);
           return ce("img",{
             src:refPanel.url, draggable:false,
             onMouseDown:onRefSlideStart,
