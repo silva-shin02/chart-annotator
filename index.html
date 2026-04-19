@@ -47,6 +47,9 @@ var ce         = R.createElement;   // ← h ではなく ce を使う
 
 var IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
 var HAS_HOVER = typeof matchMedia!=='undefined' && matchMedia('(hover: hover)').matches;
+/* C1+: 過去chartと現在chartを1つのキャンバスに連結表示 (trueで統合、falseで旧・左右分離) */
+var USE_UNIFIED_CHART = true;
+var UNIFIED_GAP_VIS = 5;  // 過去と現在の間のgap (仮想分単位、圧縮軸上)
 
 /* ─── IndexedDB キャッシュ（localStorage 5MB制限回避）──────── */
 var _idb=null, _idbReady=false, _idbQueue=[];
@@ -974,21 +977,31 @@ function DataChart(props){
   /* 選択ストロークの index (lasso用) */
   var sSI=useState(null); var selectedIdx=sSI[0],setSelectedIdx=sSI[1];
 
+  // C1+: 統合chart用 — refData から refBars を算出
+  var refData=props.refData;
+  var refBars=(refData&&refData[barsKey])||null;
+  var hasRef=!!(refBars&&refBars.length);
+
   // データロード時: 全バーから priceRange を算出 (10円境界に丸める)
   // F2: props.priceRangeOverride があれば、それを優先して使用 (yenPerPx統一用)
+  // C1+: hasRef時は refBars も含めて外接 min/max で両chart共通レンジに (仕様①a)
   useEffect(function(){
-    if(props.priceRangeOverride){
+    if(props.priceRangeOverride && !hasRef){
       setPriceRange(props.priceRangeOverride);
       return;
     }
     if(!bars.length){setPriceRange(null);return;}
     var mn=Infinity, mx=-Infinity;
-    bars.forEach(function(b){
-      if(b.l<mn)mn=b.l; if(b.h>mx)mx=b.h;
-      ['ema9','ema22','ema50','ema200','vwap'].forEach(function(k){
-        var v=b[k]; if(v!=null){if(v<mn)mn=v;if(v>mx)mx=v;}
+    function scan(barsArr){
+      barsArr.forEach(function(b){
+        if(b.l<mn)mn=b.l; if(b.h>mx)mx=b.h;
+        ['ema9','ema22','ema50','ema200','vwap'].forEach(function(k){
+          var v=b[k]; if(v!=null){if(v<mn)mn=v;if(v>mx)mx=v;}
+        });
       });
-    });
+    }
+    scan(bars);
+    if(hasRef)scan(refBars);
     // 10円境界に丸める + 余白 (±5円: 10円1マスが画面上広く見えるよう最小限)
     mn=Math.floor(mn/10)*10 - 5;
     mx=Math.ceil(mx/10)*10 + 5;
@@ -996,7 +1009,7 @@ function DataChart(props){
     setPriceRange(pr);
     // F2: 親へ自前算出 priceRange を通知 (連動チャートが yenPerPx を揃えるため)
     if(props.onBaseRangeComputed)props.onBaseRangeComputed(pr);
-  },[data,tf,props.priceRangeOverride]);
+  },[data,tf,props.priceRangeOverride,refData,hasRef]);
 
   // tf 変更時にビューリセット (controlled 時は親が制御するのでスキップ)
   useEffect(function(){
@@ -1033,10 +1046,10 @@ function DataChart(props){
   // メインチャート描画
   useEffect(function(){
     var canvas=canvasRef.current; if(!canvas||!bars.length||!priceRange)return;
-    drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx);
+    drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx,refBars,refData,UNIFIED_GAP_VIS);
     // 描画直後に十字カーソルも再描画 (リサイズ・ズーム等でレイアウト変わった時)
     drawCrosshair();
-  },[data,bars,dim,tf,view,pShift,priceRange,strokes,selectedIdx,props.editingTextIdx]);
+  },[data,bars,dim,tf,view,pShift,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars]);
 
   // showCrosshair 切替時: OFFなら消す、ONなら再描画
   useEffect(function(){
@@ -1707,7 +1720,7 @@ function DataChart(props){
 }
 
 /* DataChart 描画関数 (Canvas 2D 直接描画、HSBI2色、ズーム対応、10円固定グリッド、時刻+価格ストローク) */
-function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,editingTextIdx){
+function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,editingTextIdx,refBars,refData,gapVis){
   var dpr=window.devicePixelRatio||1;
   var W=dim.w, H=dim.h;
   canvas.width=Math.round(W*dpr);
@@ -1727,8 +1740,13 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   var priceTop=padT, priceBot=padT+priceH;
   var volTop=priceBot+6, volBot=volTop+volH;
 
+  // C1+: 統合chart判定
+  var hasRef=!!(refBars&&refBars.length);
+  gapVis=gapVis||5;
+
   // 時間軸: view.s - view.e (分単位)
-  var vS=view.s, vE=view.e, vSpan=vE-vS;
+  // hasRef時は表示範囲強制で両chart全体 (540-930)
+  var vS=hasRef?540:view.s, vE=hasRef?930:view.e, vSpan=vE-vS;
   // 昼休み(11:30=690〜12:30=750)の60分を15分に圧縮した仮想時間軸 tmVis
   function tmToVis(t){
     if(t<=690)return t;
@@ -1741,9 +1759,17 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     return v+45;
   }
   var tmVisS=tmToVis(vS), tmVisE=tmToVis(vE), tmVisSpan=tmVisE-tmVisS;
+  // C1+: 統合軸 uTotal (ref 345 + gap + cur 345)
+  var uTotal=hasRef?(tmVisSpan*2+gapVis):tmVisSpan;
   function tToMin(t){var p=t.split(':');return parseInt(p[0],10)*60+parseInt(p[1],10);}
-  function tToX(t){return padL+((tmToVis(tToMin(t))-tmVisS)/tmVisSpan)*chartW;}
-  function minToX(m){return padL+((tmToVis(m)-tmVisS)/tmVisSpan)*chartW;}
+  // minToX: side='cur'(default) or 'ref'。hasRef時のみside有効
+  function minToX(m,side){
+    if(!hasRef) return padL+((tmToVis(m)-tmVisS)/tmVisSpan)*chartW;
+    var v=tmToVis(m)-tmVisS;   // 0..tmVisSpan
+    if(side==='ref') return padL+(v/uTotal)*chartW;
+    return padL+((v+tmVisSpan+gapVis)/uTotal)*chartW;   // cur: gap越え
+  }
+  function tToX(t,side){return minToX(tToMin(t),side);}
 
   // 表示範囲内のバー (時間軸フィルタのみ、価格レンジは全バー基準)
   var visibleBars=bars.filter(function(b){var m=tToMin(b.t);return m>=vS&&m<=vE;});
@@ -1754,9 +1780,10 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   var pmax=priceRange.max + pShift;
   function pToY(p){return priceTop+(1-(p-pmin)/(pmax-pmin))*priceH;}
 
-  // 出来高レンジ (表示範囲内)
+  // 出来高レンジ (表示範囲内) — C1+: hasRef時は refBars も含めて両chartで揃える
   var vmax=0;
   visibleBars.forEach(function(b){if(b.v>vmax)vmax=b.v;});
+  if(hasRef)refBars.forEach(function(b){if(b.v>vmax)vmax=b.v;});
   if(vmax<=0) vmax=1;
   function vToY(v){return volBot-(v/vmax)*volH;}
 
@@ -1764,7 +1791,8 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   if(layoutRef)layoutRef.current={padL:padL,padR:padR,padT:padT,padB:padB,
     chartW:chartW,priceTop:priceTop,priceBot:priceBot,volTop:volTop,volBot:volBot,
     priceH:priceH,pmin:pmin,pmax:pmax,vS:vS,vE:vE,
-    tmVisS:tmVisS,tmVisE:tmVisE,tmVisSpan:tmVisSpan};
+    tmVisS:tmVisS,tmVisE:tmVisE,tmVisSpan:tmVisSpan,
+    hasRef:hasRef,uTotal:uTotal,gapVis:gapVis};
 
   // 10円固定グリッド + 全10円ラベル (HSBI2準拠、実線の薄い横線)
   ctx.font='10px -apple-system,Helvetica,sans-serif';
@@ -1789,50 +1817,70 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     }
   }
 
-  // 時間グリッド: ズーム率に応じてステップ可変
+  // 時間グリッド: ズーム率に応じてステップ可変 — C1+: hasRef時は cur/ref 両側描画
   ctx.textBaseline='top'; ctx.textAlign='center';
   var stepMin = vSpan>=300?60 : vSpan>=120?30 : vSpan>=60?15 : vSpan>=30?10 : 5;
   var firstStep = Math.ceil(vS/stepMin)*stepMin;
-  for(var m=firstStep; m<=vE; m+=stepMin){
-    var x=minToX(m);
-    if(x<padL-1||x>padL+chartW+1)continue;
-    var hh=Math.floor(m/60), mm=m%60;
-    var tStr=(hh<10?'0':'')+hh+':'+(mm<10?'0':'')+mm;
-    ctx.strokeStyle='#1a1a1a'; ctx.lineWidth=0.5;
-    ctx.beginPath(); ctx.moveTo(x,priceTop); ctx.lineTo(x,volBot); ctx.stroke();
-    ctx.fillStyle='#666'; ctx.fillText(tStr,x,volBot+4);
-  }
-  // 昼休み境界 (可視範囲内のみ)
-  [690,750].forEach(function(m){
-    if(m<vS||m>vE)return;
-    var x=minToX(m);
-    ctx.strokeStyle='#2a2a2a'; ctx.setLineDash([2,3]); ctx.lineWidth=0.5;
-    ctx.beginPath(); ctx.moveTo(x,priceTop); ctx.lineTo(x,volBot); ctx.stroke();
-    ctx.setLineDash([]);
+  var gridSides = hasRef?['ref','cur']:['cur'];
+  gridSides.forEach(function(sd){
+    for(var m=firstStep; m<=vE; m+=stepMin){
+      var x=minToX(m,sd);
+      if(x<padL-1||x>padL+chartW+1)continue;
+      var hh=Math.floor(m/60), mm=m%60;
+      var tStr=(hh<10?'0':'')+hh+':'+(mm<10?'0':'')+mm;
+      ctx.strokeStyle='#1a1a1a'; ctx.lineWidth=0.5;
+      ctx.beginPath(); ctx.moveTo(x,priceTop); ctx.lineTo(x,volBot); ctx.stroke();
+      ctx.fillStyle='#666'; ctx.fillText(tStr,x,volBot+4);
+    }
+    // 昼休み境界 (可視範囲内のみ)
+    [690,750].forEach(function(m){
+      if(m<vS||m>vE)return;
+      var x=minToX(m,sd);
+      ctx.strokeStyle='#2a2a2a'; ctx.setLineDash([2,3]); ctx.lineWidth=0.5;
+      ctx.beginPath(); ctx.moveTo(x,priceTop); ctx.lineTo(x,volBot); ctx.stroke();
+      ctx.setLineDash([]);
+    });
   });
+
+  // C1+: gap領域の薄い縦帯 (2chart境界の視覚的区切り)
+  if(hasRef){
+    var gapX1=padL+((tmVisSpan)/uTotal)*chartW;
+    var gapX2=padL+((tmVisSpan+gapVis)/uTotal)*chartW;
+    ctx.fillStyle='rgba(255,255,255,0.025)';
+    ctx.fillRect(gapX1,priceTop,gapX2-gapX1,volBot-priceTop);
+  }
 
   // HSBI2 配色
   var COL_UP='#ff0054';       // 陽線 (ピンク/ローズ)
   var COL_DN='#11ded9';       // 陰線 (シアン)
 
-  // ローソク足 + 出来高バー (表示範囲内のみ)
-  var barW=Math.max(1,(chartW/vSpan)*(tf==='5m'?5:1)*0.8);
-  visibleBars.forEach(function(b){
-    var cx=minToX(tToMin(b.t));
-    var up=b.c>=b.o;
-    var col=up?COL_UP:COL_DN;
-    // ヒゲ
-    ctx.strokeStyle=col; ctx.lineWidth=1;
-    ctx.beginPath(); ctx.moveTo(Math.round(cx)+0.5,pToY(b.h)); ctx.lineTo(Math.round(cx)+0.5,pToY(b.l)); ctx.stroke();
-    // 実体
-    ctx.fillStyle=col;
-    var y1=pToY(b.o), y2=pToY(b.c);
-    var yTop=Math.min(y1,y2), bh=Math.max(1,Math.abs(y1-y2));
-    ctx.fillRect(cx-barW/2,yTop,barW,bh);
-    // 出来高
-    var vy=vToY(b.v);
-    ctx.fillRect(cx-barW/2,vy,barW,volBot-vy);
-  });
+  // C1+: bar描画ヘルパー (ローソク+ヒゲ+出来高を1本分) — side毎に呼ぶ
+  // barW計算: hasRef時は uTotal 基準
+  var barWDen=hasRef?uTotal:vSpan;
+  var barW=Math.max(1,(chartW/barWDen)*(tf==='5m'?5:1)*0.8);
+  function drawBarSet(barsArr,side){
+    barsArr.forEach(function(b){
+      var m=tToMin(b.t);
+      // cur側は vS..vE の範囲外スキップ。ref側は常に全域描画 (hasRef時全部表示仕様)
+      if(side==='cur' && (m<vS||m>vE))return;
+      var cx=minToX(m,side);
+      var up=b.c>=b.o;
+      var col=up?COL_UP:COL_DN;
+      // ヒゲ
+      ctx.strokeStyle=col; ctx.lineWidth=1;
+      ctx.beginPath(); ctx.moveTo(Math.round(cx)+0.5,pToY(b.h)); ctx.lineTo(Math.round(cx)+0.5,pToY(b.l)); ctx.stroke();
+      // 実体
+      ctx.fillStyle=col;
+      var y1=pToY(b.o), y2=pToY(b.c);
+      var yTop=Math.min(y1,y2), bh=Math.max(1,Math.abs(y1-y2));
+      ctx.fillRect(cx-barW/2,yTop,barW,bh);
+      // 出来高
+      var vy=vToY(b.v);
+      ctx.fillRect(cx-barW/2,vy,barW,volBot-vy);
+    });
+  }
+  drawBarSet(visibleBars,'cur');
+  if(hasRef)drawBarSet(refBars,'ref');
 
   // EMA + VWAP ライン (HSBI2 実測配色、表示範囲内のみ描画)
   var lines=[
@@ -1842,16 +1890,23 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     {k:'ema200', col:'#55017d', label:'EMA200'},     // ダークパープル (期間4)
     {k:'vwap',   col:'#ffff00', label:'VWAP'}        // 黄 (実線)
   ];
-  lines.forEach(function(line){
-    ctx.strokeStyle=line.col; ctx.lineWidth=1.2;
+  // C1+: 線も side 毎に描画 (gapを跨がず別ストロークに)
+  function drawLine(barsArr,side,lk,col){
+    ctx.strokeStyle=col; ctx.lineWidth=1.2;
     ctx.beginPath();
     var first=true;
-    visibleBars.forEach(function(b){
-      var v=b[line.k]; if(v==null)return;
-      var x=minToX(tToMin(b.t)), y=pToY(v);
+    barsArr.forEach(function(b){
+      var m=tToMin(b.t);
+      if(side==='cur' && (m<vS||m>vE))return;
+      var v=b[lk]; if(v==null)return;
+      var x=minToX(m,side), y=pToY(v);
       if(first){ctx.moveTo(x,y); first=false;} else ctx.lineTo(x,y);
     });
     ctx.stroke();
+  }
+  lines.forEach(function(line){
+    drawLine(visibleBars,'cur',line.k,line.col);
+    if(hasRef)drawLine(refBars,'ref',line.k,line.col);
   });
 
   /* B-drawing: 時刻+価格座標ストローク描画 (ズーム・パンに追従) */
@@ -2146,6 +2201,13 @@ function ImageAnnotator(props){
       setRefPShift(0);
     }
   },[analysisData,analysisTf]);
+  /* C1+: 統合chart有効時、refAnalysis が set/clear したら view を強制リセット (C1は全体表示固定) */
+  useEffect(function(){
+    if(USE_UNIFIED_CHART&&modeTab==='analysis'&&analysisData){
+      setAnalysisView({s:540,e:930});
+      setAnalysisPShift(0);
+    }
+  },[refAnalysis]);
   /* F2: 十字カーソル共有 ({tm, yOffset}) — tmは絶対時刻(分)、yOffsetはpriceTop基準のcanvas内y */
   var analysisCursorRef=useRef(null);
   var stCB=useState(0); var cursorBump=stCB[0],setCursorBump=stCB[1];
@@ -3845,14 +3907,15 @@ function ImageAnnotator(props){
       analysisData && ce(Fragment,null,
         /* 横並びコンテナ (両チャートで横スクロール) */
         ce("div",{style:{flex:1,display:"flex",flexDirection:"row",overflowX:"auto",overflowY:"hidden",WebkitOverflowScrolling:"touch"}},
-          /* ── 現在チャート ── */
+          /* ── 現在チャート (C1+: 統合chart時は refAnalysis有でもこのcontainerが全幅) ── */
           ce("div",{style:{
             display:"flex",flexDirection:"column",
             // バグA根治: 幅を flex-basis で明示指定 — minWidth:auto + flex:0 0 auto の循環参照でタブレットcanvas width暴走 (33M px化) を防ぐ
-            flex:refAnalysis?("0 0 "+(IS_TOUCH?480:600)+"px"):"1 1 100%",
+            // C1+: USE_UNIFIED_CHART有効時は refAnalysis あっても全幅 (過去chartは別containerに描画せず、同一キャンバスに連結)
+            flex:(refAnalysis&&!USE_UNIFIED_CHART)?("0 0 "+(IS_TOUCH?480:600)+"px"):"1 1 100%",
             alignSelf:"stretch",    // 親flex row経由で高さ継承
             minHeight:0,            // flex child のminHeight default 'auto' を上書き
-            borderRight:refAnalysis?"1px solid #333":"none"
+            borderRight:(refAnalysis&&!USE_UNIFIED_CHART)?"1px solid #333":"none"
           }},
             /* メタ行 (ticker + date のみ) */
             ce("div",{style:{display:"flex",alignItems:"center",gap:10,padding:"6px 12px",
@@ -3863,6 +3926,8 @@ function ImageAnnotator(props){
             ),
             ce(DataChart,{
               data:analysisData, tf:analysisTf, showCrosshair:showCrosshair,
+              /* C1+: 過去chartデータを渡して同一キャンバスに連結描画 (flag切替可) */
+              refData:(USE_UNIFIED_CHART&&refAnalysis)?refAnalysis.analysisData:null,
               drawTool:tool, drawColor:color, drawWidth:lineW, drawOpacity:opacity,
               drawFontSize:fontSize, drawFontBold:fontBold,
               horiz:horiz,
@@ -3942,8 +4007,8 @@ function ImageAnnotator(props){
           }
         })
         ), /* end 現在チャート container div */
-        /* ── 過去チャート (refAnalysis時のみ) ── */
-        refAnalysis && ce("div",{style:{
+        /* ── 過去チャート (refAnalysis時のみ、ただしUSE_UNIFIED_CHART=trueなら統合表示に任せて非render) ── */
+        refAnalysis && !USE_UNIFIED_CHART && ce("div",{style:{
           display:"flex",flexDirection:"column",
           flex:"0 0 "+(IS_TOUCH?480:600)+"px",   // バグA根治: 幅を flex-basis で明示指定
           alignSelf:"stretch",
