@@ -808,12 +808,17 @@ function RefAnalysisPicker(props){
   var s3=useState(null);          var loading=s3[0],setLoading=s3[1];
   var BT2={border:"none",cursor:"pointer",fontFamily:"inherit"};
 
-  // 現在のticker かつ 自分自身以外 のチャートのみ表示、保存日(降順) → name(降順) で「日付新しい順」
+  // 現在のticker かつ 自分自身以外 のチャートのみ表示
+  // ソート優先: ① チャート日付(analysisDate)降順 → ② 保存日時降順 → ③ name降順
   var charts=meta.filter(function(m){
     if(!currentTicker||m.ticker!==currentTicker)return false;
     if(currentDraftId&&m.id===currentDraftId)return false;
     return true;
   }).sort(function(a,b){
+    var da=a.analysisDate||'', db=b.analysisDate||'';
+    if(da||db){
+      if(da!==db)return db.localeCompare(da);  // 日付新しい順 (ISO形式なので文字列比較OK)
+    }
     var sd=(b.savedAt||0)-(a.savedAt||0);
     if(sd!==0)return sd;
     return (b.name||'').localeCompare(a.name||'');
@@ -957,6 +962,24 @@ function DataChart(props){
     if(v<=705)return 690+(v-690)*4;
     return v+45;
   }
+  /* C5+: layoutRefベースで u軸対応の tm→x 変換 (side='cur'|'ref')
+     既存 minToXloc パターンを統一 — hitTest/crosshair/applyHorizSnap 等から使う */
+  function minToXWithSide(m, side){
+    var L=layoutRef.current; if(!L)return 0;
+    if(!L.hasRef)return L.padL+((tmToVis(m)-L.tmVisS)/L.tmVisSpan)*L.chartW;
+    var v=tmToVis(m)-L.tmVisS;
+    if(side==='ref')return L.padL+(v/L.uTotal)*L.chartW;
+    return L.padL+((v+L.tmVisSpan+L.gapVis)/L.uTotal)*L.chartW;
+  }
+  /* C5+: x(canvas内 px) → {side,tm} 変換 — hasRef時は ref/gap/cur を区別 */
+  function xToSideTm(xLocal){
+    var L=layoutRef.current; if(!L)return {side:null,tm:null};
+    var u=(xLocal-L.padL)/L.chartW*(L.hasRef?L.uTotal:L.tmVisSpan);
+    if(!L.hasRef)return {side:'cur', tm:visToTm(L.tmVisS+u)};
+    if(u<L.tmVisSpan)return {side:'ref', tm:visToTm(L.tmVisS+u)};
+    if(u<L.tmVisSpan+L.gapVis)return {side:'gap', tm:null};
+    return {side:'cur', tm:visToTm(L.tmVisS+(u-L.tmVisSpan-L.gapVis))};
+  }
   var moveRef=useRef(null);        // lasso: 選択ストローク移動状態 {idx, startTM, startP, origAnchors}
   var pinchRef=useRef(null);       // 2本指ピンチ状態 {d0,s0,e0,ps0,tmC,midX,midY,active}
   var containerRef=useRef(null);
@@ -981,6 +1004,8 @@ function DataChart(props){
   var refData=props.refData;
   var refBars=(refData&&refData[barsKey])||null;
   var hasRef=!!(refBars&&refBars.length);
+  // C3+: 過去chart側ストローク (hasRef時のみ描画、書込みはC6で対応)
+  var refStrokes=props.refStrokes||[];
 
   // データロード時: 全バーから priceRange を算出 (10円境界に丸める)
   // F2: props.priceRangeOverride があれば、それを優先して使用 (yenPerPx統一用)
@@ -1046,10 +1071,10 @@ function DataChart(props){
   // メインチャート描画
   useEffect(function(){
     var canvas=canvasRef.current; if(!canvas||!bars.length||!priceRange)return;
-    drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx,refBars,refData,UNIFIED_GAP_VIS);
+    drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx,refBars,refData,UNIFIED_GAP_VIS,refStrokes);
     // 描画直後に十字カーソルも再描画 (リサイズ・ズーム等でレイアウト変わった時)
     drawCrosshair();
-  },[data,bars,dim,tf,view,pShift,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars]);
+  },[data,bars,dim,tf,view,pShift,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes]);
 
   // showCrosshair 切替時: OFFなら消す、ONなら再描画
   useEffect(function(){
@@ -1078,7 +1103,9 @@ function DataChart(props){
     /* 描画中プレビュー (最優先で描く — 背面) */
     if(L&&drawRef.current&&drawRef.current.on){
       var d=drawRef.current;
-      function minToXloc(m){return L.padL+((tmToVis(m)-L.tmVisS)/L.tmVisSpan)*L.chartW;}
+      /* C5+: drawRef.side に応じた minToX を使う (side未指定は 'cur') */
+      var dSide=d.side||'cur';
+      function minToXloc(m){return minToXWithSide(m,dSide);}
       function pToYloc(p){return L.priceTop+(1-(p-L.pmin)/(L.pmax-L.pmin))*L.priceH;}
       if(d.freehand&&d.pts&&d.pts.length){
         // freehand: 多点プレビュー
@@ -1098,7 +1125,8 @@ function DataChart(props){
       var m=moveRef.current;
       var s=strokes[m.idx];
       if(s){
-        function minToXloc2(mm){return L.padL+((tmToVis(mm)-L.tmVisS)/L.tmVisSpan)*L.chartW;}
+        var mSide=s.side||'cur';
+        function minToXloc2(mm){return minToXWithSide(mm,mSide);}
         function pToYloc2(pp){return L.priceTop+(1-(pp-L.pmin)/(L.pmax-L.pmin))*L.priceH;}
         var shifted=Object.assign({},s,{
           anchors:s.anchors.map(function(a){return {tm:a.tm+m.dtm, p:a.p+m.dp};})
@@ -1117,10 +1145,11 @@ function DataChart(props){
     /* 十字カーソル */
     if(!showCrosshair||!L)return;
     /* F2: 連動cursor が親から来ていればそれを自分の画面座標に変換して描く。
-       無ければ従来の cursorRef (自分のpointer位置) を使う */
+       無ければ従来の cursorRef (自分のpointer位置) を使う
+       C5+: 統合chart(L.hasRef=true)時は外部cursor不要 (親は現在chartのみ) */
     var cx, cy, tmForLabel;
     var extRef=props.externalCursorRef;
-    if(extRef&&extRef.current){
+    if(!L.hasRef && extRef && extRef.current){
       var ec=extRef.current;
       cx=L.padL+((tmToVis(ec.tm)-L.tmVisS)/L.tmVisSpan)*L.chartW;
       cy=L.priceTop+ec.yOffset;
@@ -1132,8 +1161,10 @@ function DataChart(props){
       cx=pos.x; cy=pos.y;
       if(cx<L.padL||cx>L.padL+L.chartW)return;
       if(cy<L.padT||cy>L.volBot)return;
-      var fracXL=(cx-L.padL)/L.chartW;
-      tmForLabel=visToTm(L.tmVisS+fracXL*L.tmVisSpan);
+      /* C5+: u軸対応でtm算出、gap領域ではcursor非表示 */
+      var xst=xToSideTm(cx);
+      if(xst.side==='gap')return;
+      tmForLabel=xst.tm;
     }
     var CROSS='#4a9de3';
     ctx.strokeStyle=CROSS; ctx.setLineDash([3,3]); ctx.lineWidth=1;
@@ -1207,9 +1238,21 @@ function DataChart(props){
       var rect=el.getBoundingClientRect();
       var padL=10, padR=60;
       var chartW=rect.width-padL-padR;
-      var cx=e.clientX-rect.left-padL; // 0..chartW
+      var cxAbs=e.clientX-rect.left;  // コンテナ内絶対x
+      var cx=cxAbs-padL; // 0..chartW
       if(cx<0||cx>chartW)return;
-      var frac=cx/chartW;
+      /* C5+: hasRef時は side別 cxRatio 計算、gapなら無視 */
+      var L=layoutRef.current;
+      var frac;  // cur/ref どちら側の領域内での 0..1 比率
+      var sideW=null;  // cur or ref
+      if(L&&L.hasRef){
+        var u=cx/chartW*L.uTotal;
+        if(u<L.tmVisSpan){ sideW='ref'; frac=u/L.tmVisSpan; }
+        else if(u<L.tmVisSpan+L.gapVis){ return; /* gap無反応 */ }
+        else { sideW='cur'; frac=(u-L.tmVisSpan-L.gapVis)/L.tmVisSpan; }
+      } else {
+        frac=cx/chartW;
+      }
       setView(function(v){
         var visS=tmToVis(v.s), visE=tmToVis(v.e);
         var visSpan=visE-visS;
@@ -1240,23 +1283,31 @@ function DataChart(props){
     var L=layoutRef.current; if(!L)return null;
     var rect=containerRef.current.getBoundingClientRect();
     var cx=clientX-rect.left, cy=clientY-rect.top;
-    var tm=visToTm(L.tmVisS+((cx-L.padL)/L.chartW)*L.tmVisSpan);
+    /* C5+: u軸対応で side/tm 算出 */
+    var xst=xToSideTm(cx);
+    var tm=xst.tm, side=xst.side;
     var price;
     if(cy>=L.priceTop&&cy<=L.priceBot){
       price=L.pmax-((cy-L.priceTop)/L.priceH)*(L.pmax-L.pmin);
     } else {
       price=null;
     }
-    return {tm:tm, p:price, cx:cx, cy:cy};
+    return {tm:tm, p:price, cx:cx, cy:cy, side:side};
   }
 
-  /* ヒットテスト: クリック位置に近いストロークを返す (全ツール対応) */
+  /* ヒットテスト: クリック位置に近いストロークを返す (全ツール対応)
+     C5+: hasRef時は クリックした side と同じ side の strokes のみ対象 (C6で ref strokes hit) */
   function hitTestStroke(clientX,clientY){
     var L=layoutRef.current; if(!L||!strokes||!strokes.length)return null;
     var rect=containerRef.current.getBoundingClientRect();
     var cx=clientX-rect.left, cy=clientY-rect.top;
+    /* C5+: クリック側判定。cur側 でなければ cur strokes のhit対象外 */
+    if(L.hasRef){
+      var xst=xToSideTm(cx);
+      if(xst.side!=='cur')return null;
+    }
     var TOL=8;
-    function minToXloc(m){return L.padL+((tmToVis(m)-L.tmVisS)/L.tmVisSpan)*L.chartW;}
+    function minToXloc(m){return minToXWithSide(m,'cur');}
     function pToYloc(p){return L.priceTop+(1-(p-L.pmin)/(L.pmax-L.pmin))*L.priceH;}
     function distPtToSeg(px,py,x1,y1,x2,y2){
       var dx=x2-x1, dy=y2-y1, lenSq=dx*dx+dy*dy;
@@ -1331,9 +1382,10 @@ function DataChart(props){
   /* 水平スナップ (horizトグルON時) */
   function applyHorizSnap(sTM,sP,cTM,cP){
     var L=layoutRef.current; if(!L)return {tm:cTM, p:cP};
-    var sx=L.padL+((tmToVis(sTM)-L.tmVisS)/L.tmVisSpan)*L.chartW;
+    /* C5+: cur側想定で x計算 (描画中stroke は drawRef.side に依存するが、minToXWithSideで統一) */
+    var sx=minToXWithSide(sTM,'cur');
     var sy=L.priceTop+(1-(sP-L.pmin)/(L.pmax-L.pmin))*L.priceH;
-    var cx=L.padL+((tmToVis(cTM)-L.tmVisS)/L.tmVisSpan)*L.chartW;
+    var cx=minToXWithSide(cTM,'cur');
     var cy=L.priceTop+(1-(cP-L.pmin)/(L.pmax-L.pmin))*L.priceH;
     var dx=Math.abs(cx-sx), dy=Math.abs(cy-sy);
     if(dx>dy)return {tm:cTM, p:sP};   // 水平: 価格固定
@@ -1497,7 +1549,10 @@ function DataChart(props){
     // tmVis 軸上で pan (非線形時間軸対応)
     var pVisS=tmToVis(p.s), pVisE=tmToVis(p.e);
     var visSpan=pVisE-pVisS;
-    var dxVis=-(e.clientX-p.x)/chartW*visSpan;
+    /* C5+: 統合chart時はcur/ref各chart領域幅(curPx)を分母に — 1chart幅swipeで1画面分pan */
+    var L2=layoutRef.current;
+    var curPx=(L2&&L2.hasRef)?(chartW*visSpan/(visSpan*2+(L2.gapVis||5))):chartW;
+    var dxVis=-(e.clientX-p.x)/curPx*visSpan;
     var newVisS=pVisS+dxVis, newVisE=pVisE+dxVis;
     if(newVisS<540){newVisS=540;newVisE=newVisS+visSpan;}
     if(newVisE>tmToVis(930)){newVisE=tmToVis(930);newVisS=newVisE-visSpan;}
@@ -1583,11 +1638,14 @@ function DataChart(props){
       var d0=Math.hypot(dx,dy);
       var cx0=(t1.clientX+t2.clientX)/2, cy0=(t1.clientY+t2.clientY)/2;
       var tpC=pxToTimePrice(cx0,cy0);
+      /* C5+: gap中心は pinch 開始しない (仕様 gap無反応) */
+      if(tpC&&tpC.side==='gap')return;
       pinchRef.current={
         d0:d0, cx0:cx0, cy0:cy0,
         s0:view.s, e0:view.e, ps0:pShift,
         tmCenter:tpC?tpC.tm:null,
         pCenter:tpC?tpC.p:null,  // ピンチ中心の価格 (ズーム中は画面上この位置にこの価格を固定)
+        side:tpC?tpC.side:'cur',  // C5+: pinch中心のside保存 (cxRatio計算に使用)
         // F2+: 圧縮軸 (tmVis) ベースのスパンも保存 — ピンチ計算を tmVis 軸上で行う
         visSpan0:tmToVis(view.e)-tmToVis(view.s),
         visCenter:tpC?tmToVis(tpC.tm):null
@@ -1624,8 +1682,24 @@ function DataChart(props){
       if(!L||pr.visCenter==null||!containerRef.current){return;}
       var rect=containerRef.current.getBoundingClientRect();
       var cxLocal=pr.cx0-rect.left;
-      var cxRatio=(cxLocal-L.padL)/L.chartW;
-      if(cxRatio<0)cxRatio=0; if(cxRatio>1)cxRatio=1;
+      /* C5+: hasRef時は pinch開始時の side に応じた cur/ref 領域内比率で cxRatio */
+      var cxRatio;
+      if(L.hasRef&&pr.side){
+        if(pr.side==='ref'){
+          // ref領域: u=[0,tmVisSpan] → 画面上 [padL, padL + tmVisSpan/uTotal*chartW]
+          var refPx=(L.tmVisSpan/L.uTotal)*L.chartW;
+          cxRatio=(cxLocal-L.padL)/refPx;
+        } else {
+          // cur領域: u=[tmVisSpan+gap, uTotal] → 画面上右側
+          var curStartX=L.padL+((L.tmVisSpan+L.gapVis)/L.uTotal)*L.chartW;
+          var curPx=(L.tmVisSpan/L.uTotal)*L.chartW;
+          cxRatio=(cxLocal-curStartX)/curPx;
+        }
+        if(cxRatio<0)cxRatio=0; if(cxRatio>1)cxRatio=1;
+      } else {
+        cxRatio=(cxLocal-L.padL)/L.chartW;
+        if(cxRatio<0)cxRatio=0; if(cxRatio>1)cxRatio=1;
+      }
       var newVisS=pr.visCenter-cxRatio*newVisSpan;
       var newVisE=newVisS+newVisSpan;
       if(newVisS<540){newVisS=540;newVisE=newVisS+newVisSpan;}
@@ -1720,7 +1794,7 @@ function DataChart(props){
 }
 
 /* DataChart 描画関数 (Canvas 2D 直接描画、HSBI2色、ズーム対応、10円固定グリッド、時刻+価格ストローク) */
-function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,editingTextIdx,refBars,refData,gapVis){
+function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,editingTextIdx,refBars,refData,gapVis,refStrokes){
   var dpr=window.devicePixelRatio||1;
   var W=dim.w, H=dim.h;
   canvas.width=Math.round(W*dpr);
@@ -1744,9 +1818,8 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   var hasRef=!!(refBars&&refBars.length);
   gapVis=gapVis||5;
 
-  // 時間軸: view.s - view.e (分単位)
-  // hasRef時は表示範囲強制で両chart全体 (540-930)
-  var vS=hasRef?540:view.s, vE=hasRef?930:view.e, vSpan=vE-vS;
+  // 時間軸: view.s - view.e (分単位) — C5+: hasRef時もviewを尊重 (pan/zoom可能に)
+  var vS=view.s, vE=view.e, vSpan=vE-vS;
   // 昼休み(11:30=690〜12:30=750)の60分を15分に圧縮した仮想時間軸 tmVis
   function tmToVis(t){
     if(t<=690)return t;
@@ -1861,8 +1934,8 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   function drawBarSet(barsArr,side){
     barsArr.forEach(function(b){
       var m=tToMin(b.t);
-      // cur側は vS..vE の範囲外スキップ。ref側は常に全域描画 (hasRef時全部表示仕様)
-      if(side==='cur' && (m<vS||m>vE))return;
+      /* C5+: cur/ref 両方とも view範囲外は描画しない (pan/zoom連動のため) */
+      if(m<vS||m>vE)return;
       var cx=minToX(m,side);
       var up=b.c>=b.o;
       var col=up?COL_UP:COL_DN;
@@ -1890,14 +1963,14 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     {k:'ema200', col:'#55017d', label:'EMA200'},     // ダークパープル (期間4)
     {k:'vwap',   col:'#ffff00', label:'VWAP'}        // 黄 (実線)
   ];
-  // C1+: 線も side 毎に描画 (gapを跨がず別ストロークに)
+  // C1+/C5+: 線も side 毎に描画 (gapを跨がず別ストロークに)、両side view範囲内のみ
   function drawLine(barsArr,side,lk,col){
     ctx.strokeStyle=col; ctx.lineWidth=1.2;
     ctx.beginPath();
     var first=true;
     barsArr.forEach(function(b){
       var m=tToMin(b.t);
-      if(side==='cur' && (m<vS||m>vE))return;
+      if(m<vS||m>vE)return;
       var v=b[lk]; if(v==null)return;
       var x=minToX(m,side), y=pToY(v);
       if(first){ctx.moveTo(x,y); first=false;} else ctx.lineTo(x,y);
@@ -1909,19 +1982,33 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     if(hasRef)drawLine(refBars,'ref',line.k,line.col);
   });
 
-  /* B-drawing: 時刻+価格座標ストローク描画 (ズーム・パンに追従) */
+  /* B-drawing: 時刻+価格座標ストローク描画 (ズーム・パンに追従)
+     C3+: cur(現在chart側) と ref(過去chart側) を分けて描画。minToXをside別に渡す。 */
+  function minToXCur(m){return minToX(m,'cur');}
+  function minToXRef(m){return minToX(m,'ref');}
   if(strokes&&strokes.length){
     strokes.forEach(function(s,idx){
       // 編集中のテキストは重複描画を避けるためスキップ (portal 側でプレビュー)
       if(editingTextIdx!=null&&editingTextIdx>=0&&idx===editingTextIdx)return;
       var tp=s.type||s.tool;
       if(tp==='freehand'||tp==='text'){
-        drawAnalysisStrokeExt(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
+        drawAnalysisStrokeExt(ctx,s,minToXCur,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
       } else {
-        drawAnalysisStroke(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
+        drawAnalysisStroke(ctx,s,minToXCur,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
       }
       if(selectedIdx===idx){
-        drawSelectionHighlight(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
+        drawSelectionHighlight(ctx,s,minToXCur,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
+      }
+    });
+  }
+  // C3+: ref側stroke描画 (hasRef時のみ、selectionはC6で対応)
+  if(hasRef&&refStrokes&&refStrokes.length){
+    refStrokes.forEach(function(s){
+      var tp=s.type||s.tool;
+      if(tp==='freehand'||tp==='text'){
+        drawAnalysisStrokeExt(ctx,s,minToXRef,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
+      } else {
+        drawAnalysisStroke(ctx,s,minToXRef,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
       }
     });
   }
@@ -1946,20 +2033,6 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     ctx.fillRect(padL+chartW+2,lastY-8,tw,16);
     ctx.fillStyle='#000';
     ctx.fillText(lbl,padL+chartW+6,lastY);
-  }
-
-  // C2+: hasRef時、各chart領域の左上に日付ラベル (仕様⑤(d) + Q2(c))
-  if(hasRef){
-    ctx.textAlign='left'; ctx.textBaseline='top';
-    ctx.font='bold 10px -apple-system,Helvetica,sans-serif';
-    ctx.fillStyle='rgba(200,200,200,0.7)';
-    var refDate=(refData&&refData.date)||'';
-    var curDate=(data&&data.date)||'';
-    if(refDate)ctx.fillText(refDate, padL+4, priceTop+3);
-    if(curDate){
-      var curX=padL+((tmVisSpan+gapVis)/uTotal)*chartW + 4;
-      ctx.fillText(curDate, curX, priceTop+3);
-    }
   }
 }
 
@@ -2150,6 +2223,9 @@ function ImageAnnotator(props){
   var stAX=useState(true); var showCrosshair=stAX[0],setShowCrosshair=stAX[1];
   var analysisDataRef=useRef(analysisData);  // triggerAutoSave内で最新値参照用
   useEffect(function(){analysisDataRef.current=analysisData;},[analysisData]);
+  /* C5+: VJなどイベントハンドラ内で最新refAnalysisを参照するためのref */
+  var refAnalysisRef=useRef(refAnalysis);
+  useEffect(function(){refAnalysisRef.current=refAnalysis;},[refAnalysis]);
   /* B-drawing: 分析画面の描画ストローク (時刻+価格座標、tf別管理)
      形状: {'1m':[...],'5m':[...]} 旧配列は {'1m':array,'5m':[]} に自動マイグレート */
   var sAS=useState(function(){return migrateAnalysisStrokes(img&&img.analysisStrokes);});
@@ -2215,7 +2291,8 @@ function ImageAnnotator(props){
       setRefPShift(0);
     }
   },[analysisData,analysisTf]);
-  /* C1+: 統合chart有効時、refAnalysis が set/clear したら view を強制リセット (C1は全体表示固定) */
+  /* C1+/C5+: 統合chart有効時、refAnalysis が set/clear したら view を全体表示リセット
+     (pan/zoom は C5 で有効化済、open/close時だけ全体表示に戻す) */
   useEffect(function(){
     if(USE_UNIFIED_CHART&&modeTab==='analysis'&&analysisData){
       setAnalysisView({s:540,e:930});
@@ -3945,6 +4022,8 @@ function ImageAnnotator(props){
               data:analysisData, tf:analysisTf, showCrosshair:showCrosshair,
               /* C1+: 過去chartデータを渡して同一キャンバスに連結描画 (flag切替可) */
               refData:(USE_UNIFIED_CHART&&refAnalysis)?refAnalysis.analysisData:null,
+              /* C3+: 過去chart側ストロークも連結描画 (書込みはC6) */
+              refStrokes:(USE_UNIFIED_CHART&&refAnalysis&&refAnalysis.analysisStrokes)?(refAnalysis.analysisStrokes[analysisTf]||[]):null,
               drawTool:tool, drawColor:color, drawWidth:lineW, drawOpacity:opacity,
               drawFontSize:fontSize, drawFontBold:fontBold,
               horiz:horiz,
@@ -4079,13 +4158,16 @@ function ImageAnnotator(props){
         /* F2: VirtualJoystick (タッチデバイスのみ、分析モードのpan制御) */
         IS_TOUCH&&ce(VirtualJoystick,{
           onPanDelta:function(dx,dy){
-            // tmVis 軸上で pan (11:30-12:30圧縮対応)
+            // tmVis 軸上で pan (11:30-12:30圧縮対応) — C5+: hasRef時は uTotal基準
             setAnalysisView(function(v){
               function tTV(t){if(t<=690)return t; if(t<=750)return 690+(t-690)*0.25; return t-45;}
               function vTT(v){if(v<=690)return v; if(v<=705)return 690+(v-690)*4; return v+45;}
               var visS=tTV(v.s), visE=tTV(v.e);
               var visSpan=visE-visS;
-              var dVis=dx*(visSpan/1400);  // バグB: ジョイスティック横速度を半減
+              /* C5+: 統合chart時は uTotal(=visSpan*2+gap)基準で pan速度補正 (両chart連動) */
+              var isRefOpen=USE_UNIFIED_CHART&&refAnalysisRef.current;
+              var denom=isRefOpen?(visSpan*2+UNIFIED_GAP_VIS):visSpan;
+              var dVis=dx*(denom/1400);  // バグB: ジョイスティック横速度を半減
               var ns=visS+dVis, ne=visE+dVis;  // 倒した方向にスクロール (ジョイスティック符号反転)
               if(ns<540){ne+=540-ns; ns=540;}
               if(ne>tTV(930)){ns-=(ne-tTV(930)); ne=tTV(930);}
@@ -4721,15 +4803,16 @@ function ImageAnnotator(props){
           rebuild(strokesRef.current);
           var thumb=canvasRef.current?caGenThumb(compositeCanvas()):(img._thumb||'');
           var now=Date.now();
+          var analysisDate=(analysisDataRef.current&&analysisDataRef.current.date)||'';  // Picker日付ソート用
           var localMeta=caLoadMeta();
           var found=false;
           var nm=localMeta.map(function(m){
-            if(m.id===id){found=true;return Object.assign({},m,{name:chartName,thumb:thumb,savedAt:now});}
+            if(m.id===id){found=true;return Object.assign({},m,{name:chartName,thumb:thumb,savedAt:now,analysisDate:analysisDate});}
             return m;
           });
           if(!found){
             var ticker=savedTickerRef.current||img._ticker||'';
-            nm.push({id:id,ticker:ticker,name:chartName,savedAt:now,thumb:thumb});
+            nm.push({id:id,ticker:ticker,name:chartName,savedAt:now,thumb:thumb,analysisDate:analysisDate});
           }
           caSaveMeta(nm);
         }
@@ -4750,7 +4833,8 @@ function ImageAnnotator(props){
           strokes:strokesRef.current,name:name};
         var existing=caLoadMeta().find(function(m){return m.ticker===ticker&&m.name===name;});
         var id=existing?existing.id:caGenId();
-        var metaItem={id:id,ticker:ticker,name:name,savedAt:Date.now(),thumb:thumb};
+        var analysisDate=(analysisDataRef.current&&analysisDataRef.current.date)||'';  // Picker日付ソート用
+        var metaItem={id:id,ticker:ticker,name:name,savedAt:Date.now(),thumb:thumb,analysisDate:analysisDate};
         var nm=caLoadMeta().filter(function(m){return !(m.ticker===ticker&&m.name===name);});
         nm.push(metaItem);
         caSaveMeta(nm); caSaveData(id,data);
@@ -5327,7 +5411,7 @@ function DraftLibrary(props){
   }
   function restoreChart(id){
     var ti=trash.find(function(m){return m.id===id;}); if(!ti)return;
-    var mi={id:id,ticker:ti.ticker,name:ti.name,savedAt:Date.now(),thumb:ti.thumb};
+    var mi={id:id,ticker:ti.ticker,name:ti.name,savedAt:Date.now(),thumb:ti.thumb,analysisDate:ti.analysisDate||''};
     var nm=caLoadMeta().filter(function(m){return m.id!==id;});
     nm.push(mi);caSaveMeta(nm);setMeta(nm);
     if(ti.data)caSaveData(id,ti.data);
