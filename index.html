@@ -3935,7 +3935,8 @@ function ImageAnnotator(props){
               fontSize:initFS, fontBold:initBold,
               color:initColor, opacity:initOp,
               editIdx: req.editIdx>=0?req.editIdx:-1,
-              tf:analysisTf
+              tf:analysisTf,
+              _openedAt:Date.now()  // タッチ合成イベント暴発ガード用 (タブレット対応)
             });
           }
         })
@@ -4001,14 +4002,14 @@ function ImageAnnotator(props){
               function vTT(v){if(v<=690)return v; if(v<=705)return 690+(v-690)*4; return v+45;}
               var visS=tTV(v.s), visE=tTV(v.e);
               var visSpan=visE-visS;
-              var dVis=dx*(visSpan/700);
+              var dVis=dx*(visSpan/1400);  // バグB: ジョイスティック横速度を半減
               var ns=visS-dVis, ne=visE-dVis;
               if(ns<540){ne+=540-ns; ns=540;}
               if(ne>tTV(930)){ns-=(ne-tTV(930)); ne=tTV(930);}
               if(ns<540)ns=540; if(ne>tTV(930))ne=tTV(930);
               return {s:vTT(ns),e:vTT(ne)};
             });
-            setAnalysisPShift(function(ps){return ps-dy;});
+            setAnalysisPShift(function(ps){return ps-dy*0.5;});  // バグB: ジョイスティック縦速度を半減
           }
         }),
         /* floating undo/redo (分析モード用、画像モードと同スタイル) */
@@ -4501,10 +4502,10 @@ function ImageAnnotator(props){
         var sx=ati.screenX||0, sy=ati.screenY||0;
         var maxW=Math.max(120,window.innerWidth-sx-20);
         return ce(Fragment,null,
-          /* 全画面クリックで確定 */
+          /* 全画面クリックで確定 (open直後400msは暴発ガード — タブレットでタッチ合成イベントが即confirmするのを防ぐ) */
           ce("div",{
-            onMouseDown:function(e){if(e.target===e.currentTarget)confirmAnalysisText();},
-            onTouchStart:function(e){if(e.target===e.currentTarget)confirmAnalysisText();},
+            onMouseDown:function(e){if(e.target!==e.currentTarget)return; if(Date.now()-(ati._openedAt||0)<400)return; confirmAnalysisText();},
+            onTouchStart:function(e){if(e.target!==e.currentTarget)return; if(Date.now()-(ati._openedAt||0)<400)return; confirmAnalysisText();},
             style:{position:"fixed",inset:0,zIndex:10998}
           }),
           /* 上部カラーバー */
