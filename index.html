@@ -821,6 +821,7 @@ function DataChart(props){
   var drawRef=useRef({on:false});  // ドラッグ式描画状態 {on, sTM, sP, cTM, cP, pts(freehand用)}
   var ctrlPanRef=useRef(false);    // Ctrl+drag パン状態
   var moveRef=useRef(null);        // lasso: 選択ストローク移動状態 {idx, startTM, startP, origAnchors}
+  var pinchRef=useRef(null);       // 2本指ピンチ状態 {d0,s0,e0,ps0,tmC,midX,midY,active}
   var containerRef=useRef(null);
   var sD=useState({w:800,h:520}); var dim=sD[0],setDim=sD[1];
   /* 時間軸ビューレンジ (分, 540=09:00, 930=15:30) */
@@ -1405,16 +1406,87 @@ function DataChart(props){
     panStartRef.current=null;
     ctrlPanRef.current=false;
   }
-  // タッチ (iPad) - マウスと同等の処理に誘導
+  // タッチ (iPad/スマホ) - 1本指: 描画、2本指: ピンチズーム＋パン
   function onTouchStart(e){
+    if(props.textInputActive)return;
+    if(e.touches.length===2){
+      // ピンチ開始
+      if(e.preventDefault)e.preventDefault();
+      var t1=e.touches[0], t2=e.touches[1];
+      var dx=t2.clientX-t1.clientX, dy=t2.clientY-t1.clientY;
+      var d0=Math.hypot(dx,dy);
+      var cx0=(t1.clientX+t2.clientX)/2, cy0=(t1.clientY+t2.clientY)/2;
+      var tpC=pxToTimePrice(cx0,cy0);
+      pinchRef.current={
+        d0:d0, cx0:cx0, cy0:cy0,
+        s0:view.s, e0:view.e, ps0:pShift,
+        tmCenter:tpC?tpC.tm:null
+      };
+      // 既存の描画/パン/移動をキャンセル
+      drawRef.current={on:false};
+      panStartRef.current=null;
+      moveRef.current=null;
+      return;
+    }
     if(e.touches.length!==1)return;
     var t=e.touches[0];
     onMouseDown({clientX:t.clientX,clientY:t.clientY,ctrlKey:false,metaKey:false});
   }
   function onTouchMove(e){
+    if(props.textInputActive)return;
+    // ピンチ中
+    if(pinchRef.current&&e.touches.length>=2){
+      if(e.preventDefault)e.preventDefault();
+      var t1=e.touches[0], t2=e.touches[1];
+      var dxp=t2.clientX-t1.clientX, dyp=t2.clientY-t1.clientY;
+      var d=Math.hypot(dxp,dyp);
+      var cx=(t1.clientX+t2.clientX)/2, cy=(t1.clientY+t2.clientY)/2;
+      var pr=pinchRef.current;
+      if(!d||!pr.d0)return;
+      var r=d/pr.d0;
+      if(r<0.1)r=0.1; if(r>20)r=20;
+      var span0=pr.e0-pr.s0;
+      var newSpan=span0/r;
+      if(newSpan<2)newSpan=2;
+      if(newSpan>390)newSpan=390;
+      var L=layoutRef.current;
+      if(!L||pr.tmCenter==null||!containerRef.current){return;}
+      var rect=containerRef.current.getBoundingClientRect();
+      var cxLocal=pr.cx0-rect.left;
+      var cxRatio=(cxLocal-L.padL)/L.chartW;
+      if(cxRatio<0)cxRatio=0; if(cxRatio>1)cxRatio=1;
+      var newS=pr.tmCenter-cxRatio*newSpan;
+      var newE=newS+newSpan;
+      if(newS<540){newS=540;newE=newS+newSpan;}
+      if(newE>930){newE=930;newS=newE-newSpan;}
+      setView({s:newS,e:newE});
+      // 価格軸縦シフト: 中心のy移動量で pShift 変化
+      var priceH=L.priceH;
+      var yenPerPx=(L.pmax-L.pmin)/priceH;
+      setPShift(pr.ps0 + (cy-pr.cy0)*yenPerPx);
+      return;
+    }
     if(!e.touches.length)return;
     var t=e.touches[0];
     onMouseMove({clientX:t.clientX,clientY:t.clientY});
+  }
+  function onTouchEnd(e){
+    if(pinchRef.current){
+      if(!e.touches||e.touches.length<2){pinchRef.current=null;panStartRef.current=null;}
+      return;
+    }
+    onMouseUp();
+  }
+  // ペンのホバー (Apple Pencil / S Pen 等) - 触れず浮かせている時に十字カーソル追従
+  function onPointerMoveHover(e){
+    if(props.textInputActive)return;
+    if(e.pointerType!=='pen'||e.buttons!==0)return;
+    if(!containerRef.current)return;
+    var rect=containerRef.current.getBoundingClientRect();
+    cursorRef.current={x:e.clientX-rect.left,y:e.clientY-rect.top};
+    if(!rafRef.current){
+      rafRef.current=requestAnimationFrame(function(){drawCrosshair();rafRef.current=null;});
+    }
   }
   // ダブルクリック: (機能削除、ユーザー要望)
 
@@ -1450,7 +1522,13 @@ function DataChart(props){
     onMouseLeave:function(){onMouseUp();onChartMouseLeave();},
     onTouchStart:onTouchStart,
     onTouchMove:onTouchMove,
-    onTouchEnd:onMouseUp,
+    onTouchEnd:onTouchEnd,
+    onTouchCancel:onTouchEnd,
+    onPointerMove:onPointerMoveHover,
+    onPointerLeave:function(e){
+      // ペンのホバーがチャート外に出たら十字カーソル消す
+      if(e.pointerType==='pen'){cursorRef.current=null;drawCrosshair();}
+    },
     style:{flex:1,position:"relative",background:"#000000",overflow:"hidden",cursor:"grab",touchAction:"none",userSelect:"none"}
   },
     ce("canvas",{ref:canvasRef,style:{display:"block",width:"100%",height:"100%",pointerEvents:"none"}}),
@@ -1807,6 +1885,24 @@ function drawSelectionHighlight(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,pri
   ctx.restore();
 }
 
+/* ─── 分析モードストローク管理ヘルパー ───
+   旧形式（配列）↔新形式（{'1m':[],'5m':[]}）互換 */
+function migrateAnalysisStrokes(v){
+  if(Array.isArray(v))return {'1m':v.slice(),'5m':[]};
+  if(v&&typeof v==='object'){
+    return {'1m':Array.isArray(v['1m'])?v['1m'].slice():[],
+            '5m':Array.isArray(v['5m'])?v['5m'].slice():[]};
+  }
+  return {'1m':[],'5m':[]};
+}
+function cloneAnalysisStrokes(v){
+  return {'1m':(v&&v['1m']||[]).slice(),'5m':(v&&v['5m']||[]).slice()};
+}
+function totalAnalysisStrokes(v){
+  if(!v)return 0;
+  return ((v['1m']||[]).length)+((v['5m']||[]).length);
+}
+
 function ImageAnnotator(props){
   var img=props.img, onSave=props.onSave, onClose=props.onClose;
 
@@ -1822,8 +1918,9 @@ function ImageAnnotator(props){
   var stAX=useState(true); var showCrosshair=stAX[0],setShowCrosshair=stAX[1];
   var analysisDataRef=useRef(analysisData);  // triggerAutoSave内で最新値参照用
   useEffect(function(){analysisDataRef.current=analysisData;},[analysisData]);
-  /* B-drawing: 分析画面の描画ストローク (時刻+価格座標) */
-  var sAS=useState(function(){return (img&&Array.isArray(img.analysisStrokes))?img.analysisStrokes:[];});
+  /* B-drawing: 分析画面の描画ストローク (時刻+価格座標、tf別管理)
+     形状: {'1m':[...],'5m':[...]} 旧配列は {'1m':array,'5m':[]} に自動マイグレート */
+  var sAS=useState(function(){return migrateAnalysisStrokes(img&&img.analysisStrokes);});
   var analysisStrokes=sAS[0],setAnalysisStrokes=sAS[1];
   var analysisStrokesRef=useRef(analysisStrokes);
   useEffect(function(){analysisStrokesRef.current=analysisStrokes;},[analysisStrokes]);
@@ -1922,7 +2019,7 @@ function ImageAnnotator(props){
   /* マウント時: 分析モード履歴を現在の analysisStrokes で初期化
      (img から復元された初期strokesを「操作前の状態」として保持) */
   useEffect(function(){
-    analysisHistRef.current=[analysisStrokesRef.current.slice()];
+    analysisHistRef.current=[cloneAnalysisStrokes(analysisStrokesRef.current)];
     analysisFutRef.current=[];
   },[]);
 
@@ -2248,8 +2345,8 @@ function ImageAnnotator(props){
           :{orig_base64:b64,orig_mt:mt,strokes:strokes,name:img._name||img.name||'chart'};
         /* B2+: 分析データがあれば同梱 (Firebase同期対応) */
         if(analysisDataRef.current)draftData.analysisData=analysisDataRef.current;
-        /* B-drawing: 分析画面のストロークも同梱 */
-        if(analysisStrokesRef.current&&analysisStrokesRef.current.length)draftData.analysisStrokes=analysisStrokesRef.current;
+        /* B-drawing: 分析画面のストロークも同梱 (tf別オブジェクト) */
+        if(analysisStrokesRef.current&&totalAnalysisStrokes(analysisStrokesRef.current)>0)draftData.analysisStrokes=analysisStrokesRef.current;
         var dataBody=JSON.stringify(draftData);fetch(draftDataBase+'/'+draftId+'.json'+auth,{method:'PUT',
           headers:{'Content-Type':'application/json'},body:dataBody})
           .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);
@@ -2335,7 +2432,7 @@ function ImageAnnotator(props){
                 /* B-drawing: 分析ストロークも同期 */
                 if(fbData.analysisStrokes!==undefined){
                   analysisStrokesInitSkip.current=true;
-                  setAnalysisStrokes(Array.isArray(fbData.analysisStrokes)?fbData.analysisStrokes:[]);
+                  setAnalysisStrokes(migrateAnalysisStrokes(fbData.analysisStrokes));
                 }
                 loadedSavedAtRef.current=remoteT;
                 setRemoteUpdate(false);
@@ -2357,7 +2454,8 @@ function ImageAnnotator(props){
   },[]);
   /* 分析モード用: ストローク変更を履歴に commit */
   function analysisCommit(strks){
-    analysisHistRef.current=analysisHistRef.current.slice(-19).concat([strks]);
+    var cloned=cloneAnalysisStrokes(strks);
+    analysisHistRef.current=analysisHistRef.current.slice(-19).concat([cloned]);
     analysisFutRef.current=[];
     if(modeTab==='analysis'){setCanUndo(true); setCanRedo(false);}
   }
@@ -2365,9 +2463,9 @@ function ImageAnnotator(props){
     if(modeTab==='analysis'){
       if(analysisHistRef.current.length<=1)return;
       var prevA=analysisHistRef.current[analysisHistRef.current.length-2];
-      analysisFutRef.current=[analysisStrokesRef.current.slice()].concat(analysisFutRef.current.slice(0,19));
+      analysisFutRef.current=[cloneAnalysisStrokes(analysisStrokesRef.current)].concat(analysisFutRef.current.slice(0,19));
       analysisHistRef.current=analysisHistRef.current.slice(0,-1);
-      setAnalysisStrokes(prevA);
+      setAnalysisStrokes(cloneAnalysisStrokes(prevA));
       setCanUndo(analysisHistRef.current.length>1); setCanRedo(true);
       return;
     }
@@ -2384,8 +2482,8 @@ function ImageAnnotator(props){
       if(!analysisFutRef.current.length)return;
       var nextA=analysisFutRef.current[0], restA=analysisFutRef.current.slice(1);
       analysisFutRef.current=restA;
-      analysisHistRef.current=analysisHistRef.current.concat([nextA]);
-      setAnalysisStrokes(nextA);
+      analysisHistRef.current=analysisHistRef.current.concat([cloneAnalysisStrokes(nextA)]);
+      setAnalysisStrokes(cloneAnalysisStrokes(nextA));
       setCanUndo(true); setCanRedo(restA.length>0);
       return;
     }
@@ -2990,7 +3088,7 @@ function ImageAnnotator(props){
           ?{imageUrl:imageUrl,orig_mt:mt,strokes:strokesRef.current,name:chartName}
           :{orig_base64:b64,orig_mt:mt,strokes:strokesRef.current,name:chartName};
         if(analysisDataRef.current)dbData.analysisData=analysisDataRef.current;  /* B2+: JSON同梱 */
-        if(analysisStrokesRef.current&&analysisStrokesRef.current.length)dbData.analysisStrokes=analysisStrokesRef.current;  /* B-drawing */
+        if(analysisStrokesRef.current&&totalAnalysisStrokes(analysisStrokesRef.current)>0)dbData.analysisStrokes=analysisStrokesRef.current;  /* B-drawing: tf別オブジェクト */
         var dataBody=JSON.stringify(dbData);fetch(draftDataBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
           body:dataBody}).catch(function(e){console.error('fbSyncDraft data:',e);});
       });
@@ -3191,7 +3289,7 @@ function ImageAnnotator(props){
           })
         ),
         modeTab==='analysis' && analysisData && ce("button",{
-          onClick:function(){if(confirm('別のJSONを読み込む? 現在のデータは破棄されます')){setAnalysisData(null);setAnalysisStrokes([]);analysisHistRef.current=[[]];analysisFutRef.current=[];setCanUndo(false);setCanRedo(false);}},
+          onClick:function(){if(confirm('別のJSONを読み込む? 現在のデータは破棄されます')){var empty={'1m':[],'5m':[]};setAnalysisData(null);setAnalysisStrokes(empty);analysisHistRef.current=[empty];analysisFutRef.current=[];setCanUndo(false);setCanRedo(false);}},
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#2a2a2a",color:"#aaa"})
         },"🔄 別のJSON"),
         /* spacer */
@@ -3305,7 +3403,7 @@ function ImageAnnotator(props){
               /* B-drawing: 分析ストロークも反映 */
               if(fbData.analysisStrokes!==undefined){
                 analysisStrokesInitSkip.current=true;
-                setAnalysisStrokes(Array.isArray(fbData.analysisStrokes)?fbData.analysisStrokes:[]);
+                setAnalysisStrokes(migrateAnalysisStrokes(fbData.analysisStrokes));
               }
               loadedSavedAtRef.current=Date.now();
             }).catch(function(e){console.error('[反映する] fetch error:',e);});
@@ -3517,40 +3615,49 @@ function ImageAnnotator(props){
           drawTool:tool, drawColor:color, drawWidth:lineW, drawOpacity:opacity,
           drawFontSize:fontSize, drawFontBold:fontBold,
           horiz:horiz,
-          strokes:analysisStrokes,
+          strokes:(analysisStrokes&&analysisStrokes[analysisTf])||[],
           editingTextIdx:analysisTextInput&&analysisTextInput.editIdx>=0?analysisTextInput.editIdx:-1,
           textInputActive:!!analysisTextInput,
           onStrokeAdd:function(s){
-            var next=analysisStrokesRef.current.concat([s]);
+            var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
+            var curArr=(curObj[analysisTf]||[]).slice();
+            curArr.push(s);
+            var next=Object.assign({},curObj,(function(){var o={};o[analysisTf]=curArr;return o;})());
             setAnalysisStrokes(next);
             analysisCommit(next);
           },
           onStrokeDelete:function(idx){
-            var next=analysisStrokesRef.current.slice();
-            next.splice(idx,1);
+            var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
+            var curArr=(curObj[analysisTf]||[]).slice();
+            curArr.splice(idx,1);
+            var next=Object.assign({},curObj,(function(){var o={};o[analysisTf]=curArr;return o;})());
             setAnalysisStrokes(next);
             analysisCommit(next);
           },
           onStrokeDeleteMany:function(idxs){
             if(!idxs||!idxs.length)return;
             var skip=new Set(idxs);
-            var next=analysisStrokesRef.current.filter(function(_,i){return !skip.has(i);});
-            if(next.length===analysisStrokesRef.current.length)return;
+            var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
+            var curArr=curObj[analysisTf]||[];
+            var newArr=curArr.filter(function(_,i){return !skip.has(i);});
+            if(newArr.length===curArr.length)return;
+            var next=Object.assign({},curObj,(function(){var o={};o[analysisTf]=newArr;return o;})());
             setAnalysisStrokes(next);
             analysisCommit(next);
           },
           onStrokeUpdate:function(idx,newStroke){
-            var next=analysisStrokesRef.current.slice();
-            next[idx]=newStroke;
+            var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
+            var curArr=(curObj[analysisTf]||[]).slice();
+            curArr[idx]=newStroke;
+            var next=Object.assign({},curObj,(function(){var o={};o[analysisTf]=curArr;return o;})());
             setAnalysisStrokes(next);
             analysisCommit(next);
           },
           onRequestTextInput:function(req){
-            // 入力中にpan/zoomをロックするため、現状のtoolを覚えておく必要はないが
-            // editIdx>=0なら既存テキスト編集、そうでなければ新規
             var initText='', initFS=fontSize, initBold=fontBold, initColor=color, initOp=opacity;
             if(req.editIdx>=0){
-              var es=analysisStrokesRef.current[req.editIdx];
+              var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
+              var es=(curObj[analysisTf]||[])[req.editIdx];
               if(es){
                 initText=es.text||'';
                 initFS=es.fontSize||fontSize;
@@ -3565,7 +3672,8 @@ function ImageAnnotator(props){
               text:initText,
               fontSize:initFS, fontBold:initBold,
               color:initColor, opacity:initOp,
-              editIdx: req.editIdx>=0?req.editIdx:-1
+              editIdx: req.editIdx>=0?req.editIdx:-1,
+              tf:analysisTf
             });
           }
         }),
@@ -4001,13 +4109,17 @@ function ImageAnnotator(props){
       (function(){
         var ati=analysisTextInput;
         var fontFamily="-apple-system,'Helvetica Neue',sans-serif";
+        /* ati.tf は作成時の timeframe。編集中は常に作成時tfのstrokes配列を操作 */
+        var tfKey=ati.tf||'1m';
         function confirmAnalysisText(){
           var txt=(analysisTextareaRef.current&&analysisTextareaRef.current.value)||ati.text||'';
+          var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
+          var curArr=(curObj[tfKey]||[]).slice();
           if(!txt.trim()){
             // 空入力: 既存編集ならそのまま削除、新規なら何もしない
             if(ati.editIdx>=0){
-              var next0=analysisStrokesRef.current.slice();
-              next0.splice(ati.editIdx,1);
+              curArr.splice(ati.editIdx,1);
+              var next0=Object.assign({},curObj,(function(){var o={};o[tfKey]=curArr;return o;})());
               setAnalysisStrokes(next0);
               analysisCommit(next0);
             }
@@ -4015,15 +4127,15 @@ function ImageAnnotator(props){
             return;
           }
           if(ati.editIdx>=0){
-            var es0=analysisStrokesRef.current[ati.editIdx];
+            var es0=curArr[ati.editIdx];
             if(es0){
               var updated=Object.assign({},es0,{
                 text:txt, color:ati.color, opacity:ati.opacity,
                 fontSize:ati.fontSize, fontBold:ati.fontBold,
                 anchors:[{tm:ati.tm,p:ati.p}]
               });
-              var next1=analysisStrokesRef.current.slice();
-              next1[ati.editIdx]=updated;
+              curArr[ati.editIdx]=updated;
+              var next1=Object.assign({},curObj,(function(){var o={};o[tfKey]=curArr;return o;})());
               setAnalysisStrokes(next1);
               analysisCommit(next1);
             }
@@ -4033,7 +4145,8 @@ function ImageAnnotator(props){
               color:ati.color, opacity:ati.opacity,
               fontSize:ati.fontSize, fontBold:ati.fontBold,
               text:txt};
-            var next2=analysisStrokesRef.current.concat([stroke]);
+            curArr.push(stroke);
+            var next2=Object.assign({},curObj,(function(){var o={};o[tfKey]=curArr;return o;})());
             setAnalysisStrokes(next2);
             analysisCommit(next2);
           }
@@ -4041,8 +4154,10 @@ function ImageAnnotator(props){
         }
         function deleteAnalysisText(){
           if(ati.editIdx>=0){
-            var next=analysisStrokesRef.current.slice();
-            next.splice(ati.editIdx,1);
+            var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
+            var curArr=(curObj[tfKey]||[]).slice();
+            curArr.splice(ati.editIdx,1);
+            var next=Object.assign({},curObj,(function(){var o={};o[tfKey]=curArr;return o;})());
             setAnalysisStrokes(next);
             analysisCommit(next);
           }
@@ -4853,7 +4968,7 @@ function DraftLibrary(props){
               var merged={orig_base64:d.orig_base64||d.base64,orig_mt:d.orig_mt||d.mt||fbData.orig_mt||'image/png',
                 strokes:fbData.strokes||[],name:fbData.name||'',
                 analysisData:fbData.analysisData||null,
-                analysisStrokes:Array.isArray(fbData.analysisStrokes)?fbData.analysisStrokes:[]};  /* B-drawing */
+                analysisStrokes:migrateAnalysisStrokes(fbData.analysisStrokes)};  /* B-drawing */
               caSaveData(id,merged);setSyncStatus(null);
               onOpen(Object.assign({},merged,extra));return;
             }
@@ -4862,7 +4977,7 @@ function DraftLibrary(props){
             var localData={orig_base64:res.base64,orig_mt:res.mt||fbData.orig_mt||'image/png',
               strokes:fbData.strokes||[],name:fbData.name||'',
               analysisData:fbData.analysisData||null,
-              analysisStrokes:Array.isArray(fbData.analysisStrokes)?fbData.analysisStrokes:[]};  /* B-drawing */
+              analysisStrokes:migrateAnalysisStrokes(fbData.analysisStrokes)};  /* B-drawing */
             caSaveData(id,localData);setSyncStatus(null);
             onOpen(Object.assign({},localData,extra));
           }).catch(function(e){
@@ -4877,7 +4992,7 @@ function DraftLibrary(props){
                   var du=tc.toDataURL('image/png');var b64=du.split(',')[1];
                   var localData={orig_base64:b64,orig_mt:'image/png',strokes:fbData.strokes||[],name:fbData.name||'',
                     analysisData:fbData.analysisData||null,
-                    analysisStrokes:Array.isArray(fbData.analysisStrokes)?fbData.analysisStrokes:[]};  /* B-drawing */
+                    analysisStrokes:migrateAnalysisStrokes(fbData.analysisStrokes)};  /* B-drawing */
                   caSaveData(id,localData);setSyncStatus(null);
                   onOpen(Object.assign({},localData,extra));resolve();
                 }catch(e2){reject(e2);}
