@@ -588,6 +588,8 @@ function FbSettingsModal(props){
   var s3=useState(cfg.paused!==false); var paused=s3[0],setPaused=s3[1];
   var sAK=useState(cfg.apiKey||''); var apiKey=sAK[0],setApiKey=sAK[1];
   var s4=useState(null); var cleanupStatus=s4[0],setCleanupStatus=s4[1]; // null|'running'|'done:N'|'error'
+  /* Phase 4 (2026-04-20): 旧画像draft完全削除 status */
+  var sLIC=useState(null); var legacyImgCleanStatus=sLIC[0],setLegacyImgCleanStatus=sLIC[1];
   function save(){
     var nc={url:url.trim(),secret:secret.trim(),apiKey:apiKey.trim(),storageBucket:bucket.trim(),paused:paused};
     try{localStorage.setItem(FB_CFG_KEY,JSON.stringify(nc));}catch(e){}
@@ -628,6 +630,52 @@ function FbSettingsModal(props){
     Promise.all([cleanPath(draftsBase),cleanPath(trashBase)])
       .then(function(){setCleanupStatus('done:'+count);})
       .catch(function(e){console.error('cleanup:',e);setCleanupStatus('error: '+e.message);});
+  }
+
+  /* Phase 4 (2026-04-20): 旧画像draft完全削除
+     draft-data 全走査 → orig_base64/base64/imageUrl を持つ draft を meta/data/ts 全削除
+     事前に PNG 一括エクスポート済みである前提 */
+  function runLegacyImageCleanup(){
+    var u=url.trim(); if(!u){setLegacyImgCleanStatus('error: URLが未設定');return;}
+    var a=secret.trim()?'?auth='+secret.trim():'';
+    setLegacyImgCleanStatus('running');
+    var count=0, errors=0;
+    var dataBase=u.replace(/\/$/,'')+'/chart-annotator-drafts-data';
+    var metaBase=u.replace(/\/$/,'')+'/chart-annotator-drafts';
+    var tsBase=u.replace(/\/$/,'')+'/chart-annotator-drafts-ts';
+    fetch(dataBase+'.json'+a).then(function(r){return r.ok?r.text():null;})
+      .then(function(txt){
+        if(!txt){setLegacyImgCleanStatus('done:0');return;}
+        var all; try{all=JSON.parse(txt);}catch(e){setLegacyImgCleanStatus('error: JSON parse failed');return;}
+        if(!all||typeof all!=='object'||all.error){setLegacyImgCleanStatus('done:0');return;}
+        var idsToDelete=[];
+        Object.keys(all).forEach(function(id){
+          var item=all[id]; if(!item||typeof item!=='object')return;
+          if(item.orig_base64||item.base64||item.imageUrl)idsToDelete.push(id);
+        });
+        if(!idsToDelete.length){setLegacyImgCleanStatus('done:0');return;}
+        var proms=[];
+        idsToDelete.forEach(function(id){
+          proms.push(fetch(dataBase+'/'+id+'.json'+a,{method:'DELETE'})["catch"](function(){errors++;}));
+          proms.push(fetch(metaBase+'/'+id+'.json'+a,{method:'DELETE'})["catch"](function(){errors++;}));
+          proms.push(fetch(tsBase+'/'+id+'.json'+a,{method:'DELETE'})["catch"](function(){errors++;}));
+          /* ローカル meta/data/thumb も削除 */
+          try{
+            var nm=caLoadMeta().filter(function(m){return m.id!==id;});
+            caSaveMeta(nm);
+            caDeleteData(id); caDeleteThumb(id);
+          }catch(e){}
+          count++;
+        });
+        Promise.all(proms).then(function(){
+          setLegacyImgCleanStatus('done:'+count+(errors?' ('+errors+' errors)':''));
+          /* 画面リロード促し */
+          setTimeout(function(){
+            window.caToast('旧画像draft削除完了: '+count+'件。再読込を推奨します','success');
+          },300);
+        });
+      })
+      ["catch"](function(e){setLegacyImgCleanStatus('error: '+e.message);});
   }
   /* 2026-04-20 C13: iOS Safari はfontSize<16のinputにフォーカスすると強制ズーム
      これを防ぐため全inputをfontSize:16 に統一 */
@@ -719,6 +767,30 @@ function FbSettingsModal(props){
               "✓ 完了！ "+cleanupStatus.split(':')[1]+"件のフィールドを削除しました"),
             cleanupStatus&&cleanupStatus.indexOf('error')===0&&ce("div",{style:{fontSize:11,color:"#fca5a5",marginTop:8}},
               "✕ "+cleanupStatus)
+          ),
+          /* Phase 4: 旧画像draft完全削除 */
+          ce("div",{style:{background:"#1a1a1a",borderRadius:10,padding:"10px 12px",
+            border:"1px solid #7f1d1d"}},
+            ce("div",{style:{display:"flex",alignItems:"center",gap:8}},
+              ce("div",{style:{flex:1}},
+                ce("div",{style:{fontSize:12,fontWeight:700,color:"#fca5a5"}},"⚠ 旧画像draftを完全削除"),
+                ce("div",{style:{fontSize:10,color:"#666",marginTop:2,lineHeight:1.5}},
+                  "画像フィールド (orig_base64/imageUrl) を持つdraft を Firebase/ローカル両方から完全削除します。",ce("br",null),
+                  "事前に「📦 全PNG」で退避してから実行してください。取り消し不可。")
+              ),
+              ce("button",{
+                onClick:legacyImgCleanStatus==='running'?null:function(){
+                  window.caConfirm('旧画像draftを Firebase と ローカル の両方から完全削除します。\n事前に「📦 全PNG」でエクスポート済みですか?\n\n取り消しできません。実行しますか?',runLegacyImageCleanup);
+                },
+                style:{fontSize:11,fontWeight:700,padding:"8px 14px",borderRadius:8,border:"none",
+                  cursor:legacyImgCleanStatus==='running'?'wait':'pointer',fontFamily:"inherit",flexShrink:0,
+                  background:legacyImgCleanStatus==='running'?'#333':'#991b1b',color:'#fff'}
+              },legacyImgCleanStatus==='running'?'⏳ 実行中…':'🔥 完全削除')
+            ),
+            legacyImgCleanStatus&&legacyImgCleanStatus.indexOf('done:')===0&&ce("div",{style:{fontSize:11,color:"#86efac",marginTop:8,fontWeight:600}},
+              "✓ 完了: "+legacyImgCleanStatus.substr(5)+" 件"),
+            legacyImgCleanStatus&&legacyImgCleanStatus.indexOf('error')===0&&ce("div",{style:{fontSize:11,color:"#fca5a5",marginTop:8}},
+              "✕ "+legacyImgCleanStatus)
           ),
           ce("div",{style:{display:"flex",gap:10,marginTop:4}},
             ce("button",{onClick:onClose,
@@ -2571,12 +2643,8 @@ function ImageAnnotator(props){
   var img=props.img, onSave=props.onSave, onClose=props.onClose;
 
   var canvasRef = useRef(null);
-  /* B1: モードタブ ('image' | 'analysis')
-     2026-04-20: 画像なし(JSONのみ)draft の場合は初期modeを 'analysis' に */
-  var stMT=useState(function(){
-    if(img&&img.analysisData&&!(img.orig_base64||img.base64))return 'analysis';
-    return 'image';
-  });
+  /* B1: モードタブ — 2026-04-20: 画像mode完全撤去、常時 'analysis' */
+  var stMT=useState('analysis');
   var modeTab=stMT[0],setModeTab=stMT[1];
   /* B2: 分析モードの state (img にある場合はそこから復元 = Firebase同期対応) */
   var stAD=useState(function(){return (img&&img.analysisData)||null;});
@@ -4263,16 +4331,7 @@ function ImageAnnotator(props){
         style:{display:"flex",gap:IS_TOUCH?4:6,alignItems:"center",padding:IS_TOUCH?"6px 8px":"10px 14px",
         flexWrap:"nowrap",overflowX:"auto",overflowY:"hidden",WebkitOverflowScrolling:"touch",
         borderBottom:"1px solid #1e1e1e",justifyContent:"flex-start",touchAction:"pan-x"}},
-        /* B1: モードタブ（画像 / 分析） — 常に表示 */
-        ce("div",{style:{display:"flex",gap:2,flexShrink:0,marginRight:8}},
-          ['image','analysis'].map(function(m){
-            return ce("button",{key:m,onClick:function(){setModeTab(m);},
-              style:Object.assign({},TS,{fontSize:IS_TOUCH?11:12,padding:IS_TOUCH?"5px 10px":"6px 12px",
-                background:modeTab===m?(m==='image'?'#6366F1':'#10b981'):'#2a2a2a',
-                color:modeTab===m?'#fff':'#aaa',fontWeight:700})},
-              m==='image'?'🖼 画像':'📊 分析');
-          })
-        ),
+        /* B1: 2026-04-20: modeTab切替タブ撤去 (画像mode完全廃止、常時analysis) */
         /* B1: 以下は画像モード時のみ表示 */
         modeTab==='image' && ce("div",{style:{display:"flex",gap:IS_TOUCH?3:5,flexWrap:"nowrap",flexShrink:0}},
           TOOLS.map(function(t){
@@ -5998,6 +6057,48 @@ function caLoadThumb(id){return _thumbMemCache[id]||null;}
 function caDeleteThumb(id){delete _thumbMemCache[id];idbDel('thumb_'+id);}
 
 /* ============================================================
+   Phase 2 (2026-04-20): 分析データ(JSON)から thumb を生成するヘルパー
+   DataChart のオフスクリーンレンダリングで thumb PNG を作成
+   ============================================================ */
+function generateAnalysisThumb(analysisData, cb){
+  try{
+    if(!analysisData||!analysisData.bars_1m||!analysisData.bars_1m.length){cb('');return;}
+    var W=800, H=500;
+    var c=document.createElement('canvas');
+    c.width=W; c.height=H;
+    var bars=analysisData.bars_1m;
+    /* priceRange算出 (EMA連続化を考慮しない単純版、refData無しなので問題なし) */
+    var mn=Infinity, mx=-Infinity;
+    bars.forEach(function(b){
+      if(b.l<mn)mn=b.l; if(b.h>mx)mx=b.h;
+      ['ema9','ema22','ema50','ema200','vwap'].forEach(function(k){
+        var v=b[k]; if(v!=null){if(v<mn)mn=v;if(v>mx)mx=v;}
+      });
+    });
+    if(!isFinite(mn)||!isFinite(mx)){cb('');return;}
+    mn=Math.floor(mn/10)*10-5; mx=Math.ceil(mx/10)*10+5;
+    var priceRange={min:mn,max:mx};
+    /* uTotal (1m,hasRef=false) = 390-(60-1) = 331 */
+    var uTotal=390-(60-1);
+    /* DPR 固定 */
+    var origDPR=window.devicePixelRatio;
+    try{Object.defineProperty(window,'devicePixelRatio',{value:1,configurable:true});}catch(e){}
+    try{
+      drawDataChart(c, bars, analysisData, {w:W,h:H}, '1m',
+        {uS:0,uE:uTotal}, 0, priceRange, {current:null},
+        [], null, null, null, null, 1, null, null);
+    }finally{
+      try{Object.defineProperty(window,'devicePixelRatio',{value:origDPR,configurable:true});}catch(e){}
+    }
+    try{cb(c.toDataURL('image/png'));}
+    catch(e){console.warn('[thumb] toDataURL failed:',e);cb('');}
+  }catch(err){
+    console.error('generateAnalysisThumb:',err);
+    cb('');
+  }
+}
+
+/* ============================================================
    Phase 1 (2026-04-20): PNG一括エクスポートヘルパー
    全draft を 画像+strokes 合成PNG として個別DL (参照画像・分析chartは含まない)
    ============================================================ */
@@ -6301,15 +6402,21 @@ function DraftLibrary(props){
       /* 新フォーマット: 画像フィールドなし、analysisData+analysisStrokesのみ */
       var data={analysisData:j, analysisStrokes:{'1m':[],'5m':[]}, name:chartName, _v:savedAt};
       caSaveData(id,data);
-      /* thumb は当面空 (次工程でDataChartオフスクリーン生成を実装予定) */
-      var metaItem={id:id, ticker:selTicker, name:chartName, savedAt:savedAt,
-        thumb:'', analysisDate:j.date||''};
-      var stored=caLoadMeta().filter(function(m){return m.id!==id;});
-      stored.push(metaItem);
-      caSaveMeta(stored);
-      setMeta(function(prev){return prev.concat([metaItem]);});
-      fbSaveDraft(id,metaItem,data);
-      window.caToast('JSONを読み込みました: '+chartName,'success');
+      /* Phase 2: DataChartオフスクリーンレンダリングでthumb生成 */
+      generateAnalysisThumb(j, function(thumb){
+        var metaItem={id:id, ticker:selTicker, name:chartName, savedAt:savedAt,
+          thumb:thumb||'', analysisDate:j.date||''};
+        var stored=caLoadMeta().filter(function(m){return m.id!==id;});
+        stored.push(metaItem);
+        caSaveMeta(stored);
+        setMeta(function(prev){
+          var exists=prev.some(function(m){return m.id===id;});
+          return exists?prev.map(function(m){return m.id===id?metaItem:m;}):prev.concat([metaItem]);
+        });
+        if(thumb)caSaveThumb(id,thumb);
+        fbSaveDraft(id,metaItem,data);
+        window.caToast('JSONを読み込みました: '+chartName,'success');
+      });
     };
     fr.onerror=function(){window.caToast('ファイル読込エラー','error');};
     fr.readAsText(file);
@@ -6563,13 +6670,23 @@ function DraftLibrary(props){
     var extra={_draftId:id,_ticker:mi?mi.ticker:'',_name:mi?mi.name:'',_thumb:mi?mi.thumb:'',_savedAt:mi?mi.savedAt:0};
     /* ローカルデータから画像なし draft (新フォーマット) 判定ヘルパー */
     function isJsonOnly(d){return !!(d&&d.analysisData&&!(d.orig_base64||d.base64||d.imageUrl));}
+    /* 2026-04-20: 画像mode撤去後、画像draftを開く時は警告して中断 */
+    function handleLegacyImageDraft(d){
+      if(d&&(d.orig_base64||d.base64||d.imageUrl)&&!d.analysisData){
+        window.caToast('このチャートは旧画像形式です。⚙ Firebase設定から「旧画像draftを削除」で整理してください','error');
+        return true;  /* 中断 */
+      }
+      return false;  /* 続行 */
+    }
     // 同期OFFまたはFirebase未設定 → ローカルデータのみ
     if(_fbIsPaused(fbCfg)||!fbCfg.url){
       var d0=caLoadData(id);
+      if(handleLegacyImageDraft(d0))return;  /* 旧画像-only draft: 中断 */
       if(d0&&(d0.orig_base64||d0.base64)){onOpen(Object.assign({},d0,extra));return;}
       if(isJsonOnly(d0)){onOpen(Object.assign({},d0,extra));return;}  /* JSONのみdraft */
       // IndexedDB非同期フォールバック
       caLoadDataAsync(id,function(ad){
+        if(handleLegacyImageDraft(ad))return;  /* 旧画像-only draft: 中断 */
         if(ad&&(ad.orig_base64||ad.base64)){onOpen(Object.assign({},ad,extra));return;}
         if(isJsonOnly(ad)){onOpen(Object.assign({},ad,extra));return;}  /* JSONのみdraft */
         window.caToast('データが見つかりません（Firebase未設定または同期停止中）','error');
