@@ -121,16 +121,7 @@ if(!window.caConfirm){
 var ce         = R.createElement;   // ← h ではなく ce を使う
 
 var IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
-/* 2026-04-20: ジョイスティック表示判定 — Surface Pro 等「タッチ+マウス両対応 PC」を除外
-   any-pointer: fine = デバイスに細かいポインタ (マウス/トラックパッド) が含まれる
-   → PC扱いでジョイスティック非表示。純粋タッチデバイス (iPad等) のみ表示 */
-var SHOW_JOYSTICK = IS_TOUCH && !(window.matchMedia && window.matchMedia('(any-pointer: fine)').matches);
 var HAS_HOVER = typeof matchMedia!=='undefined' && matchMedia('(hover: hover)').matches;
-/* 2026-04-20: ジョイスティック表示判定 — Surface Pro 等「タッチ+マウス併用」PCでは非表示
-   (any-pointer: fine) = デバイスのいずれかの入力機器が精密ポインタ (マウス/トラックパッド等)
-   iPad単体: fine無し → 表示 / Surface+キーボード: fine有り → 非表示 */
-var HAS_FINE_POINTER = typeof matchMedia!=='undefined' && matchMedia('(any-pointer: fine)').matches;
-var SHOW_JOYSTICK = IS_TOUCH && !HAS_FINE_POINTER;
 /* C-uaxis+C6+C7: 過去chartと現在chartを同一キャンバスに連結表示 (旧左右分離レイアウトはC7で削除) */
 /* C8a: 隙間幅はローソク足1本分 (1m=1分, 5m=5分)。昼休み(60分)と夜間gapの両方に適用 */
 function getCandleGap(tf){ return tf==='1m'?1:5; }
@@ -633,19 +624,6 @@ function caSaveChartBg(c){
   try{window.dispatchEvent(new CustomEvent('ca_chart_bg_changed',{detail:s}));}catch(e){}
 }
 
-/* 2026-04-20: パームリジェクション (iPad限定, Apple Pencil 検出後 N ms touch無視)
-   false = 従来通り touch=描画 (デフォルト)
-   true  = ペン検出後 800ms 内の touch を全て無視 */
-var CA_PALM_REJECT_KEY='ca_palm_reject_v1';
-var CA_PALM_REJECT_MS=800;
-function caLoadPalmReject(){
-  try{var v=localStorage.getItem(CA_PALM_REJECT_KEY);return v==='1';}
-  catch(e){return false;}
-}
-function caSavePalmReject(b){
-  try{localStorage.setItem(CA_PALM_REJECT_KEY,b?'1':'0');}catch(e){}
-  try{window.dispatchEvent(new CustomEvent('ca_palm_reject_changed',{detail:!!b}));}catch(e){}
-}
 function caIsIPad(){
   try{
     var ua=navigator.userAgent||'';
@@ -1007,9 +985,6 @@ function DisplaySettingsModal(props){
     if(!/^#[0-9a-fA-F]{6}$/.test(s))return;
     setChartBg(s); caSaveChartBg(s);
   }
-  /* パームリジェクション */
-  var sPR=useState(caLoadPalmReject()); var palmRej=sPR[0],setPalmRej=sPR[1];
-  function updatePalmRej(b){setPalmRej(!!b); caSavePalmReject(!!b);}
   /* 銘柄コード対応 (scalping-notebook連携) */
   var sTC=useState(caLoadTickerCodes()); var tickerCodes=sTC[0],setTickerCodes=sTC[1];
   var allTickers=caLoadTickers();
@@ -1019,7 +994,6 @@ function DisplaySettingsModal(props){
     next[ticker]=sanitized;
     setTickerCodes(next); caSaveTickerCodes(next);
   }
-  var isIPad=caIsIPad();
   /* 背景色プリセット */
   var BG_PRESETS=[
     {c:'#000000',label:'漆黒'},
@@ -1119,27 +1093,6 @@ function DisplaySettingsModal(props){
                   else setChartBg(v);},
                 style:{flex:1,padding:"6px 8px",background:"#2a2a2a",border:"1px solid #3a3a3a",
                   borderRadius:6,color:"#fff",fontSize:13,fontFamily:"monospace"}})
-            )
-          ),
-          /* パームリジェクション (iPad限定) */
-          ce("div",{style:{background:"#1a1a1a",borderRadius:10,padding:"10px 12px",
-            border:"1px solid "+(isIPad?"#1e3a5f":"#2a2a2a"),opacity:isIPad?1:0.5}},
-            ce("div",{style:{fontSize:13,fontWeight:700,color:"#a5b4fc",marginBottom:4}},
-              "✋ パームリジェクション",
-              !isIPad&&ce("span",{style:{fontSize:10,color:"#666",fontWeight:400,marginLeft:8}},"(iPad限定)")
-            ),
-            ce("div",{style:{fontSize:10,color:"#666",marginBottom:8,lineHeight:1.5}},
-              "Apple Pencil 検出後 "+CA_PALM_REJECT_MS+"ms 以内の指タッチを無視します。",ce("br",null),
-              "手のひらが画面に触れて誤って線が引かれるのを防ぎます。",ce("br",null),
-              "※ ON中はペン検出直後 "+CA_PALM_REJECT_MS+"ms 内は 2本指パン/ピンチも無視されます"),
-            ce("label",{style:{display:"flex",alignItems:"center",gap:10,
-              cursor:isIPad?"pointer":"not-allowed"}},
-              ce("input",{type:"checkbox",checked:palmRej&&isIPad,disabled:!isIPad,
-                onChange:function(e){if(isIPad)updatePalmRej(e.target.checked);},
-                style:{width:18,height:18,accentColor:"#6366F1",
-                  cursor:isIPad?"pointer":"not-allowed"}}),
-              ce("span",{style:{fontSize:13,color:isIPad?"#ddd":"#666"}},
-                isIPad?"パームリジェクションを有効化":"iPad でのみ利用可能")
             )
           ),
           /* 銘柄コード対応 (scalping-notebook連携) */
@@ -1462,8 +1415,6 @@ function DataChart(props){
   var rafRef=useRef(null);
   var drawRef=useRef({on:false});  // ドラッグ式描画状態 {on, sTM, sP, cTM, cP, pts(freehand用)}
   var ctrlPanRef=useRef(false);    // Ctrl+drag パン状態
-  /* 2026-04-20: パームリジェクション用 — Apple Pencil 最終検知タイムスタンプ */
-  var lastPenAtRef=useRef(0);
   /* 2026-04-20: トリプルタップ検出用 — [{t:timestamp, x, y}, ...] */
   var tripleTapRef=useRef([]);
   /* 2026-04-20: 出来高下端固定モード用 refs (pricePx>0 時のみ使用)
@@ -1610,25 +1561,21 @@ function DataChart(props){
     // 10円境界に丸める + 余白 (±5円: 10円1マスが画面上広く見えるよう最小限)
     mn=Math.floor(mn/10)*10 - 5;
     mx=Math.ceil(mx/10)*10 + 5;
-    /* 2026-04-20: pricePx>0 の時は priceRange を pricePx 基準で縮減
+    /* 2026-04-20: pricePx>0 の時は priceRange を常に pricePx 基準で決定 (超過時も画面フィット維持しない)
        実効priceH は dim.h から volH 按分で推定 (drawDataChart と同じ式)
-       rangeByPx = priceH / pricePx × 10 が現在のデータレンジより狭ければ、データ中心で切り出す
-       → pricePx 小=広い範囲、pricePx 大=狭い範囲 (価格軸ラベル間隔が広く見える) */
+       rangeByPx = priceH / pricePx × 10 (円) — データ中心に切り出し
+       → データ範囲がレンジを超える場合ははみ出し、縦方向パン (pShift) で残り領域を見る */
     if(pricePx>0 && dim.h>0){
       var padT=10, padB=22;
       var estVolH=Math.max(44,Math.round((dim.h-padT-padB)*0.13));
       var estPriceH=dim.h-padT-padB-estVolH-6;
       if(estPriceH>44){
         var rangeByPx=estPriceH/pricePx*10;  /* 円単位 */
-        var dataRange=mx-mn;
-        if(rangeByPx<dataRange){
-          /* データ中心に rangeByPx 幅で切り出し */
-          var mid=(mn+mx)/2;
-          var half=rangeByPx/2;
-          mn=Math.floor((mid-half)/10)*10;
-          mx=Math.ceil((mid+half)/10)*10;
-        }
-        /* rangeByPx >= dataRange なら従来通り (データ全体表示) */
+        /* データ中心に rangeByPx 幅で切り出し (超過可否に関わらず常に適用) */
+        var mid=(mn+mx)/2;
+        var half=rangeByPx/2;
+        mn=Math.floor((mid-half)/10)*10;
+        mx=Math.ceil((mid+half)/10)*10;
       }
     }
     var pr={min:mn, max:mx};
@@ -2567,9 +2514,6 @@ function DataChart(props){
   // タッチ (iPad/スマホ) - 1本指: 描画、2本指: ピンチズーム＋パン
   function onTouchStart(e){
     if(props.textInputActive)return;
-    /* 2026-04-20: パームリジェクション — Apple Pencil 由来 (touchType='stylus') の touch は通す、
-       指由来の touch のみ reject。Pencil は TouchEvent も発火するため区別が必要 */
-    if(shouldRejectTouch()&&!_isPenTouch(e))return;
     if(e.touches.length===2){
       // ピンチ開始
       if(e.preventDefault)e.preventDefault();
@@ -2600,8 +2544,6 @@ function DataChart(props){
   }
   function onTouchMove(e){
     if(props.textInputActive)return;
-    /* 2026-04-20: パームリジェクション — Apple Pencil 由来は通す、指のみ reject */
-    if(shouldRejectTouch()&&!_isPenTouch(e))return;
     // ピンチ中
     if(pinchRef.current&&e.touches.length>=2){
       if(e.preventDefault)e.preventDefault();
@@ -2670,9 +2612,6 @@ function DataChart(props){
   }
   // ペンのホバー (Apple Pencil / S Pen 等) - 触れず浮かせている時に十字カーソル追従
   function onPointerMoveHover(e){
-    /* 2026-04-20: パームリジェクション用 — pen pointer 検出時タイムスタンプ更新
-       (hover / press 中問わず) */
-    if(e.pointerType==='pen'){lastPenAtRef.current=Date.now();}
     if(props.textInputActive)return;
     if(e.pointerType!=='pen'||e.buttons!==0)return;
     if(!containerRef.current)return;
@@ -2682,30 +2621,6 @@ function DataChart(props){
     if(!rafRef.current){
       rafRef.current=requestAnimationFrame(function(){drawCrosshair();rafRef.current=null;});
     }
-  }
-  /* 2026-04-20: onPointerDown — pen 押下時も lastPenAtRef 更新
-     (ホバーせず直接タッチしたケース対策) */
-  function onPointerDownPalm(e){
-    if(e.pointerType==='pen'){lastPenAtRef.current=Date.now();}
-  }
-  /* 2026-04-20: パームリジェクション判定ヘルパー — 設定ON + iPad + 直近 CA_PALM_REJECT_MS 内にペン検知あり
-     指 vs ペンは呼び出し側 (_isPenTouch) で区別 — ここは時間窓判定のみ */
-  function shouldRejectTouch(){
-    if(!caLoadPalmReject())return false;
-    if(!caIsIPad())return false;
-    var dt=Date.now()-lastPenAtRef.current;
-    return dt>=0&&dt<CA_PALM_REJECT_MS;
-  }
-  /* 2026-04-20: Apple Pencil 由来のタッチかを判定
-     iOS Safari は Pencil 入力を TouchEvent でも発火する (touchType='stylus')
-     → パームリジェクション中でも Pencil は通す必要あり */
-  function _isPenTouch(e){
-    if(!e||!e.touches||!e.touches.length)return false;
-    for(var i=0;i<e.touches.length;i++){
-      var t=e.touches[i];
-      if(t.touchType==='stylus')return true;
-    }
-    return false;
   }
   // ダブルクリック: (機能削除、ユーザー要望)
 
@@ -2744,8 +2659,6 @@ function DataChart(props){
     onTouchEnd:onTouchEnd,
     onTouchCancel:onTouchEnd,
     onPointerMove:onPointerMoveHover,
-    /* 2026-04-20: パームリジェクション用 — pen 押下検出タイムスタンプ更新 */
-    onPointerDown:onPointerDownPalm,
     onPointerLeave:function(e){
       // ペンのホバーがチャート外に出たら十字カーソル消す
       if(e.pointerType==='pen'){
@@ -5337,9 +5250,8 @@ function ImageAnnotator(props){
       ),
 
       /* virtual joystick（タッチのみ、画像モード時のみ — Portal先がbodyなので
-         display:none で隠れない、分析モード用と重ならないよう条件付き）
-         2026-04-20: Surface Pro 等タッチ+マウスPCは SHOW_JOYSTICK=false で非表示 */
-      SHOW_JOYSTICK&&modeTab==='image'&&ce(VirtualJoystick,{
+         display:none で隠れない、分析モード用と重ならないよう条件付き）*/
+      IS_TOUCH&&modeTab==='image'&&ce(VirtualJoystick,{
         onPanDelta:function(dx,dy){setPan(function(p){return{x:p.x-dx,y:p.y-dy};});}
       }),
 
@@ -5668,9 +5580,8 @@ function ImageAnnotator(props){
         })
         ) /* end 現在チャート container div (統合chart: refAnalysis有でもこの1つに集約) */
         ), /* end 横並びコンテナ (実質ラップ1枚、旧レイアウト削除で1カラムのみ) */
-        /* F2: VirtualJoystick (タッチデバイスのみ、分析モードのpan制御)
-           2026-04-20: Surface Pro 等タッチ+マウスPCは SHOW_JOYSTICK=false で非表示 */
-        SHOW_JOYSTICK&&ce(VirtualJoystick,{
+        /* F2: VirtualJoystick (タッチデバイスのみ、分析モードのpan制御) */
+        IS_TOUCH&&ce(VirtualJoystick,{
           onPanDelta:function(dx,dy){
             // C-uaxis+C8a: u軸上で pan (1400px swipe = 1 uSpan分の pan) — tf依存uTotal
             setAnalysisView(function(v){
