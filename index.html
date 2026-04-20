@@ -2747,6 +2747,9 @@ function ImageAnnotator(props){
   /* 2026-04-20 C8: 楽観ロック用バージョン番号。PUT前に remote の _v と比較、
      不一致なら conflict として書き込み拒否。同期ごとに +1。 */
   var loadedVersionRef=useRef(0);
+  /* 2026-04-20: thumb upload 頻度制限 (30秒以内は既存URL再利用、帯域削減) */
+  var lastThumbUploadAtRef=useRef(0);
+  var lastThumbUrlRef=useRef(null);
   var savedDraftIdRef=useRef(img._draftId||null);
   var savedTickerRef=useRef(img._ticker||'');
   var postSaveCallbackRef=useRef(null);
@@ -3159,8 +3162,13 @@ function ImageAnnotator(props){
         var draftBase=cfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts';
         var draftDataBase=cfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
         var thumb=canvasRef.current?caGenThumb(compositeCanvas()):(img._thumb||'');
+        /* 2026-04-20: thumb upload 30秒制限 (既存URL再利用で帯域削減) */
+        var _nowThumb=Date.now();
+        var _needUp=!lastThumbUrlRef.current||(_nowThumb-lastThumbUploadAtRef.current>30000);
+        var _thumbP=_needUp?uploadThumbToStorage(cfg2,draftId,thumb):Promise.resolve(lastThumbUrlRef.current);
         // meta
-        uploadThumbToStorage(cfg2,draftId,thumb).then(function(thumbUrl){
+        _thumbP.then(function(thumbUrl){
+          if(_needUp&&thumbUrl){lastThumbUploadAtRef.current=_nowThumb;lastThumbUrlRef.current=thumbUrl;}
           var metaDb={ticker:img._ticker||'',name:img._name||img.name||'chart',savedAt:savedAt};
           if(thumbUrl)metaDb.thumbUrl=thumbUrl;
           var metaBody=JSON.stringify(metaDb);fetch(draftBase+'/'+draftId+'.json'+auth,{method:'PUT',
@@ -3193,7 +3201,7 @@ function ImageAnnotator(props){
         setAutoSaveStatus('err');setTimeout(function(){setAutoSaveStatus(null);},3000);
       });
       } /* end doActualWrite */
-    },600);
+    },1500);  /* 2026-04-20: 書込回数抑制のため 600 → 1500 (refAutoSaveと同値) */
   }
 
   function commit(strokes){
@@ -4085,8 +4093,12 @@ function ImageAnnotator(props){
       var auth=cfg.secret?'?auth='+cfg.secret:'';
       var draftBase=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts';
       var draftDataBase=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
-      // meta（thumbをStorage→thumbUrlのみDB）
-      uploadThumbToStorage(cfg,id,thumb).then(function(thumbUrl){
+      // meta（thumbをStorage→thumbUrlのみDB）— 2026-04-20: 30秒制限で帯域削減
+      var _nowThumb2=Date.now();
+      var _needUp2=!lastThumbUrlRef.current||(_nowThumb2-lastThumbUploadAtRef.current>30000);
+      var _thumbP2=_needUp2?uploadThumbToStorage(cfg,id,thumb):Promise.resolve(lastThumbUrlRef.current);
+      _thumbP2.then(function(thumbUrl){
+        if(_needUp2&&thumbUrl){lastThumbUploadAtRef.current=_nowThumb2;lastThumbUrlRef.current=thumbUrl;}
         var metaDb={ticker:ticker,name:chartName,savedAt:savedAt};
         if(thumbUrl)metaDb.thumbUrl=thumbUrl;
         var metaBody=JSON.stringify(metaDb);fetch(draftBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
@@ -5786,6 +5798,8 @@ function ImageAnnotator(props){
           var draftDataBase=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
           // meta（thumbをStorage→thumbUrlのみDB）
           uploadThumbToStorage(cfg,id,thumb).then(function(thumbUrl){
+            /* 2026-04-20: 手動保存のrefも更新 → 直後のauto-saveで再uploadスキップ */
+            if(thumbUrl){lastThumbUploadAtRef.current=Date.now();lastThumbUrlRef.current=thumbUrl;}
             var metaDb={ticker:ticker,name:name,savedAt:metaItem.savedAt};
             if(thumbUrl)metaDb.thumbUrl=thumbUrl;
             var metaBody=JSON.stringify(metaDb);fetch(draftBase+'/'+id+'.json'+fbAuth,{method:'PUT',headers:{'Content-Type':'application/json'},
@@ -5977,6 +5991,85 @@ function caGenThumb(canvasEl){
 function caSaveThumb(id,dataUrl){_thumbMemCache[id]=dataUrl;idbSet('thumb_'+id,dataUrl);}
 function caLoadThumb(id){return _thumbMemCache[id]||null;}
 function caDeleteThumb(id){delete _thumbMemCache[id];idbDel('thumb_'+id);}
+
+/* ============================================================
+   Phase 1 (2026-04-20): PNG一括エクスポートヘルパー
+   全draft を 画像+strokes 合成PNG として個別DL (参照画像・分析chartは含まない)
+   ============================================================ */
+/* draft の data から画像要素を非同期で生成 (orig_base64 or imageUrl) */
+function _loadDraftImage(d, cb){
+  if(!d){cb(null);return;}
+  var src=null, needCross=false;
+  if(d.orig_base64){
+    src='data:'+(d.orig_mt||'image/png')+';base64,'+d.orig_base64;
+  } else if(d.imageUrl){
+    src=d.imageUrl; needCross=true;
+  } else { cb(null); return; }
+  var img=new Image();
+  if(needCross)img.crossOrigin='anonymous';
+  img.onload=function(){cb(img);};
+  img.onerror=function(){cb(null);};
+  img.src=src;
+}
+/* 画像+strokes を合成してPNG dataURL を返す (失敗時 null) */
+function _generateCombinedPng(img, strokes){
+  var c=document.createElement('canvas');
+  c.width=img.naturalWidth||img.width; c.height=img.naturalHeight||img.height;
+  var ctx=c.getContext('2d');
+  ctx.drawImage(img,0,0);
+  if(strokes&&strokes.length){
+    strokes.forEach(function(s){try{drawStroke(ctx,s);}catch(e){}});
+  }
+  try{ return c.toDataURL('image/png'); }
+  catch(e){ return null; }
+}
+/* ファイル名サニタイズ */
+function _sanitizeFn(s){return (s||'').replace(/[\/\\?%*:|"<>\s]/g,'_');}
+/* dataURL を <a download> でDL */
+function _triggerDl(dataUrl, filename){
+  var a=document.createElement('a');
+  a.href=dataUrl; a.download=filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+}
+/* Firebase から data を取得 (IDBに無い場合のfallback) */
+function _fetchDraftDataFromFb(fbCfg, id, cb){
+  if(!fbCfg||!fbCfg.url||_fbIsPaused(fbCfg)){cb(null);return;}
+  var auth=fbCfg.secret?'?auth='+fbCfg.secret:'';
+  var url=fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data/'+id+'.json'+auth;
+  fetch(url).then(function(r){return r.ok?r.json():null;})
+    .then(function(d){cb(d);})
+    ["catch"](function(){cb(null);});
+}
+/* meta配列を1件ずつPNG化してDL連発
+   onProgress(i, total, name), onDone(okCount, failCount) */
+function exportAllDraftsAsPng(metaList, fbCfg, onProgress, onDone){
+  var i=0, ok=0, fail=0;
+  function next(){
+    if(i>=metaList.length){onDone(ok,fail);return;}
+    var m=metaList[i]; i++;
+    if(onProgress)onProgress(i, metaList.length, m.name||m.ticker||m.id);
+    function withData(d){
+      if(!d){fail++;setTimeout(next,80);return;}
+      _loadDraftImage(d, function(img){
+        if(!img){fail++;setTimeout(next,80);return;}
+        var png=_generateCombinedPng(img, d.strokes||[]);
+        if(!png){fail++;setTimeout(next,80);return;}
+        var dt=new Date(m.savedAt||Date.now());
+        var ds=dt.getFullYear()+('0'+(dt.getMonth()+1)).slice(-2)+('0'+dt.getDate()).slice(-2);
+        var fn=_sanitizeFn(ds+'_'+(m.ticker||'')+'_'+(m.name||'chart'))+'.png';
+        _triggerDl(png, fn);
+        ok++;
+        /* ブラウザのダウンロード連打抑制 */
+        setTimeout(next,400);
+      });
+    }
+    caLoadDataAsync(m.id, function(d){
+      if(d)withData(d);
+      else _fetchDraftDataFromFb(fbCfg, m.id, withData);
+    });
+  }
+  next();
+}
 
 function DraftLibrary(props){
   var onOpen=props.onOpen, onClose=props.onClose, fbCfg=props.fbCfg||{}, initialTicker=props.initialTicker||null;
@@ -6561,6 +6654,33 @@ function DraftLibrary(props){
           display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}},
           trash.length)
       ),
+      !showTrash&&ce("button",{onClick:function(){
+          var filteredMeta=selTicker?meta.filter(function(m){return m.ticker===selTicker;}):meta;
+          if(!filteredMeta.length){window.caToast('対象のdraftがありません','info');return;}
+          var target=selTicker?(selTicker+' の'):'全';
+          window.caConfirm(
+            '【画像mode廃止前の一括退避】\n'+
+            target+' '+filteredMeta.length+'件 を combined PNG として連続DLします。\n\n'+
+            '・画像+strokesを合成 (分析chart/参照画像は含まず)\n'+
+            '・ブラウザがポップアップを多数表示 → 「常に許可」設定推奨\n'+
+            '・処理時間: 約 '+Math.ceil(filteredMeta.length*0.5)+' 秒\n\n'+
+            '実行しますか?',
+            function(){
+              window.caToast('PNG一括DL開始 (0/'+filteredMeta.length+')','info');
+              exportAllDraftsAsPng(filteredMeta, fbCfg,
+                function(i,total,name){
+                  if(i%5===0||i===total)window.caToast('PNG一括DL '+i+'/'+total+' ('+(name||'')+')','info');
+                },
+                function(ok,fail){
+                  window.caToast('PNG一括DL完了: 成功 '+ok+' / 失敗 '+fail, fail>0?'error':'success');
+                }
+              );
+            }
+          );
+        },
+        style:Object.assign({},BT,{fontSize:13,fontWeight:700,background:"#0f766e",
+          color:"#fff",padding:"7px 12px",borderRadius:8})},
+        "📦 全PNG"),
       !showTrash&&ce("button",{onClick:function(){setAdding(true);setTimeout(function(){inputRef.current&&inputRef.current.focus();},50);},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,background:"#2563eb",
           color:"#fff",padding:"7px 14px",borderRadius:8})},
