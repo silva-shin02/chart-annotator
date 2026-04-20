@@ -13,7 +13,14 @@
 *,*::before,*::after{box-sizing:border-box}
 html,body{margin:0;padding:0;width:100%;height:100%;background:#111;color:#fff;
   font-family:-apple-system,'Helvetica Neue',sans-serif;
-  -webkit-tap-highlight-color:transparent;overscroll-behavior:none}
+  -webkit-tap-highlight-color:transparent;overscroll-behavior:none;
+  /* 2026-04-20: iOS Safari ブラウザジェスチャー抑止 (エッジスワイプ/プルリフレッシュ/ダブルタップズーム/長押しメニュー)
+     ピンチ(2本指)は touch-action:pinch-zoom で残す */
+  touch-action:pinch-zoom;
+  -webkit-touch-callout:none;-webkit-user-select:none;user-select:none;
+  overscroll-behavior-x:contain;overscroll-behavior-y:contain}
+/* 入力フィールドはテキスト選択許可 */
+input,textarea{-webkit-user-select:text;user-select:text;-webkit-touch-callout:default}
 #root{width:100%;height:100%}
 input[type=range]{accent-color:#6366F1}
 ::-webkit-scrollbar{width:4px;height:4px}
@@ -1327,7 +1334,8 @@ function DataChart(props){
     return v+(60-g);
   }
   /* C-uaxis: layoutRefベースで u軸対応の tm→x 変換 (side='cur'|'ref')
-     DataChart内 hitTest/crosshair/applyHorizSnap 等から使う */
+     DataChart内 hitTest/crosshair/applyHorizSnap 等から使う
+     2026-04-20: halfBarPx/innerW 反映 (1本目見切れ解消との整合) */
   function minToXWithSide(m, side){
     var L=layoutRef.current; if(!L)return 0;
     var tv=tmToVis(m)-L.tmVisStart;   // 0..tmVisSpan
@@ -1335,16 +1343,19 @@ function DataChart(props){
     if(!L.hasRef) u=tv;
     else if(side==='ref') u=tv;
     else u=tv+L.tmVisSpan+L.gapVis;
-    return L.padL+(u-L.uS)/L.uSpan*L.chartW;
+    var hb=L.halfBarPx||0, iw=L.innerW||L.chartW;
+    return L.padL+hb+(u-L.uS)/L.uSpan*iw;
   }
   /* x(canvas内 px) → {side,tm,u} 変換
      C8a: hasRef時 gap領域 [tmVisSpan, tmVisSpan+gapVis] は近い側にclamp
           gap前半 (ref側寄り) → side='ref', tm=15:30
           gap後半 (cur側寄り) → side='cur', tm=9:00
-          pan/cursorは自由通過、書込時は境界tmで止まる */
+          pan/cursorは自由通過、書込時は境界tmで止まる
+     2026-04-20: halfBarPx/innerW 反映 */
   function xToSideTm(xLocal){
     var L=layoutRef.current; if(!L)return {side:null,tm:null,u:null};
-    var u=L.uS+(xLocal-L.padL)/L.chartW*L.uSpan;
+    var hb=L.halfBarPx||0, iw=L.innerW||L.chartW;
+    var u=L.uS+(xLocal-L.padL-hb)/iw*L.uSpan;
     if(!L.hasRef)return {side:'cur',tm:visToTm(u+L.tmVisStart),u:u};
     if(u<L.tmVisSpan)return {side:'ref',tm:visToTm(u+L.tmVisStart),u:u};
     if(u<L.tmVisSpan+L.gapVis){
@@ -2653,8 +2664,14 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     if(side==='ref') return tv;
     return tv+tmVisSpan+gapVis;
   }
-  // u → x (view範囲でスケール)
-  function uToX(u){return padL+(u-uS)/uSpan*chartW;}
+  /* 2026-04-20: 1本目/最終本目の見切れ解消用マージン
+     uToX で padL+halfBarPx から描画エリア innerW にマッピング
+     → u=uS のローソクは中心が padL+halfBarPx、左端はさらに左(barW/2)でもpadL以上 */
+  var _baseStep=(tf==='5m'?5:1);
+  var _halfBarPx=Math.min((chartW/uSpan)*_baseStep*0.5, chartW*0.04);
+  var _innerW=chartW-_halfBarPx*2;
+  // u → x (view範囲でスケール、左右に半本分マージン)
+  function uToX(u){return padL+_halfBarPx+(u-uS)/uSpan*_innerW;}
   // tm+side → x (既存呼び出し互換: minToX(m,side))
   function minToX(m, side){return uToX(tmSideToU(m, side||'cur'));}
   function tToX(t, side){return minToX(tToMin(t), side);}
@@ -2679,12 +2696,14 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   if(vmax<=0) vmax=1;
   function vToY(v){return volBot-(v/vmax)*volH;}
 
-  /* レイアウト情報を ref に書き出し (十字カーソル計算用) — C-uaxis: u軸情報も */
+  /* レイアウト情報を ref に書き出し (十字カーソル計算用) — C-uaxis: u軸情報も
+     2026-04-20: halfBarPx/innerW 追加 (1本目/最終本目の見切れ解消マージン、minToXWithSide/xToSideTm 整合用) */
   if(layoutRef)layoutRef.current={padL:padL,padR:padR,padT:padT,padB:padB,
     chartW:chartW,priceTop:priceTop,priceBot:priceBot,volTop:volTop,volBot:volBot,
     priceH:priceH,pmin:pmin,pmax:pmax,
     uS:uS,uE:uE,uSpan:uSpan,uTotal:uTotal,
     tmVisStart:tmVisStart,tmVisSpan:tmVisSpan,gapVis:gapVis,
+    halfBarPx:_halfBarPx,innerW:_innerW,
     hasRef:hasRef};
 
   // 10円固定グリッド + 全10円ラベル (HSBI2準拠、実線の薄い横線)
@@ -2725,6 +2744,8 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   var gridSides = hasRef?['ref','cur']:['cur'];
   gridSides.forEach(function(sd){
     for(var m=540; m<=930; m+=stepMin){
+      /* 2026-04-20: 昼休み(11:30-12:30)中のラベルはスキップ (境界は下で別途描画) */
+      if(m>690 && m<750)continue;
       var u=tmSideToU(m,sd);
       if(u<uS-0.1||u>uE+0.1)continue;
       var x=uToX(u);
@@ -2735,7 +2756,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
       ctx.beginPath(); ctx.moveTo(x,priceTop); ctx.lineTo(x,volBot); ctx.stroke();
       ctx.fillStyle='#666'; ctx.fillText(tStr,x,volBot+4);
     }
-    // 昼休み境界
+    // 昼休み境界 (11:30, 12:30) — 縦線 + 時刻ラベル強制表示
     [690,750].forEach(function(m){
       var u=tmSideToU(m,sd);
       if(u<uS||u>uE)return;
@@ -2743,6 +2764,12 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
       ctx.strokeStyle='#2a2a2a'; ctx.setLineDash([2,3]); ctx.lineWidth=0.5;
       ctx.beginPath(); ctx.moveTo(x,priceTop); ctx.lineTo(x,volBot); ctx.stroke();
       ctx.setLineDash([]);
+      /* 2026-04-20: 11:30/12:30 は昼休みスキップで抜けるので、ここで時刻ラベルを強制描画 */
+      if(x>=padL-1&&x<=padL+chartW+1){
+        var hh2=Math.floor(m/60), mm2=m%60;
+        var tStr2=(hh2<10?'0':'')+hh2+':'+(mm2<10?'0':'')+mm2;
+        ctx.fillStyle='#666'; ctx.fillText(tStr2,x,volBot+4);
+      }
     });
   });
 
@@ -4948,22 +4975,21 @@ function ImageAnnotator(props){
             setAnalysisPShift(function(ps){return ps-dy*0.5;});
           }
         }),
-        /* floating undo/redo (分析モード用、画像モードと同スタイル) */
+        /* floating undo/redo (分析モード用)
+           2026-04-20: position:fixed化 + zIndex引き上げ (toolbar潜り込み防止) + タッチdrag対応 */
         ce("div",{
           style:Object.assign(
-            floatPosAnalysis?{position:"absolute",left:floatPosAnalysis.x,top:floatPosAnalysis.y}:{position:"absolute",top:IS_TOUCH?12:8,right:12},
-            {display:"flex",flexDirection:"column",gap:0,zIndex:10004,pointerEvents:"auto",userSelect:"none",touchAction:"none"}
+            floatPosAnalysis?{position:"fixed",left:floatPosAnalysis.x,top:floatPosAnalysis.y}:{position:"fixed",top:IS_TOUCH?80:70,right:16},
+            {display:"flex",flexDirection:"column",gap:0,zIndex:10010,pointerEvents:"auto",userSelect:"none",touchAction:"none"}
           )
         },
           ce("div",{
             onMouseDown:function(e){
               e.stopPropagation();e.preventDefault();
-              var panel=e.currentTarget.parentNode.parentNode; // analysis panel div
-              var aRect=panel.getBoundingClientRect();
               var fRect=e.currentTarget.parentNode.getBoundingClientRect();
               analysisFloatDragRef.current={
                 startX:e.clientX,startY:e.clientY,
-                ox:fRect.left-aRect.left,oy:fRect.top-aRect.top
+                ox:fRect.left,oy:fRect.top  /* 2026-04-20: fixed座標系 (viewport基準) */
               };
               function mv(ev){
                 if(!analysisFloatDragRef.current)return;
@@ -4972,6 +4998,32 @@ function ImageAnnotator(props){
               }
               function up(){analysisFloatDragRef.current=null;document.removeEventListener("mousemove",mv);document.removeEventListener("mouseup",up);}
               document.addEventListener("mousemove",mv);document.addEventListener("mouseup",up);
+            },
+            /* 2026-04-20: タッチdrag対応 (iPad等) */
+            onTouchStart:function(e){
+              if(e.touches.length!==1)return;
+              e.stopPropagation();
+              var t=e.touches[0];
+              var fRect=e.currentTarget.parentNode.getBoundingClientRect();
+              analysisFloatDragRef.current={
+                startX:t.clientX,startY:t.clientY,
+                ox:fRect.left,oy:fRect.top
+              };
+              function mv(ev){
+                if(!analysisFloatDragRef.current||!ev.touches.length)return;
+                ev.preventDefault();
+                var d=analysisFloatDragRef.current, tc=ev.touches[0];
+                setFloatPosAnalysis({x:d.ox+tc.clientX-d.startX,y:d.oy+tc.clientY-d.startY});
+              }
+              function up(){
+                analysisFloatDragRef.current=null;
+                document.removeEventListener("touchmove",mv);
+                document.removeEventListener("touchend",up);
+                document.removeEventListener("touchcancel",up);
+              }
+              document.addEventListener("touchmove",mv,{passive:false});
+              document.addEventListener("touchend",up);
+              document.addEventListener("touchcancel",up);
             },
             style:{height:IS_TOUCH?18:14,display:"flex",alignItems:"center",justifyContent:"center",cursor:"grab",
               background:"rgba(255,255,255,0.7)",borderRadius:"10px 10px 0 0",border:"1px solid rgba(0,0,0,0.1)",
@@ -7079,6 +7131,41 @@ function App(){
       }
     },500);
     return function(){clearTimeout(tid);};
+  },[]);
+  /* 2026-04-20: iPad/iOS Safari のブラウザ干渉ジェスチャーを一括無効化
+     - エッジスワイプ (左右端からのバック/進む)
+     - エッジスワイプ (上下端からのアドレスバー再表示/タブ切替)
+     - 2本指ピンチ拡大 (gesturestart/gesturechange/gestureend)
+     - ダブルタップ拡大 (300ms以内の連続tap) */
+  useEffect(function(){
+    var EDGE=20;  // エッジ判定幅 (px)
+    function onTouchStart(e){
+      if(e.touches.length!==1)return;
+      var t=e.touches[0];
+      var w=window.innerWidth, h=window.innerHeight;
+      if(t.clientX<EDGE||t.clientX>w-EDGE||t.clientY<EDGE||t.clientY>h-EDGE){
+        e.preventDefault();
+      }
+    }
+    function onGesture(e){e.preventDefault();}
+    var lastTap=0;
+    function onTouchEnd(e){
+      var now=Date.now();
+      if(now-lastTap<300){e.preventDefault();}
+      lastTap=now;
+    }
+    document.addEventListener('touchstart',onTouchStart,{passive:false});
+    document.addEventListener('gesturestart',onGesture,{passive:false});
+    document.addEventListener('gesturechange',onGesture,{passive:false});
+    document.addEventListener('gestureend',onGesture,{passive:false});
+    document.addEventListener('touchend',onTouchEnd,{passive:false});
+    return function(){
+      document.removeEventListener('touchstart',onTouchStart);
+      document.removeEventListener('gesturestart',onGesture);
+      document.removeEventListener('gesturechange',onGesture);
+      document.removeEventListener('gestureend',onGesture);
+      document.removeEventListener('touchend',onTouchEnd);
+    };
   },[]);
   var s0=useState(function(){
     // リロード時にセッションから復元
