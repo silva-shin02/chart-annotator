@@ -2260,7 +2260,9 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   var pStart=Math.ceil(pmin/pStep)*pStep;
   var pEnd=Math.floor(pmax/pStep)*pStep;
   var pxPerStep=(priceH/(pmax-pmin))*pStep;
-  var labelEvery=pxPerStep>=24?1 : pxPerStep>=12?2 : pxPerStep>=6?5 : pxPerStep>=3?10 : 20;
+  /* 2026-04-20: 必ず10円刻みでラベル表示 (ユーザー要望、pxPerStep依存の間引き廃止)
+     スマホ等で密度が高すぎて文字が重なる可能性あり、その場合はズーム操作で回避 */
+  var labelEvery=1;
   for(var p=pStart;p<=pEnd;p+=pStep){
     var y=pToY(p);
     ctx.strokeStyle='#262626'; ctx.lineWidth=1;
