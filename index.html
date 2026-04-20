@@ -985,7 +985,7 @@ function DisplaySettingsModal(props){
   /* 価格軸ラベル固定ピクセル */
   var sPPx=useState(caLoadPricePx()); var pricePx=sPPx[0],setPricePxLocal=sPPx[1];
   function updatePricePx(v){
-    var n=(v|0); if(n<0)n=0; if(n>40)n=40;
+    var n=(v|0); if(n<0)n=0; if(n>100)n=100;
     setPricePxLocal(n); caSavePricePx(n);
   }
   /* ツール自動復帰 ON/OFF */
@@ -1036,8 +1036,8 @@ function DisplaySettingsModal(props){
             border:"1px solid #1e3a5f"}},
             ce("div",{style:{fontSize:13,fontWeight:700,color:"#a5b4fc",marginBottom:4}},"📏 価格軸ラベル間隔"),
             ce("div",{style:{fontSize:10,color:"#666",marginBottom:8,lineHeight:1.5}},
-              "10円あたりのピクセル数を固定します。",ce("br",null),
-              "0 = 自動 (画面高さに合わせて可変)、1〜40 = 固定 (超過時は縦スクロール)"),
+              "10円あたりの最低保証ピクセル数。",ce("br",null),
+              "0 = 完全自動、1〜100 = 画面フィット優先&超過時のみ縦スクロール"),
             ce("div",{style:{display:"flex",alignItems:"center",gap:6}},
               /* − ボタン */
               ce("button",{onClick:function(){updatePricePx(pricePx-1);},
@@ -1045,10 +1045,10 @@ function DisplaySettingsModal(props){
                   color:"#fff",border:"1px solid #3a3a3a",borderRadius:6,
                   cursor:"pointer",fontFamily:"inherit",flexShrink:0,userSelect:"none"}},
                 "−"),
-              ce("input",{type:"range",min:0,max:40,step:1,value:pricePx,
+              ce("input",{type:"range",min:0,max:100,step:1,value:pricePx,
                 onChange:function(e){updatePricePx(+e.target.value);},
                 style:{flex:1,accentColor:"#6366F1"}}),
-              ce("input",{type:"number",min:0,max:40,value:pricePx,
+              ce("input",{type:"number",min:0,max:100,value:pricePx,
                 onChange:function(e){var v=parseInt(e.target.value,10);if(isNaN(v))v=0;updatePricePx(v);},
                 style:{width:56,padding:"6px 8px",background:"#2a2a2a",border:"1px solid #3a3a3a",
                   borderRadius:6,color:"#fff",fontSize:14,textAlign:"center"}}),
@@ -1060,9 +1060,10 @@ function DisplaySettingsModal(props){
                 "＋"),
               ce("span",{style:{fontSize:11,color:"#666",flexShrink:0}},"px/10円")
             ),
-            pricePx===0&&ce("div",{style:{fontSize:10,color:"#666",marginTop:6}},"現在: 自動モード"),
-            pricePx>0&&ce("div",{style:{fontSize:10,color:"#a5b4fc",marginTop:6,fontWeight:600}},
-              "現在: 10円 = "+pricePx+"px 固定")
+            pricePx===0&&ce("div",{style:{fontSize:10,color:"#666",marginTop:6}},"現在: 自動モード (画面フィット)"),
+            pricePx>0&&ce("div",{style:{fontSize:10,color:"#a5b4fc",marginTop:6,fontWeight:600,lineHeight:1.5}},
+              "最低保証: 10円 = "+pricePx+"px",ce("br",null),
+              "※ 画面に余裕あれば自動拡張 (画面フィット) — 超過時のみ縦スクロール発動")
           ),
           /* ツール自動復帰 ON/OFF */
           ce("div",{style:{background:"#1a1a1a",borderRadius:10,padding:"10px 12px",
@@ -1645,9 +1646,25 @@ function DataChart(props){
       /* 分離モード: hidden canvas に従来通り全描画 → price/vol canvas に drawImage クロップ転写 */
       var hidden=hiddenCanvasRef.current;
       if(!hidden)return;
-      drawDataChart(hidden,bars,data,dimWithPx,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx,refBars,refData,getCandleGap(tf),refStrokes,moveHint);
+      /* 2026-04-20: iPad カクつき対策 — iPad のみ DPR=1 に固定して描画負荷を 1/4 に軽減
+         (内部解像度低下で画面はやや粗くなるが、drawDataChart + drawImage 負荷を大幅削減) */
+      var origDPR=window.devicePixelRatio||1;
+      var forceDPR=(caIsIPad()&&origDPR>1)?1:origDPR;
+      var dprOverridden=false;
+      if(forceDPR!==origDPR){
+        try{Object.defineProperty(window,'devicePixelRatio',{value:forceDPR,configurable:true});
+          dprOverridden=true;
+        }catch(e){}
+      }
+      try{
+        drawDataChart(hidden,bars,data,dimWithPx,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx,refBars,refData,getCandleGap(tf),refStrokes,moveHint);
+      } finally {
+        if(dprOverridden){
+          try{Object.defineProperty(window,'devicePixelRatio',{value:origDPR,configurable:true});}catch(e){}
+        }
+      }
       var L=layoutRef.current; if(!L){drawCrosshair();return;}
-      var dpr=window.devicePixelRatio||1;
+      var dpr=forceDPR;  /* drawImage も forceDPR に合わせる (hidden canvas のサイズと整合) */
       var W=dim.w;
       /* 境界: priceBot + 6 以上の部分が vol+時間軸エリア */
       var boundary=L.priceBot+6;  /* CSS px */
@@ -2826,17 +2843,20 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   var padL=40, padR=40, padT=10, padB=22;
   /* 2026-04-20: pricePx 設定時は priceH を固定 (priceRange幅 / 10 * pricePx)、
      必要に応じて canvas を縦拡張 (外側コンテナで overflow-y:auto 受け)
-     2026-04-20: priceH に上限 3000px を設定 (極端な価格幅で canvas 縦が巨大化するバグ抑止) */
+     2026-04-20: priceH に上限 3000px を設定 (極端な価格幅で canvas 縦が巨大化するバグ抑止)
+     2026-04-20: pricePx は「10円あたりの最低保証ピクセル数」— 画面に余裕あれば autoPriceH (画面フィット) を採用して下部空白を解消、
+                 minPriceH が画面を超える場合のみ縦スクロール */
   var PRICE_H_MAX=3000;
   var pricePx=(dim&&typeof dim.pricePx==='number'&&dim.pricePx>0)?dim.pricePx:0;
   var volH, priceH;
   if(pricePx>0 && priceRange){
-    /* 固定モード: priceH = pricePx 要求値 (画面に余裕あっても pricePx の効果を維持、
-       画面下部に余白が出る場合は priceScrollArea の背景 chartBg で表示) */
-    priceH=Math.max(44, Math.min(PRICE_H_MAX, Math.ceil((priceRange.max-priceRange.min)/10*pricePx)));
+    /* min保証モード: minPriceH (pricePx要求) と autoPriceH (画面フィット) の大きい方を採用 */
+    var minPriceH=Math.max(44, Math.min(PRICE_H_MAX, Math.ceil((priceRange.max-priceRange.min)/10*pricePx)));
     volH=Math.max(44,Math.round((H-padT-padB)*0.13));
+    var autoPriceH=H-padT-padB-volH-6;
+    priceH=Math.max(minPriceH, autoPriceH);
     var requiredH=padT+priceH+6+volH+padB;
-    if(requiredH>H)H=requiredH;  /* canvas を縦拡張 (超過時のみ) */
+    if(requiredH>H)H=requiredH;  /* minPriceH が画面超え時のみ拡張→縦スクロール */
   } else {
     /* 従来通り: dim.h 基準で按分 */
     volH=Math.max(44,Math.round((H-padT-padB)*0.13));
