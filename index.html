@@ -1309,6 +1309,8 @@ function DataChart(props){
     window.addEventListener('ca_price_px_changed',handler);
     return function(){window.removeEventListener('ca_price_px_changed',handler);};
   },[]);
+  /* 2026-04-21: C案 全体スケールzoom (CSS的に canvas を拡大/縮小、データ空間12 px/u 維持) */
+  var stZm=useState(1); var zoom=stZm[0],setZoom=stZm[1];
   /* 2026-04-20: ca_chart_bg_changed listener — 背景色変更時に再描画トリガ */
   var stBg=useState(caLoadChartBg()); var chartBg=stBg[0],setChartBg=stBg[1];
   useEffect(function(){
@@ -1369,6 +1371,8 @@ function DataChart(props){
 
   /* 2026-04-20: 座標計算用の rect 取得 — container rect を返す (分離モード廃止で単純化) */
   function getCanvasRect(){
+    /* 2026-04-21: canvasRef 優先 (CSS zoom 時にbounding rect が scaled sizeを返すため hit test が自動対応) */
+    if(canvasRef.current)return canvasRef.current.getBoundingClientRect();
     if(containerRef.current)return containerRef.current.getBoundingClientRect();
     return {left:0,top:0,width:0,height:0};
   }
@@ -1534,10 +1538,19 @@ function DataChart(props){
           try{Object.defineProperty(window,'devicePixelRatio',{value:origDPR,configurable:true});}catch(e){}
         }
       }
+      /* 2026-04-21: C案 CSS zoom — canvas style width/height を zoom倍に設定
+         (canvas内部buffer: dim.w*dpr 固定 → 拡大時 pixel upscaling でやや blur、
+          データ空間は 12 px/u 維持) */
+      try{
+        canvas.style.width=(dim.w*zoom)+'px';
+        canvas.style.height=(dim.h*zoom)+'px';
+        var ov=overlayRef.current;
+        if(ov){ov.style.width=(dim.w*zoom)+'px';ov.style.height=(dim.h*zoom)+'px';}
+      }catch(e){}
       drawCrosshair();
     });
     return function(){cancelAnimationFrame(rafId);};
-  },[data,bars,dim,tf,view,pShift,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes,moveHint,pricePx,chartBg]);
+  },[data,bars,dim,tf,view,pShift,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes,moveHint,pricePx,chartBg,zoom]);
 
   // showCrosshair 切替時: OFFなら消す、ONなら再描画
   useEffect(function(){
@@ -1857,8 +1870,8 @@ function DataChart(props){
     drawCrosshair();
   }
 
-  // ホイール: 縦ズーム (pricePx変更) + Ctrl+ホイール: 縦シフト (pShift)
-  // 2026-04-21: X軸ズーム廃止 (バー横幅 12 px/u 固定)。X軸はドラッグpanのみ
+  // ホイール: C案 全体一律スケール zoom 変更 + Ctrl+ホイール: 縦シフト (pShift)
+  // 2026-04-21: X軸ズーム廃止 (データ空間 12 px/u 固定)。ホイール→画面全体スケール
   useEffect(function(){
     var el=containerRef.current; if(!el)return;
     function handler(e){
@@ -1868,15 +1881,13 @@ function DataChart(props){
         setPShift(function(p){return p + (e.deltaY>0?-0.02:0.02);});
         return;
       }
-      /* 通常ホイール = 縦ズーム (pricePx変更)
-         deltaY<0 (up) → pricePx増加 (ズームイン、価格軸拡大)
-         deltaY>0 (down) → pricePx減少 (ズームアウト)
-         感度: 1刻みで段階的に (速すぎないよう deltaY 大小問わず ±1) */
-      var delta=e.deltaY<0?1:-1;
-      var cur=caLoadPricePx();
-      var next=cur+delta;
-      if(next<1)next=1; if(next>100)next=100;
-      if(next!==cur)caSavePricePx(next);  /* localStorage保存 + 'ca_price_px_changed' event 発火で再描画 */
+      /* 通常ホイール = 全体スケール変更 (CSS-zoom的) */
+      var factor=e.deltaY<0?1.1:1/1.1;
+      setZoom(function(z){
+        var nz=z*factor;
+        if(nz<0.5)nz=0.5; if(nz>5)nz=5;
+        return nz;
+      });
     }
     el.addEventListener('wheel',handler,{passive:false});
     return function(){el.removeEventListener('wheel',handler);};
@@ -2465,7 +2476,7 @@ function DataChart(props){
         uCenter:tpC.u,           // ピンチ開始時の指位置のu値 (ズーム中この u が cxRatio位置に固定)
         pCenter:tpC.p,           // ピンチ中心の価格
         side:tpC.side,             // 参考 (cur/ref)
-        ppx0:caLoadPricePx()     // 2026-04-21: ピンチ開始時pricePx (縦ズーム基準値)
+        zoom0:zoom              // 2026-04-21: C案 ピンチ開始時zoom (全体スケール基準値)
       };
       // 既存の描画/パン/移動をキャンセル
       drawRef.current={on:false};
@@ -2479,7 +2490,7 @@ function DataChart(props){
   }
   function onTouchMove(e){
     if(props.textInputActive)return;
-    // ピンチ中 — 2026-04-21: X軸ズーム廃止、縦ズーム (pricePx) + pShift のみ
+    // ピンチ中 — 2026-04-21: C案 全体スケール zoom 変更 + pShift (縦パン)
     if(pinchRef.current&&e.touches.length>=2){
       if(e.preventDefault)e.preventDefault();
       var t1=e.touches[0], t2=e.touches[1];
@@ -2489,20 +2500,17 @@ function DataChart(props){
       var pr=pinchRef.current;
       if(!d||!pr.d0)return;
       var r=d/pr.d0;
-      if(r<0.1)r=0.1; if(r>20)r=20;
-      var L=layoutRef.current;
-      if(!L||!containerRef.current){return;}
-      /* ピンチ広げ (r>1) = ズームイン = pricePx 増加
-         ピンチ狭め (r<1) = ズームアウト = pricePx 減少
-         pinchRef.ppx0 (開始時pricePx) を保存しておき、r の対数比例で増減 */
-      var base=pr.ppx0||caLoadPricePx()||35;
-      var nextPpx=Math.round(base*r);
-      if(nextPpx<1)nextPpx=1; if(nextPpx>100)nextPpx=100;
-      if(nextPpx!==caLoadPricePx())caSavePricePx(nextPpx);
+      /* zoom 更新 (開始zoom × 距離比) */
+      var nz=(pr.zoom0||1)*r;
+      if(nz<0.5)nz=0.5; if(nz>5)nz=5;
+      setZoom(nz);
       /* 価格軸縦シフト: 中心のy移動量で pShift 変化 */
-      var priceH=L.priceH;
-      var yenPerPx=(L.pmax-L.pmin)/priceH;
-      setPShift(pr.ps0 + (cy-pr.cy0)*yenPerPx);
+      var L=layoutRef.current;
+      if(L){
+        var priceH=L.priceH;
+        var yenPerPx=(L.pmax-L.pmin)/priceH;
+        setPShift(pr.ps0 + (cy-pr.cy0)*yenPerPx);
+      }
       return;
     }
     if(!e.touches.length)return;
@@ -2594,7 +2602,7 @@ function DataChart(props){
         drawCrosshair();
       }
     },
-    style:{flex:1,position:"relative",background:chartBg,overflow:"hidden",overflowX:"hidden",
+    style:{flex:1,position:"relative",background:chartBg,overflow:"auto",
        cursor:drawTool==='pan'?"grab":"default",touchAction:"none",userSelect:"none",
        /* 2026-04-20: iPad Safari の長押しメニュー (コピー/選択部分を検索等) を抑止 */
        WebkitTouchCallout:"none",WebkitUserSelect:"none"}
