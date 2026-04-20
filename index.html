@@ -1126,6 +1126,7 @@ function DataChart(props){
 
   // データロード時: 全バーから priceRange を算出 (10円境界に丸める)
   // C1+: hasRef時は refBars も含めて外接 min/max で両chart共通レンジに (仕様①a)
+  // B完全版: bars は EMA 連続化後の値で priceRange を算出 (refBars は原本でOK)
   useEffect(function(){
     if(!bars.length){setPriceRange(null);return;}
     var mn=Infinity, mx=-Infinity;
@@ -1137,7 +1138,8 @@ function DataChart(props){
         });
       });
     }
-    scan(bars);
+    var enhBars=computeEnhancedBars(bars, hasRef?refBars:null);
+    scan(enhBars);
     if(hasRef)scan(refBars);
     // 10円境界に丸める + 余白 (±5円: 10円1マスが画面上広く見えるよう最小限)
     mn=Math.floor(mn/10)*10 - 5;
@@ -1350,7 +1352,7 @@ function DataChart(props){
     function handler(e){
       e.preventDefault();
       var rect=el.getBoundingClientRect();
-      var padL=10, padR=60;
+      var padL=40, padR=40;
       var chartW=rect.width-padL-padR;
       var cxAbs=e.clientX-rect.left;
       var cx=cxAbs-padL;
@@ -1811,7 +1813,7 @@ function DataChart(props){
     }
     if(drawTool!=='pan'&&!ctrlPanRef.current){panStartRef.current=null;return;}
     var rect2=containerRef.current.getBoundingClientRect();
-    var padL=10, padR=60;
+    var padL=40, padR=40;
     var chartW=rect2.width-padL-padR;
     /* C-uaxis: u軸上でpan — 画面1chartW幅のswipeで 1uSpan分のpan */
     var uSpan0=p.uE-p.uS;
@@ -2045,9 +2047,48 @@ function DataChart(props){
   );
 }
 
+/* EMA 前日連続化ヘルパー (B完全版)
+   refData がある場合、当日 bars の ema9/22/50/200 を refBars 最終EMA値から連続計算して上書き。
+   VWAP は Python 側値そのまま (Hyper SBI 2 と同じ当日リセット挙動)。
+   非破壊: bars/refBars は変更せず新配列を返す。 */
+function computeEnhancedBars(bars, refBars){
+  if(!bars||!bars.length) return bars||[];
+  if(!refBars||!refBars.length) return bars;
+  var emaKeys=['ema9','ema22','ema50','ema200'];
+  // refBars 末尾走査: 各EMAキーの最後の有効値を個別に取得
+  var lastEma={ema9:null, ema22:null, ema50:null, ema200:null};
+  for(var i=refBars.length-1; i>=0; i--){
+    var rb=refBars[i];
+    for(var j=0;j<emaKeys.length;j++){
+      var k=emaKeys[j];
+      if(lastEma[k]==null && rb[k]!=null) lastEma[k]=rb[k];
+    }
+    if(lastEma.ema9!=null&&lastEma.ema22!=null&&lastEma.ema50!=null&&lastEma.ema200!=null) break;
+  }
+  // 全て null なら連続化不可、原本返却
+  if(lastEma.ema9==null&&lastEma.ema22==null&&lastEma.ema50==null&&lastEma.ema200==null) return bars;
+  // α値: 2/(N+1)
+  var alphas={ema9: 2/10, ema22: 2/23, ema50: 2/51, ema200: 2/201};
+  var prev={ema9:lastEma.ema9, ema22:lastEma.ema22, ema50:lastEma.ema50, ema200:lastEma.ema200};
+  return bars.map(function(b){
+    var nb=Object.assign({}, b);
+    for(var j=0;j<emaKeys.length;j++){
+      var k=emaKeys[j];
+      if(prev[k]!=null && b.c!=null){
+        nb[k]=alphas[k]*b.c + (1-alphas[k])*prev[k];
+        prev[k]=nb[k];
+      }
+      // prev[k]==null の場合 (前日データ欠落): 既存 b[k] をそのまま維持
+    }
+    return nb;
+  });
+}
+
 /* DataChart 描画関数 (Canvas 2D 直接描画、HSBI2色、ズーム対応、10円固定グリッド、時刻+価格ストローク)
    C-uaxis: view は u軸単位 {uS, uE} で管理 — 連続した1本の時間軸上を pan/zoom */
 function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,editingTextIdx,refBars,refData,gapVis,refStrokes,hideHint){
+  // B完全版: EMA 前日連続化 (refData ありなら bars の EMA を上書き)
+  bars=computeEnhancedBars(bars, refBars);
   var dpr=window.devicePixelRatio||1;
   var W=dim.w, H=dim.h;
   canvas.width=Math.round(W*dpr);
@@ -2060,7 +2101,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   ctx.fillRect(0,0,W,H);
 
   // レイアウト
-  var padL=10, padR=60, padT=10, padB=22;
+  var padL=40, padR=40, padT=10, padB=22;
   var volH=Math.max(44,Math.round((H-padT-padB)*0.13));
   var priceH=H-padT-padB-volH-6;
   var chartW=W-padL-padR;
@@ -2154,7 +2195,10 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     ctx.beginPath(); ctx.moveTo(padL,Math.round(y)+0.5); ctx.lineTo(padL+chartW,Math.round(y)+0.5); ctx.stroke();
     if((p/pStep)%labelEvery===0){
       ctx.fillStyle='#888';
-      ctx.fillText(p.toFixed(0),padL+chartW+52,y);
+      // 右側ラベル (textAlign='right' 前提、末端より4px内側)
+      ctx.fillText(p.toFixed(0),padL+chartW+padR-4,y);
+      // 左側ラベル (左padLの右端より4px内側、textAlign='right' 継承)
+      ctx.fillText(p.toFixed(0),padL-4,y);
     }
   }
 
@@ -3913,7 +3957,7 @@ function ImageAnnotator(props){
     var origDPR=window.devicePixelRatio;
     Object.defineProperty(window,'devicePixelRatio',{value:1,configurable:true});
     try{
-      /* priceRange計算 (bars+refBars の外接 min/max) */
+      /* priceRange計算 (bars+refBars の外接 min/max) — B完全版: EMA 連続化後で scan */
       var mn=Infinity, mx=-Infinity;
       function scanBars(barsArr){
         barsArr.forEach(function(b){
@@ -3923,7 +3967,8 @@ function ImageAnnotator(props){
           });
         });
       }
-      scanBars(bars);
+      var enhBarsPng=computeEnhancedBars(bars, refBars.length?refBars:null);
+      scanBars(enhBarsPng);
       if(refBars.length)scanBars(refBars);
       mn=Math.floor(mn/10)*10 - 5;
       mx=Math.ceil(mx/10)*10 + 5;
