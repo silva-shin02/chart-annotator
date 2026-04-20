@@ -2266,9 +2266,9 @@ function ImageAnnotator(props){
   var stAX=useState(true); var showCrosshair=stAX[0],setShowCrosshair=stAX[1];
   var analysisDataRef=useRef(analysisData);  // triggerAutoSave内で最新値参照用
   useEffect(function(){analysisDataRef.current=analysisData;},[analysisData]);
-  /* C5+: VJなどイベントハンドラ内で最新refAnalysisを参照するためのref */
-  var refAnalysisRef=useRef(refAnalysis);
-  useEffect(function(){refAnalysisRef.current=refAnalysis;},[refAnalysis]);
+  /* C8a-bugfix2: refAnalysisRef の宣言は stRA (line 2348) の後ろに移動した
+     (元位置ではvar hoistingで refAnalysis=undefined を保持してしまい、
+      ref側書込時に refAnalysisRef.current=null で早期returnする不具合があった) */
   /* C6: ref側ストローク書込用のauto-saveタイマー (帯域抑制のため1.5s debounce) */
   var refAutoSaveTimerRef=useRef(null);
   /* C6: ref側analysisStrokesをFirebaseにPATCH (帯域抑制: analysisStrokesのみ送信)
@@ -2346,6 +2346,11 @@ function ImageAnnotator(props){
   var stFPA=useState(null);  var floatPosAnalysis=stFPA[0],setFloatPosAnalysis=stFPA[1];
   /* F1: 過去チャート参照 (null=閉じている / object=開いている) */
   var stRA=useState(null);   var refAnalysis=stRA[0],setRefAnalysis=stRA[1];
+  /* C5+: VJなどイベントハンドラ内で最新refAnalysisを参照するためのref
+     C8a-bugfix2: 宣言位置は必ず stRA の後ろ — 前に置くとvar hoistingで undefined をキャプチャして
+                  ref側書込フローで refAnalysisRef.current=null による早期returnが発生 */
+  var refAnalysisRef=useRef(refAnalysis);
+  useEffect(function(){refAnalysisRef.current=refAnalysis;},[refAnalysis]);
   /* F1: 過去チャート選択モーダルの表示 */
   var stRPicker=useState(false); var showRefAnalysisPicker=stRPicker[0],setShowRefAnalysisPicker=stRPicker[1];
   /* F2: 両チャート連動用の共有 state */
