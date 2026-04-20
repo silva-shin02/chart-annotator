@@ -1565,9 +1565,36 @@ function DataChart(props){
      controlled: props.pShift / props.onPShiftChange があればそれを使う */
   var sPY=useState(0); var pShiftLocal=sPY[0],setPShiftLocal=sPY[1];
   var pShift=props.pShift!==undefined?props.pShift:pShiftLocal;
-  var setPShift=props.onPShiftChange||setPShiftLocal;
+  var _setPShiftRaw=props.onPShiftChange||setPShiftLocal;
   /* 価格レンジ (全バーから算出、タイム軸ズーム・パンに影響されない固定値) */
   var sPR=useState(null); var priceRange=sPR[0],setPriceRange=sPR[1];
+  /* 2026-04-20: pShift 可動範囲制限 — データ最安値-50 〜 最高値+50 の外に出ない
+     (bars のどこかが常に画面内に残る = 表示範囲が完全にデータ外に行かない)
+     pmin=priceRange.min+pShift, pmax=priceRange.max+pShift
+     条件: pmax >= bars.min-50 AND pmin <= bars.max+50 */
+  function clampPShift(ps){
+    if(typeof ps!=='number'||!isFinite(ps))return 0;
+    if(!bars||!bars.length||!priceRange)return ps;
+    var bL=Infinity, bH=-Infinity;
+    bars.forEach(function(b){if(b.l<bL)bL=b.l;if(b.h>bH)bH=b.h;});
+    if(refBars&&refBars.length){
+      refBars.forEach(function(b){if(b.l<bL)bL=b.l;if(b.h>bH)bH=b.h;});
+    }
+    if(!isFinite(bL)||!isFinite(bH))return ps;
+    var BUF=50;
+    var pShiftMin=(bL-BUF)-priceRange.max;
+    var pShiftMax=(bH+BUF)-priceRange.min;
+    if(ps<pShiftMin)ps=pShiftMin;
+    if(ps>pShiftMax)ps=pShiftMax;
+    return ps;
+  }
+  function setPShift(v){
+    if(typeof v==='function'){
+      _setPShiftRaw(function(prev){return clampPShift(v(prev));});
+    } else {
+      _setPShiftRaw(clampPShift(v));
+    }
+  }
   /* 選択ストロークの index (lasso用) */
   var sSI=useState(null); var selectedIdx=sSI[0],setSelectedIdx=sSI[1];
   /* 2026-04-20: 移動中のストローク非表示用ヒント — moveRefの{side,idx}と同期、
@@ -1640,6 +1667,9 @@ function DataChart(props){
   // メインチャート描画
   useEffect(function(){
     if(!bars.length||!priceRange)return;
+    /* 2026-04-20: iPad カクつき対策 — 連続する state 変更 (pan/pinch 中) を
+       RAF にまとめて1フレームに1回だけ描画 */
+    var rafId=requestAnimationFrame(function(){
     /* 2026-04-20: pricePx 設定を dim に含めて渡す (drawDataChart 内でpriceH拡張判定) */
     var dimWithPx=Object.assign({},dim,{pricePx:pricePx});
     if(pricePx>0){
@@ -1713,6 +1743,9 @@ function DataChart(props){
     }
     // 描画直後に十字カーソルも再描画 (リサイズ・ズーム等でレイアウト変わった時)
     drawCrosshair();
+    });
+    /* RAF cancel 用 cleanup — 次の再レンダー前に未実行 RAF を破棄 */
+    return function(){cancelAnimationFrame(rafId);};
   },[data,bars,dim,tf,view,pShift,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes,moveHint,pricePx,chartBg]);
 
   // showCrosshair 切替時: OFFなら消す、ONなら再描画
@@ -3032,8 +3065,23 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
 
   // bar描画ヘルパー (ローソク+ヒゲ+出来高を1本分)
   // barW: u軸上の1tmVis単位のpx幅
+  // 2026-04-20: priceエリア clip で pShift 時にローソク/ヒゲが出来高エリアにはみ出すのを防ぐ
   var barW=Math.max(1,(chartW/uSpan)*(tf==='5m'?5:1)*0.8);
   function drawBarSet(barsArr,side){
+    /* 出来高 (vol エリア、clip なしで描画) */
+    barsArr.forEach(function(b){
+      var cx=minToX(tToMin(b.t),side);
+      var up=b.c>=b.o;
+      var col=up?COL_UP:COL_DN;
+      ctx.fillStyle=col;
+      var vy=vToY(b.v);
+      ctx.fillRect(cx-barW/2,vy,barW,volBot-vy);
+    });
+    /* ローソク本体+ヒゲ (price エリア内のみに制限 — clip) */
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(padL,priceTop,chartW,priceH);
+    ctx.clip();
     barsArr.forEach(function(b){
       var cx=minToX(tToMin(b.t),side);
       var up=b.c>=b.o;
@@ -3044,14 +3092,17 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
       var y1=pToY(b.o), y2=pToY(b.c);
       var yTop=Math.min(y1,y2), bh=Math.max(1,Math.abs(y1-y2));
       ctx.fillRect(cx-barW/2,yTop,barW,bh);
-      var vy=vToY(b.v);
-      ctx.fillRect(cx-barW/2,vy,barW,volBot-vy);
     });
+    ctx.restore();
   }
   drawBarSet(visibleBars,'cur');
   if(hasRef)drawBarSet(visibleRefBars,'ref');
 
-  // EMA + VWAP ライン
+  // EMA + VWAP ライン (price エリア内のみ — clip)
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(padL,priceTop,chartW,priceH);
+  ctx.clip();
   var lines=[
     {k:'ema9',   col:'#ffffff', label:'EMA9'},
     {k:'ema22',  col:'#ffa9ff', label:'EMA22'},
@@ -3115,6 +3166,8 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
       }
     });
   }
+  /* 2026-04-20: EMA/VWAP/strokes の clip 解除 (drawBarSet 直後の ctx.save で始まった clip) */
+  ctx.restore();
 
   // ヘッダー描画は廃止（ticker+date は panel 上部の HTML メタ行に表示済み）
   // 直近終値の水平ライン+ラベル: 2026-04-20 削除
