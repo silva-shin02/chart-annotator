@@ -1038,14 +1038,26 @@ function DisplaySettingsModal(props){
             ce("div",{style:{fontSize:10,color:"#666",marginBottom:8,lineHeight:1.5}},
               "10円あたりのピクセル数を固定します。",ce("br",null),
               "0 = 自動 (画面高さに合わせて可変)、1〜40 = 固定 (超過時は縦スクロール)"),
-            ce("div",{style:{display:"flex",alignItems:"center",gap:10}},
+            ce("div",{style:{display:"flex",alignItems:"center",gap:6}},
+              /* − ボタン */
+              ce("button",{onClick:function(){updatePricePx(pricePx-1);},
+                style:{width:32,height:32,fontSize:18,fontWeight:700,background:"#2a2a2a",
+                  color:"#fff",border:"1px solid #3a3a3a",borderRadius:6,
+                  cursor:"pointer",fontFamily:"inherit",flexShrink:0,userSelect:"none"}},
+                "−"),
               ce("input",{type:"range",min:0,max:40,step:1,value:pricePx,
                 onChange:function(e){updatePricePx(+e.target.value);},
                 style:{flex:1,accentColor:"#6366F1"}}),
               ce("input",{type:"number",min:0,max:40,value:pricePx,
                 onChange:function(e){var v=parseInt(e.target.value,10);if(isNaN(v))v=0;updatePricePx(v);},
-                style:{width:60,padding:"6px 8px",background:"#2a2a2a",border:"1px solid #3a3a3a",
+                style:{width:56,padding:"6px 8px",background:"#2a2a2a",border:"1px solid #3a3a3a",
                   borderRadius:6,color:"#fff",fontSize:14,textAlign:"center"}}),
+              /* ＋ ボタン */
+              ce("button",{onClick:function(){updatePricePx(pricePx+1);},
+                style:{width:32,height:32,fontSize:18,fontWeight:700,background:"#2a2a2a",
+                  color:"#fff",border:"1px solid #3a3a3a",borderRadius:6,
+                  cursor:"pointer",fontFamily:"inherit",flexShrink:0,userSelect:"none"}},
+                "＋"),
               ce("span",{style:{fontSize:11,color:"#666",flexShrink:0}},"px/10円")
             ),
             pricePx===0&&ce("div",{style:{fontSize:10,color:"#666",marginTop:6}},"現在: 自動モード"),
@@ -1647,27 +1659,35 @@ function DataChart(props){
       if(Math.abs(volAreaH-volFixedH)>1){
         setVolFixedH(volAreaH);
       }
-      /* priceCanvas: 上半分を転写 (高さ=boundary) */
+      /* priceCanvas: 上半分を転写 (高さ=boundary)
+         2026-04-20: canvas.width/height 代入は内部で完全clear+再アロケートされ重いので、
+                     サイズ変更時のみ再設定 (iPad カクつき対策) */
       var pc=priceCanvasRef.current;
       if(pc){
-        pc.width=Math.round(W*dpr);
-        pc.height=Math.round(boundary*dpr);
-        try{pc.style.width=W+'px';pc.style.height=boundary+'px';}catch(e){}
+        var pW=Math.round(W*dpr), pH=Math.round(boundary*dpr);
+        if(pc.width!==pW)pc.width=pW;
+        if(pc.height!==pH)pc.height=pH;
+        try{
+          if(pc.style.width!==W+'px')pc.style.width=W+'px';
+          if(pc.style.height!==boundary+'px')pc.style.height=boundary+'px';
+        }catch(e){}
         var pctx=pc.getContext('2d');
-        pctx.clearRect(0,0,pc.width,pc.height);
-        pctx.drawImage(hidden, 0,0, Math.round(W*dpr),Math.round(boundary*dpr),
-                               0,0, Math.round(W*dpr),Math.round(boundary*dpr));
+        pctx.clearRect(0,0,pW,pH);
+        pctx.drawImage(hidden, 0,0, pW,pH, 0,0, pW,pH);
       }
       /* volCanvas: 下半分を転写 (高さ=volAreaH、hidden 内 Y offset=boundary から) */
       var vc=volCanvasRef.current;
       if(vc){
-        vc.width=Math.round(W*dpr);
-        vc.height=Math.round(volAreaH*dpr);
-        try{vc.style.width=W+'px';vc.style.height=volAreaH+'px';}catch(e){}
+        var vW=Math.round(W*dpr), vH=Math.round(volAreaH*dpr);
+        if(vc.width!==vW)vc.width=vW;
+        if(vc.height!==vH)vc.height=vH;
+        try{
+          if(vc.style.width!==W+'px')vc.style.width=W+'px';
+          if(vc.style.height!==volAreaH+'px')vc.style.height=volAreaH+'px';
+        }catch(e){}
         var vctx=vc.getContext('2d');
-        vctx.clearRect(0,0,vc.width,vc.height);
-        vctx.drawImage(hidden, 0,Math.round(boundary*dpr), Math.round(W*dpr),Math.round(volAreaH*dpr),
-                               0,0, Math.round(W*dpr),Math.round(volAreaH*dpr));
+        vctx.clearRect(0,0,vW,vH);
+        vctx.drawImage(hidden, 0,Math.round(boundary*dpr), vW,vH, 0,0, vW,vH);
       }
     } else {
       /* 従来モード: 表示canvasに直接描画 */
@@ -1825,16 +1845,24 @@ function DataChart(props){
     var boundary=L?(L.priceBot+6):0;
     /* 2026-04-20: volAreaH は実描画域のみ (volH + padB) */
     var volAreaH=L?((L.volBot-L.priceBot-6)+L.padB):0;
-    /* priceOverlay サイズ同期 */
+    /* priceOverlay サイズ同期 (2026-04-20: 同値時再設定スキップ、iPad 負荷軽減) */
     if(pov){
-      pov.width=Math.round(W*dpr);
-      pov.height=Math.round(boundary*dpr);
-      try{pov.style.width=W+'px';pov.style.height=boundary+'px';}catch(e){}
+      var povW=Math.round(W*dpr), povH=Math.round(boundary*dpr);
+      if(pov.width!==povW)pov.width=povW;
+      if(pov.height!==povH)pov.height=povH;
+      try{
+        if(pov.style.width!==W+'px')pov.style.width=W+'px';
+        if(pov.style.height!==boundary+'px')pov.style.height=boundary+'px';
+      }catch(e){}
     }
     if(vov&&volAreaH>0){
-      vov.width=Math.round(W*dpr);
-      vov.height=Math.round(volAreaH*dpr);
-      try{vov.style.width=W+'px';vov.style.height=volAreaH+'px';}catch(e){}
+      var vovW=Math.round(W*dpr), vovH=Math.round(volAreaH*dpr);
+      if(vov.width!==vovW)vov.width=vovW;
+      if(vov.height!==vovH)vov.height=vovH;
+      try{
+        if(vov.style.width!==W+'px')vov.style.width=W+'px';
+        if(vov.style.height!==volAreaH+'px')vov.style.height=volAreaH+'px';
+      }catch(e){}
     }
     if(!L){return;}
     var pctx=pov?pov.getContext('2d'):null;
@@ -2798,20 +2826,17 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   var padL=40, padR=40, padT=10, padB=22;
   /* 2026-04-20: pricePx 設定時は priceH を固定 (priceRange幅 / 10 * pricePx)、
      必要に応じて canvas を縦拡張 (外側コンテナで overflow-y:auto 受け)
-     2026-04-20: priceH に上限 3000px を設定 (極端な価格幅で canvas 縦が巨大化するバグ抑止)
-     2026-04-20: pricePx は「最低保証 px/10円」に解釈変更 — 画面に余裕あれば autoPriceH (画面フィット) を使い下部空白を解消、
-                 画面を超える場合のみ minPriceH (pricePx固定) で縦スクロール */
+     2026-04-20: priceH に上限 3000px を設定 (極端な価格幅で canvas 縦が巨大化するバグ抑止) */
   var PRICE_H_MAX=3000;
   var pricePx=(dim&&typeof dim.pricePx==='number'&&dim.pricePx>0)?dim.pricePx:0;
   var volH, priceH;
   if(pricePx>0 && priceRange){
-    /* 最低保証モード: minPriceH (pricePx要求) と autoPriceH (画面フィット) の大きい方を採用 */
-    var minPriceH=Math.max(44, Math.min(PRICE_H_MAX, Math.ceil((priceRange.max-priceRange.min)/10*pricePx)));
+    /* 固定モード: priceH = pricePx 要求値 (画面に余裕あっても pricePx の効果を維持、
+       画面下部に余白が出る場合は priceScrollArea の背景 chartBg で表示) */
+    priceH=Math.max(44, Math.min(PRICE_H_MAX, Math.ceil((priceRange.max-priceRange.min)/10*pricePx)));
     volH=Math.max(44,Math.round((H-padT-padB)*0.13));
-    var autoPriceH=H-padT-padB-volH-6;
-    priceH=Math.max(minPriceH, autoPriceH);
     var requiredH=padT+priceH+6+volH+padB;
-    if(requiredH>H)H=requiredH;  /* minPriceH が画面超え時のみ拡張→縦スクロール */
+    if(requiredH>H)H=requiredH;  /* canvas を縦拡張 (超過時のみ) */
   } else {
     /* 従来通り: dim.h 基準で按分 */
     volH=Math.max(44,Math.round((H-padT-padB)*0.13));
@@ -2924,11 +2949,11 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     /* 2026-04-20: ラウンドナンバーは段階的に太線化
        1000円刻み: 最太 (1.5px, #3c3c3c)
        100円刻み: 中太 (1.2px, #323232)
-       50円刻み:  やや太 (1.1px, #2c2c2c)
+       50円刻み:  100円と同じ (1.2px, #323232) — 2026-04-20 ユーザー要望で100に合わせる
        10円刻み:  従来 (1px,   #262626) */
     if(p%1000===0){ ctx.strokeStyle='#3c3c3c'; ctx.lineWidth=1.5; }
     else if(p%100===0){ ctx.strokeStyle='#323232'; ctx.lineWidth=1.2; }
-    else if(p%50===0){ ctx.strokeStyle='#2c2c2c'; ctx.lineWidth=1.1; }
+    else if(p%50===0){ ctx.strokeStyle='#323232'; ctx.lineWidth=1.2; }
     else { ctx.strokeStyle='#262626'; ctx.lineWidth=1; }
     ctx.beginPath(); ctx.moveTo(padL,Math.round(y)+0.5); ctx.lineTo(padL+chartW,Math.round(y)+0.5); ctx.stroke();
     if((p/pStep)%labelEvery===0){
