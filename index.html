@@ -1517,11 +1517,11 @@ function DataChart(props){
       var L=layoutRef.current; if(!L){drawCrosshair();return;}
       var dpr=window.devicePixelRatio||1;
       var W=dim.w;
-      /* hidden の実ピクセル高さ (drawDataChart が拡張済み) */
-      var Hhidden=Math.round(hidden.height/dpr);
       /* 境界: priceBot + 6 以上の部分が vol+時間軸エリア */
       var boundary=L.priceBot+6;  /* CSS px */
-      var volAreaH=Hhidden-boundary;
+      /* 2026-04-20: volAreaH は「実描画域のみ」に限定 (hidden canvas の下端余白を含めない)
+         = volH + padB (volTop=boundary から volBot+padB まで) */
+      var volAreaH=(L.volBot-L.priceBot-6)+L.padB;
       if(volAreaH<10){drawCrosshair();return;}  /* 異常値保護 */
       /* priceCanvas: 上半分を転写 (高さ=boundary) */
       var pc=priceCanvasRef.current;
@@ -1699,8 +1699,8 @@ function DataChart(props){
     var W=dim.w;
     var L=layoutRef.current;
     var boundary=L?(L.priceBot+6):0;
-    var Hhidden=hiddenCanvasRef.current?Math.round(hiddenCanvasRef.current.height/dpr):0;
-    var volAreaH=Hhidden-boundary;
+    /* 2026-04-20: volAreaH は実描画域のみ (volH + padB) */
+    var volAreaH=L?((L.volBot-L.priceBot-6)+L.padB):0;
     /* priceOverlay サイズ同期 */
     if(pov){
       pov.width=Math.round(W*dpr);
@@ -2557,6 +2557,9 @@ function DataChart(props){
 
   /* 2026-04-20: 分離モード判定 — pricePx>0 時は price/vol 2canvas 分離構造 */
   var isSplit=pricePx>0;
+  /* 2026-04-20: volFixedArea の高さ (CSS) — 描画後 volDrawH で更新可能だが、
+     JSX 時点では固定値で枠を確保 (iPadOS Safari の flex 計算失敗を回避) */
+  var VOL_FIXED_H=120;  /* volH(~65) + padB(22) + 余裕 */
   return ce("div",{
     ref:containerRef,
     onMouseDown:onMouseDown,
@@ -2579,29 +2582,31 @@ function DataChart(props){
       }
     },
     style:isSplit
-      ? {flex:1,position:"relative",background:chartBg,display:"flex",flexDirection:"column",
+      ? {flex:1,position:"relative",background:chartBg,minHeight:0,
          overflow:"hidden",cursor:drawTool==='pan'?"grab":"default",
          touchAction:"none",userSelect:"none"}
       : {flex:1,position:"relative",background:chartBg,overflow:"hidden",overflowX:"hidden",
          cursor:drawTool==='pan'?"grab":"default",touchAction:"none",userSelect:"none"}
   },
     isSplit
-      /* === 分離モード === */
+      /* === 分離モード (absolute positioning で確実に画面下端固定) === */
       ? [
           /* 実描画先 (display:none、drawDataChart はここに描画) */
           ce("canvas",{key:"hidden",ref:hiddenCanvasRef,style:{display:"none"}}),
-          /* priceScrollArea: 縦スクロール可、内部に priceCanvas + priceOverlay */
+          /* priceScrollArea: top:0 〜 bottom:VOL_FIXED_H、縦スクロール可 */
           ce("div",{key:"pscroll",ref:priceScrollRef,
-            style:{flex:1,position:"relative",overflowY:"auto",overflowX:"hidden",
-              touchAction:drawTool==='pan'?"pan-y":"none",minHeight:0}},
+            style:{position:"absolute",top:0,left:0,right:0,bottom:VOL_FIXED_H,
+              overflowY:"auto",overflowX:"hidden",
+              touchAction:drawTool==='pan'?"pan-y":"none"}},
             ce("canvas",{ref:priceCanvasRef,
               style:{display:"block",width:"100%",pointerEvents:"none"}}),
             ce("canvas",{ref:priceOverlayRef,
               style:{position:"absolute",top:0,left:0,width:"100%",pointerEvents:"none"}})
           ),
-          /* volFixedArea: 画面下部固定、内部に volCanvas + volOverlay + ズーム表示 */
+          /* volFixedArea: 画面下端固定 (bottom:0、固定高さ) */
           ce("div",{key:"volfix",
-            style:{position:"relative",overflow:"hidden",flexShrink:0,background:chartBg}},
+            style:{position:"absolute",bottom:0,left:0,right:0,height:VOL_FIXED_H,
+              overflow:"hidden",background:chartBg,borderTop:"1px solid #1a1a1a"}},
             ce("canvas",{ref:volCanvasRef,
               style:{display:"block",width:"100%",pointerEvents:"none"}}),
             ce("canvas",{ref:volOverlayRef,
@@ -2670,12 +2675,14 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   // レイアウト
   var padL=40, padR=40, padT=10, padB=22;
   /* 2026-04-20: pricePx 設定時は priceH を固定 (priceRange幅 / 10 * pricePx)、
-     必要に応じて canvas を縦拡張 (外側コンテナで overflow-y:auto 受け) */
+     必要に応じて canvas を縦拡張 (外側コンテナで overflow-y:auto 受け)
+     2026-04-20: priceH に上限 3000px を設定 (極端な価格幅で canvas 縦が巨大化するバグ抑止) */
+  var PRICE_H_MAX=3000;
   var pricePx=(dim&&typeof dim.pricePx==='number'&&dim.pricePx>0)?dim.pricePx:0;
   var volH, priceH;
   if(pricePx>0 && priceRange){
     /* 固定モード: priceH = 必要ピクセル、volH は内側比率で最低44px */
-    priceH=Math.max(44, Math.ceil((priceRange.max-priceRange.min)/10*pricePx));
+    priceH=Math.max(44, Math.min(PRICE_H_MAX, Math.ceil((priceRange.max-priceRange.min)/10*pricePx)));
     volH=Math.max(44,Math.round((H-padT-padB)*0.13));
     var requiredH=padT+priceH+6+volH+padB;
     if(requiredH>H)H=requiredH;  /* canvas を縦拡張 */
@@ -2788,7 +2795,15 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   var labelEvery=1;
   for(var p=pStart;p<=pEnd;p+=pStep){
     var y=pToY(p);
-    ctx.strokeStyle='#262626'; ctx.lineWidth=1;
+    /* 2026-04-20: ラウンドナンバーは段階的に太線化
+       1000円刻み: 最太 (1.5px, #3c3c3c)
+       100円刻み: 中太 (1.2px, #323232)
+       50円刻み:  やや太 (1.1px, #2c2c2c)
+       10円刻み:  従来 (1px,   #262626) */
+    if(p%1000===0){ ctx.strokeStyle='#3c3c3c'; ctx.lineWidth=1.5; }
+    else if(p%100===0){ ctx.strokeStyle='#323232'; ctx.lineWidth=1.2; }
+    else if(p%50===0){ ctx.strokeStyle='#2c2c2c'; ctx.lineWidth=1.1; }
+    else { ctx.strokeStyle='#262626'; ctx.lineWidth=1; }
     ctx.beginPath(); ctx.moveTo(padL,Math.round(y)+0.5); ctx.lineTo(padL+chartW,Math.round(y)+0.5); ctx.stroke();
     if((p/pStep)%labelEvery===0){
       ctx.fillStyle='#888';
