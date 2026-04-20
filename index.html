@@ -580,6 +580,21 @@ function CancelConfirmModal(props){
 
 /* ─── FbSettingsModal ───────────────────────────────────────── */
 var FB_CFG_KEY='chart_annotator_fb_v1';
+
+/* 2026-04-20: 価格軸ラベル間固定ピクセル設定
+   0 = 自動 (従来通り priceH から自動算出、labelEvery=1 で常に10円刻み)
+   N>0 = 固定 (10円 = N px、必要に応じてチャート縦拡張しスクロール) */
+var CA_PRICE_PX_KEY='ca_price_gap_px_v1';
+function caLoadPricePx(){
+  try{var v=localStorage.getItem(CA_PRICE_PX_KEY);var n=v?parseInt(v,10):0;return (n>=0&&n<=100)?n:0;}
+  catch(e){return 0;}
+}
+function caSavePricePx(v){
+  var n=(v|0); if(n<0)n=0; if(n>100)n=100;
+  try{localStorage.setItem(CA_PRICE_PX_KEY,String(n));}catch(e){}
+  try{window.dispatchEvent(new CustomEvent('ca_price_px_changed',{detail:n}));}catch(e){}
+}
+
 function FbSettingsModal(props){
   var cfg=props.cfg, onSave=props.onSave, onClose=props.onClose;
   var s0=useState(cfg.url||'');    var url=s0[0],setUrl=s0[1];
@@ -590,6 +605,9 @@ function FbSettingsModal(props){
   var s4=useState(null); var cleanupStatus=s4[0],setCleanupStatus=s4[1]; // null|'running'|'done:N'|'error'
   /* Phase 4 (2026-04-20): 旧画像draft完全削除 status */
   var sLIC=useState(null); var legacyImgCleanStatus=sLIC[0],setLegacyImgCleanStatus=sLIC[1];
+  /* 2026-04-20: 価格軸ラベル固定ピクセル設定 */
+  var sPPx=useState(caLoadPricePx()); var pricePx=sPPx[0],setPricePxLocal=sPPx[1];
+  function updatePricePx(v){setPricePxLocal(v);caSavePricePx(v);}
   function save(){
     var nc={url:url.trim(),secret:secret.trim(),apiKey:apiKey.trim(),storageBucket:bucket.trim(),paused:paused};
     try{localStorage.setItem(FB_CFG_KEY,JSON.stringify(nc));}catch(e){}
@@ -791,6 +809,27 @@ function FbSettingsModal(props){
               "✓ 完了: "+legacyImgCleanStatus.substr(5)+" 件"),
             legacyImgCleanStatus&&legacyImgCleanStatus.indexOf('error')===0&&ce("div",{style:{fontSize:11,color:"#fca5a5",marginTop:8}},
               "✕ "+legacyImgCleanStatus)
+          ),
+          /* 2026-04-20: 表示設定 - 価格軸ラベル固定ピクセル */
+          ce("div",{style:{background:"#1a1a1a",borderRadius:10,padding:"10px 12px",
+            border:"1px solid #1e3a5f"}},
+            ce("div",{style:{fontSize:12,fontWeight:700,color:"#a5b4fc",marginBottom:4}},"📏 価格軸ラベル間隔"),
+            ce("div",{style:{fontSize:10,color:"#666",marginBottom:8,lineHeight:1.5}},
+              "10円あたりのピクセル数を固定します。",ce("br",null),
+              "0 = 自動 (画面高さに合わせて可変)、1〜40 = 固定 (超過時は縦スクロール)"),
+            ce("div",{style:{display:"flex",alignItems:"center",gap:10}},
+              ce("input",{type:"range",min:0,max:40,step:1,value:pricePx,
+                onChange:function(e){updatePricePx(+e.target.value);},
+                style:{flex:1,accentColor:"#6366F1"}}),
+              ce("input",{type:"number",min:0,max:40,value:pricePx,
+                onChange:function(e){var v=parseInt(e.target.value,10);if(isNaN(v))v=0;updatePricePx(Math.max(0,Math.min(40,v)));},
+                style:{width:60,padding:"6px 8px",background:"#2a2a2a",border:"1px solid #3a3a3a",
+                  borderRadius:6,color:"#fff",fontSize:14,textAlign:"center"}}),
+              ce("span",{style:{fontSize:11,color:"#666",flexShrink:0}},"px/10円")
+            ),
+            pricePx===0&&ce("div",{style:{fontSize:10,color:"#666",marginTop:6}},"現在: 自動モード"),
+            pricePx>0&&ce("div",{style:{fontSize:10,color:"#a5b4fc",marginTop:6,fontWeight:600}},
+              "現在: 10円 = "+pricePx+"px 固定")
           ),
           ce("div",{style:{display:"flex",gap:10,marginTop:4}},
             ce("button",{onClick:onClose,
@@ -1110,6 +1149,13 @@ function DataChart(props){
   var rafRef=useRef(null);
   var drawRef=useRef({on:false});  // ドラッグ式描画状態 {on, sTM, sP, cTM, cP, pts(freehand用)}
   var ctrlPanRef=useRef(false);    // Ctrl+drag パン状態
+  /* 2026-04-20: 価格軸ラベル固定ピクセル設定 (localStorage連動、設定変更で再描画) */
+  var stPPx=useState(caLoadPricePx()); var pricePx=stPPx[0],setPricePx=stPPx[1];
+  useEffect(function(){
+    function handler(e){setPricePx(caLoadPricePx());}
+    window.addEventListener('ca_price_px_changed',handler);
+    return function(){window.removeEventListener('ca_price_px_changed',handler);};
+  },[]);
   /* C8a: 昼休み(11:30=690〜12:30=750)の60分を g分(=ローソク1本分) に圧縮した仮想時間軸
      drawDataChart と同じ定義 (props.tf依存) */
   function tmToVis(t){
@@ -1255,10 +1301,12 @@ function DataChart(props){
   // メインチャート描画
   useEffect(function(){
     var canvas=canvasRef.current; if(!canvas||!bars.length||!priceRange)return;
-    drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx,refBars,refData,getCandleGap(tf),refStrokes,moveHint);
+    /* 2026-04-20: pricePx 設定を dim に含めて渡す (drawDataChart 内でpriceH拡張判定) */
+    var dimWithPx=Object.assign({},dim,{pricePx:pricePx});
+    drawDataChart(canvas,bars,data,dimWithPx,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx,refBars,refData,getCandleGap(tf),refStrokes,moveHint);
     // 描画直後に十字カーソルも再描画 (リサイズ・ズーム等でレイアウト変わった時)
     drawCrosshair();
-  },[data,bars,dim,tf,view,pShift,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes,moveHint]);
+  },[data,bars,dim,tf,view,pShift,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes,moveHint,pricePx]);
 
   // showCrosshair 切替時: OFFなら消す、ONなら再描画
   useEffect(function(){
@@ -2108,11 +2156,11 @@ function DataChart(props){
         drawCrosshair();
       }
     },
-    style:{flex:1,position:"relative",background:"#000000",overflow:"hidden",cursor:drawTool==='pan'?"grab":"default",touchAction:"none",userSelect:"none"}
+    style:{flex:1,position:"relative",background:"#000000",overflow:pricePx>0?"auto":"hidden",overflowX:"hidden",cursor:drawTool==='pan'?"grab":"default",touchAction:pricePx>0?"pan-y":"none",userSelect:"none"}
   },
-    ce("canvas",{ref:canvasRef,style:{display:"block",width:"100%",height:"100%",pointerEvents:"none"}}),
+    ce("canvas",{ref:canvasRef,style:{display:"block",width:"100%",height:pricePx>0?"auto":"100%",pointerEvents:"none"}}),
     /* 十字カーソル用オーバーレイ (常に配置、showCrosshair=false時は空) */
-    ce("canvas",{ref:overlayRef,style:{position:"absolute",inset:0,width:"100%",height:"100%",pointerEvents:"none"}}),
+    ce("canvas",{ref:overlayRef,style:{position:"absolute",top:0,left:0,width:"100%",height:pricePx>0?"auto":"100%",pointerEvents:"none"}}),
     /* ズーム倍率表示 (右下) — C-uaxis: uTotal/uSpan */
     ce("div",{style:{position:"absolute",right:8,bottom:6,fontSize:10,color:"#555",pointerEvents:"none"}},
       ((getUTotal(hasRef)/((view.uE||0)-(view.uS||0)||1))).toFixed(1)+'×')
@@ -2163,8 +2211,32 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   bars=computeEnhancedBars(bars, refBars);
   var dpr=window.devicePixelRatio||1;
   var W=dim.w, H=dim.h;
+
+  // レイアウト
+  var padL=40, padR=40, padT=10, padB=22;
+  /* 2026-04-20: pricePx 設定時は priceH を固定 (priceRange幅 / 10 * pricePx)、
+     必要に応じて canvas を縦拡張 (外側コンテナで overflow-y:auto 受け) */
+  var pricePx=(dim&&typeof dim.pricePx==='number'&&dim.pricePx>0)?dim.pricePx:0;
+  var volH, priceH;
+  if(pricePx>0 && priceRange){
+    /* 固定モード: priceH = 必要ピクセル、volH は内側比率で最低44px */
+    priceH=Math.max(44, Math.ceil((priceRange.max-priceRange.min)/10*pricePx));
+    volH=Math.max(44,Math.round((H-padT-padB)*0.13));
+    var requiredH=padT+priceH+6+volH+padB;
+    if(requiredH>H)H=requiredH;  /* canvas を縦拡張 */
+  } else {
+    /* 従来通り: dim.h 基準で按分 */
+    volH=Math.max(44,Math.round((H-padT-padB)*0.13));
+    priceH=H-padT-padB-volH-6;
+  }
   canvas.width=Math.round(W*dpr);
   canvas.height=Math.round(H*dpr);
+  /* 固定モード: canvas の CSS 高さも実H に合わせる (scroll用) */
+  if(pricePx>0){
+    try{canvas.style.height=H+'px';}catch(e){}
+  } else {
+    try{canvas.style.height='';}catch(e){}  /* リセット */
+  }
   var ctx=canvas.getContext('2d');
   ctx.setTransform(dpr,0,0,dpr,0,0);
 
@@ -2172,10 +2244,6 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   ctx.fillStyle='#000000';
   ctx.fillRect(0,0,W,H);
 
-  // レイアウト
-  var padL=40, padR=40, padT=10, padB=22;
-  var volH=Math.max(44,Math.round((H-padT-padB)*0.13));
-  var priceH=H-padT-padB-volH-6;
   var chartW=W-padL-padR;
   var priceTop=padT, priceBot=padT+priceH;
   var volTop=priceBot+6, volBot=volTop+volH;
@@ -5811,27 +5879,50 @@ function ImageAnnotator(props){
         if(id){
           var d=imgDataRef.current;
           var chartName=img._name||img.name||'chart';
-          var data={orig_base64:d.orig_base64||d.base64,orig_mt:d.orig_mt||d.mt,
-            strokes:strokesRef.current,name:chartName};
-          caSaveData(id,data);
-          // メタも更新（サムネイル + 名前 + 保存日時）
-          rebuild(strokesRef.current);
-          var thumb=canvasRef.current?caGenThumb(compositeCanvas()):(img._thumb||'');
+          /* 2026-04-20: JSONのみdraft と画像modeで処理分岐 */
+          var isJsonOnly=!!(img&&img.analysisData&&!(img.orig_base64||img.base64));
           var now=Date.now();
-          var analysisDate=(analysisDataRef.current&&analysisDataRef.current.date)||'';  // Picker日付ソート用
-          var localMeta=caLoadMeta();
-          var found=false;
-          var nm=localMeta.map(function(m){
-            if(m.id===id){found=true;return Object.assign({},m,{name:chartName,thumb:thumb,savedAt:now,analysisDate:analysisDate});}
-            return m;
-          });
-          if(!found){
-            var ticker=savedTickerRef.current||img._ticker||'';
-            nm.push({id:id,ticker:ticker,name:chartName,savedAt:now,thumb:thumb,analysisDate:analysisDate});
+          var analysisDate=(analysisDataRef.current&&analysisDataRef.current.date)||'';
+          var savedTickerLocal=savedTickerRef.current||img._ticker||null;
+          function _finalize(thumb){
+            var localMeta=caLoadMeta();
+            var found=false;
+            var nm=localMeta.map(function(m){
+              if(m.id===id){found=true;return Object.assign({},m,{name:chartName,thumb:thumb,savedAt:now,analysisDate:analysisDate});}
+              return m;
+            });
+            if(!found){
+              var ticker=savedTickerLocal||'';
+              nm.push({id:id,ticker:ticker,name:chartName,savedAt:now,thumb:thumb,analysisDate:analysisDate});
+            }
+            caSaveMeta(nm);
+            if(thumb)caSaveThumb(id,thumb);
+            onClose(savedTickerLocal);
           }
-          caSaveMeta(nm);
+          rebuild(strokesRef.current);
+          if(isJsonOnly){
+            /* JSONのみdraft: analysisData + analysisStrokes を保持してDataChartからthumb生成 */
+            var dataJ={
+              analysisData:analysisDataRef.current||img.analysisData||null,
+              analysisStrokes:analysisStrokesRef.current||{'1m':[],'5m':[]},
+              name:chartName,
+              _v:now
+            };
+            caSaveData(id,dataJ);
+            generateAnalysisThumb(dataJ.analysisData, function(thumb){
+              _finalize(thumb||img._thumb||'');
+            });
+          } else {
+            /* 画像mode (移行期、既存画像draft): 従来通り */
+            var dataI={orig_base64:d.orig_base64||d.base64,orig_mt:d.orig_mt||d.mt,
+              strokes:strokesRef.current,name:chartName};
+            caSaveData(id,dataI);
+            var thumb=canvasRef.current?caGenThumb(compositeCanvas()):(img._thumb||'');
+            _finalize(thumb);
+          }
+        } else {
+          onClose(savedTickerRef.current||img._ticker||null);
         }
-        onClose(savedTickerRef.current||img._ticker||null);
       },
       onBack:function(){setCancelConfirm(false);}
     }),
