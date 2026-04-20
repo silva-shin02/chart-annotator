@@ -121,7 +121,16 @@ if(!window.caConfirm){
 var ce         = R.createElement;   // ← h ではなく ce を使う
 
 var IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+/* 2026-04-20: ジョイスティック表示判定 — Surface Pro 等「タッチ+マウス両対応 PC」を除外
+   any-pointer: fine = デバイスに細かいポインタ (マウス/トラックパッド) が含まれる
+   → PC扱いでジョイスティック非表示。純粋タッチデバイス (iPad等) のみ表示 */
+var SHOW_JOYSTICK = IS_TOUCH && !(window.matchMedia && window.matchMedia('(any-pointer: fine)').matches);
 var HAS_HOVER = typeof matchMedia!=='undefined' && matchMedia('(hover: hover)').matches;
+/* 2026-04-20: ジョイスティック表示判定 — Surface Pro 等「タッチ+マウス併用」PCでは非表示
+   (any-pointer: fine) = デバイスのいずれかの入力機器が精密ポインタ (マウス/トラックパッド等)
+   iPad単体: fine無し → 表示 / Surface+キーボード: fine有り → 非表示 */
+var HAS_FINE_POINTER = typeof matchMedia!=='undefined' && matchMedia('(any-pointer: fine)').matches;
+var SHOW_JOYSTICK = IS_TOUCH && !HAS_FINE_POINTER;
 /* C-uaxis+C6+C7: 過去chartと現在chartを同一キャンバスに連結表示 (旧左右分離レイアウトはC7で削除) */
 /* C8a: 隙間幅はローソク足1本分 (1m=1分, 5m=5分)。昼休み(60分)と夜間gapの両方に適用 */
 function getCandleGap(tf){ return tf==='1m'?1:5; }
@@ -1455,6 +1464,8 @@ function DataChart(props){
   var ctrlPanRef=useRef(false);    // Ctrl+drag パン状態
   /* 2026-04-20: パームリジェクション用 — Apple Pencil 最終検知タイムスタンプ */
   var lastPenAtRef=useRef(0);
+  /* 2026-04-20: トリプルタップ検出用 — [{t:timestamp, x, y}, ...] */
+  var tripleTapRef=useRef([]);
   /* 2026-04-20: 出来高下端固定モード用 refs (pricePx>0 時のみ使用)
      - hiddenCanvasRef: 従来通りの単一canvas描画先 (display:none)
      - priceCanvasRef: 上段 (scrollable 内)、hidden の price 部分を drawImage 転写
@@ -1531,13 +1542,8 @@ function DataChart(props){
   var pinchRef=useRef(null);       // 2本指ピンチ状態 {d0,s0,e0,ps0,tmC,midX,midY,active}
   var containerRef=useRef(null);
 
-  /* 2026-04-20: 座標計算用の rect 取得 — 分離モード (pricePx>0) では priceCanvas の rect、
-     それ以外 (pricePx=0) は従来 containerRef の rect を返す。
-     getBoundingClientRect は clientY ベースなのでスクロール位置は自動的に反映される */
+  /* 2026-04-20: 座標計算用の rect 取得 — container rect を返す (分離モード廃止で単純化) */
   function getCanvasRect(){
-    if(pricePx>0&&priceCanvasRef.current){
-      return priceCanvasRef.current.getBoundingClientRect();
-    }
     if(containerRef.current)return containerRef.current.getBoundingClientRect();
     return {left:0,top:0,width:0,height:0};
   }
@@ -1562,39 +1568,13 @@ function DataChart(props){
   var setView=props.onViewChange||setViewLocal;
   var panStartRef=useRef(null);
   /* 価格軸の縦シフト (yen単位、タイム軸ズーム非依存)
-     controlled: props.pShift / props.onPShiftChange があればそれを使う */
+     controlled: props.pShift / props.onPShiftChange があればそれを使う
+     2026-04-20: clamp ロジック削除 — 縦無限スクロール */
   var sPY=useState(0); var pShiftLocal=sPY[0],setPShiftLocal=sPY[1];
   var pShift=props.pShift!==undefined?props.pShift:pShiftLocal;
-  var _setPShiftRaw=props.onPShiftChange||setPShiftLocal;
+  var setPShift=props.onPShiftChange||setPShiftLocal;
   /* 価格レンジ (全バーから算出、タイム軸ズーム・パンに影響されない固定値) */
   var sPR=useState(null); var priceRange=sPR[0],setPriceRange=sPR[1];
-  /* 2026-04-20: pShift 可動範囲制限 — データ最安値-50 〜 最高値+50 の外に出ない
-     (bars のどこかが常に画面内に残る = 表示範囲が完全にデータ外に行かない)
-     pmin=priceRange.min+pShift, pmax=priceRange.max+pShift
-     条件: pmax >= bars.min-50 AND pmin <= bars.max+50 */
-  function clampPShift(ps){
-    if(typeof ps!=='number'||!isFinite(ps))return 0;
-    if(!bars||!bars.length||!priceRange)return ps;
-    var bL=Infinity, bH=-Infinity;
-    bars.forEach(function(b){if(b.l<bL)bL=b.l;if(b.h>bH)bH=b.h;});
-    if(refBars&&refBars.length){
-      refBars.forEach(function(b){if(b.l<bL)bL=b.l;if(b.h>bH)bH=b.h;});
-    }
-    if(!isFinite(bL)||!isFinite(bH))return ps;
-    var BUF=50;
-    var pShiftMin=(bL-BUF)-priceRange.max;
-    var pShiftMax=(bH+BUF)-priceRange.min;
-    if(ps<pShiftMin)ps=pShiftMin;
-    if(ps>pShiftMax)ps=pShiftMax;
-    return ps;
-  }
-  function setPShift(v){
-    if(typeof v==='function'){
-      _setPShiftRaw(function(prev){return clampPShift(v(prev));});
-    } else {
-      _setPShiftRaw(clampPShift(v));
-    }
-  }
   /* 選択ストロークの index (lasso用) */
   var sSI=useState(null); var selectedIdx=sSI[0],setSelectedIdx=sSI[1];
   /* 2026-04-20: 移動中のストローク非表示用ヒント — moveRefの{side,idx}と同期、
@@ -1611,6 +1591,8 @@ function DataChart(props){
   // データロード時: 全バーから priceRange を算出 (10円境界に丸める)
   // C1+: hasRef時は refBars も含めて外接 min/max で両chart共通レンジに (仕様①a)
   // B完全版: bars は EMA 連続化後の値で priceRange を算出 (refBars は原本でOK)
+  // 2026-04-20: pricePx>0 の時は priceH (画面フィット) / pricePx × 10円 の priceRange に縮減
+  //             データ中心 (dataMid) を基準に上下に取る → 空白ゼロでラベル間隔自由に変更可能
   useEffect(function(){
     if(!bars.length){setPriceRange(null);return;}
     var mn=Infinity, mx=-Infinity;
@@ -1628,9 +1610,30 @@ function DataChart(props){
     // 10円境界に丸める + 余白 (±5円: 10円1マスが画面上広く見えるよう最小限)
     mn=Math.floor(mn/10)*10 - 5;
     mx=Math.ceil(mx/10)*10 + 5;
+    /* 2026-04-20: pricePx>0 の時は priceRange を pricePx 基準で縮減
+       実効priceH は dim.h から volH 按分で推定 (drawDataChart と同じ式)
+       rangeByPx = priceH / pricePx × 10 が現在のデータレンジより狭ければ、データ中心で切り出す
+       → pricePx 小=広い範囲、pricePx 大=狭い範囲 (価格軸ラベル間隔が広く見える) */
+    if(pricePx>0 && dim.h>0){
+      var padT=10, padB=22;
+      var estVolH=Math.max(44,Math.round((dim.h-padT-padB)*0.13));
+      var estPriceH=dim.h-padT-padB-estVolH-6;
+      if(estPriceH>44){
+        var rangeByPx=estPriceH/pricePx*10;  /* 円単位 */
+        var dataRange=mx-mn;
+        if(rangeByPx<dataRange){
+          /* データ中心に rangeByPx 幅で切り出し */
+          var mid=(mn+mx)/2;
+          var half=rangeByPx/2;
+          mn=Math.floor((mid-half)/10)*10;
+          mx=Math.ceil((mid+half)/10)*10;
+        }
+        /* rangeByPx >= dataRange なら従来通り (データ全体表示) */
+      }
+    }
     var pr={min:mn, max:mx};
     setPriceRange(pr);
-  },[data,tf,refData,hasRef]);
+  },[data,tf,refData,hasRef,pricePx,dim.h]);
 
   // tf 変更時にビューリセット (controlled 時は親が制御するのでスキップ) — C8a: tf依存uTotal
   useEffect(function(){
@@ -1670,14 +1673,10 @@ function DataChart(props){
     /* 2026-04-20: iPad カクつき対策 — 連続する state 変更 (pan/pinch 中) を
        RAF にまとめて1フレームに1回だけ描画 */
     var rafId=requestAnimationFrame(function(){
-    /* 2026-04-20: pricePx 設定を dim に含めて渡す (drawDataChart 内でpriceH拡張判定) */
-    var dimWithPx=Object.assign({},dim,{pricePx:pricePx});
-    if(pricePx>0){
-      /* 分離モード: hidden canvas に従来通り全描画 → price/vol canvas に drawImage クロップ転写 */
-      var hidden=hiddenCanvasRef.current;
-      if(!hidden)return;
-      /* 2026-04-20: iPad カクつき対策 — iPad のみ DPR=1 に固定して描画負荷を 1/4 に軽減
-         (内部解像度低下で画面はやや粗くなるが、drawDataChart + drawImage 負荷を大幅削減) */
+      /* 2026-04-20: pricePx を dim に渡す (drawDataChart は priceH 常に画面フィット、pricePx は priceRange 側で処理済み) */
+      var dimWithPx=Object.assign({},dim,{pricePx:pricePx});
+      var canvas=canvasRef.current; if(!canvas)return;
+      /* 2026-04-20: iPad カクつき対策 — iPad のみ DPR=1 に固定して描画負荷を 1/4 に軽減 */
       var origDPR=window.devicePixelRatio||1;
       var forceDPR=(caIsIPad()&&origDPR>1)?1:origDPR;
       var dprOverridden=false;
@@ -1687,64 +1686,14 @@ function DataChart(props){
         }catch(e){}
       }
       try{
-        drawDataChart(hidden,bars,data,dimWithPx,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx,refBars,refData,getCandleGap(tf),refStrokes,moveHint);
+        drawDataChart(canvas,bars,data,dimWithPx,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx,refBars,refData,getCandleGap(tf),refStrokes,moveHint);
       } finally {
         if(dprOverridden){
           try{Object.defineProperty(window,'devicePixelRatio',{value:origDPR,configurable:true});}catch(e){}
         }
       }
-      var L=layoutRef.current; if(!L){drawCrosshair();return;}
-      var dpr=forceDPR;  /* drawImage も forceDPR に合わせる (hidden canvas のサイズと整合) */
-      var W=dim.w;
-      /* 境界: priceBot + 6 以上の部分が vol+時間軸エリア */
-      var boundary=L.priceBot+6;  /* CSS px */
-      /* 2026-04-20: volAreaH は「実描画域のみ」に限定 (hidden canvas の下端余白を含めない)
-         = volH + padB (volTop=boundary から volBot+padB まで) */
-      var volAreaH=(L.volBot-L.priceBot-6)+L.padB;
-      if(volAreaH<10){drawCrosshair();return;}  /* 異常値保護 */
-      /* volFixedH state を同期 (描画結果に応じて volFix 高さ更新) */
-      if(Math.abs(volAreaH-volFixedH)>1){
-        setVolFixedH(volAreaH);
-      }
-      /* priceCanvas: 上半分を転写 (高さ=boundary)
-         2026-04-20: canvas.width/height 代入は内部で完全clear+再アロケートされ重いので、
-                     サイズ変更時のみ再設定 (iPad カクつき対策) */
-      var pc=priceCanvasRef.current;
-      if(pc){
-        var pW=Math.round(W*dpr), pH=Math.round(boundary*dpr);
-        if(pc.width!==pW)pc.width=pW;
-        if(pc.height!==pH)pc.height=pH;
-        try{
-          if(pc.style.width!==W+'px')pc.style.width=W+'px';
-          if(pc.style.height!==boundary+'px')pc.style.height=boundary+'px';
-        }catch(e){}
-        var pctx=pc.getContext('2d');
-        pctx.clearRect(0,0,pW,pH);
-        pctx.drawImage(hidden, 0,0, pW,pH, 0,0, pW,pH);
-      }
-      /* volCanvas: 下半分を転写 (高さ=volAreaH、hidden 内 Y offset=boundary から) */
-      var vc=volCanvasRef.current;
-      if(vc){
-        var vW=Math.round(W*dpr), vH=Math.round(volAreaH*dpr);
-        if(vc.width!==vW)vc.width=vW;
-        if(vc.height!==vH)vc.height=vH;
-        try{
-          if(vc.style.width!==W+'px')vc.style.width=W+'px';
-          if(vc.style.height!==volAreaH+'px')vc.style.height=volAreaH+'px';
-        }catch(e){}
-        var vctx=vc.getContext('2d');
-        vctx.clearRect(0,0,vW,vH);
-        vctx.drawImage(hidden, 0,Math.round(boundary*dpr), vW,vH, 0,0, vW,vH);
-      }
-    } else {
-      /* 従来モード: 表示canvasに直接描画 */
-      var canvas=canvasRef.current; if(!canvas)return;
-      drawDataChart(canvas,bars,data,dimWithPx,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx,refBars,refData,getCandleGap(tf),refStrokes,moveHint);
-    }
-    // 描画直後に十字カーソルも再描画 (リサイズ・ズーム等でレイアウト変わった時)
-    drawCrosshair();
+      drawCrosshair();
     });
-    /* RAF cancel 用 cleanup — 次の再レンダー前に未実行 RAF を破棄 */
     return function(){cancelAnimationFrame(rafId);};
   },[data,bars,dim,tf,view,pShift,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes,moveHint,pricePx,chartBg]);
 
@@ -1761,12 +1710,6 @@ function DataChart(props){
 
   // 十字カーソル + 描画プレビュー (オーバーレイCanvas)
   function drawCrosshair(){
-    /* 2026-04-20: 分離モード (pricePx>0) 時は priceOverlay と volOverlay の2つに描画、
-       非分離モードは従来通り overlayRef に描画 */
-    if(pricePx>0){
-      _drawCrosshairSplit();
-      return;
-    }
     var overlay=overlayRef.current; if(!overlay)return;
     var dpr=window.devicePixelRatio||1;
     var W=dim.w, H=dim.h;
@@ -2624,9 +2567,9 @@ function DataChart(props){
   // タッチ (iPad/スマホ) - 1本指: 描画、2本指: ピンチズーム＋パン
   function onTouchStart(e){
     if(props.textInputActive)return;
-    /* 2026-04-20: パームリジェクション — ペン検知直後の touch は全て無視
-       (iPad + 設定ON のみ、ピンチズームも無視される点注意) */
-    if(shouldRejectTouch())return;
+    /* 2026-04-20: パームリジェクション — Apple Pencil 由来 (touchType='stylus') の touch は通す、
+       指由来の touch のみ reject。Pencil は TouchEvent も発火するため区別が必要 */
+    if(shouldRejectTouch()&&!_isPenTouch(e))return;
     if(e.touches.length===2){
       // ピンチ開始
       if(e.preventDefault)e.preventDefault();
@@ -2657,8 +2600,8 @@ function DataChart(props){
   }
   function onTouchMove(e){
     if(props.textInputActive)return;
-    /* 2026-04-20: パームリジェクション — ペン検知直後の touch は全て無視 */
-    if(shouldRejectTouch())return;
+    /* 2026-04-20: パームリジェクション — Apple Pencil 由来は通す、指のみ reject */
+    if(shouldRejectTouch()&&!_isPenTouch(e))return;
     // ピンチ中
     if(pinchRef.current&&e.touches.length>=2){
       if(e.preventDefault)e.preventDefault();
@@ -2702,6 +2645,27 @@ function DataChart(props){
       if(!e.touches||e.touches.length<2){pinchRef.current=null;panStartRef.current=null;}
       return;
     }
+    /* 2026-04-20: トリプルタップでツール⇄消しゴム入れ替え
+       - 直近3タップが 500ms 以内、かつ位置ズレ30px 以内、かつ残り touch=0 (全指離れた) */
+    if(e.touches&&e.touches.length===0&&e.changedTouches&&e.changedTouches.length===1){
+      var t=e.changedTouches[0];
+      var now=Date.now();
+      var x=t.clientX, y=t.clientY;
+      var hist=tripleTapRef.current;
+      /* 古いタップを除外 (500ms超) */
+      hist=hist.filter(function(h){return now-h.t<500;});
+      /* 位置ズレがあれば履歴リセット */
+      if(hist.length>0){
+        var last=hist[hist.length-1];
+        if(Math.hypot(x-last.x,y-last.y)>30)hist=[];
+      }
+      hist.push({t:now,x:x,y:y});
+      tripleTapRef.current=hist;
+      if(hist.length>=3){
+        tripleTapRef.current=[];
+        if(props.onTripleTap)props.onTripleTap();
+      }
+    }
     onMouseUp();
   }
   // ペンのホバー (Apple Pencil / S Pen 等) - 触れず浮かせている時に十字カーソル追従
@@ -2724,12 +2688,24 @@ function DataChart(props){
   function onPointerDownPalm(e){
     if(e.pointerType==='pen'){lastPenAtRef.current=Date.now();}
   }
-  /* 2026-04-20: パームリジェクション判定ヘルパー — 設定ON + iPad + 直近 CA_PALM_REJECT_MS 内にペン検知あり */
+  /* 2026-04-20: パームリジェクション判定ヘルパー — 設定ON + iPad + 直近 CA_PALM_REJECT_MS 内にペン検知あり
+     指 vs ペンは呼び出し側 (_isPenTouch) で区別 — ここは時間窓判定のみ */
   function shouldRejectTouch(){
     if(!caLoadPalmReject())return false;
     if(!caIsIPad())return false;
     var dt=Date.now()-lastPenAtRef.current;
     return dt>=0&&dt<CA_PALM_REJECT_MS;
+  }
+  /* 2026-04-20: Apple Pencil 由来のタッチかを判定
+     iOS Safari は Pencil 入力を TouchEvent でも発火する (touchType='stylus')
+     → パームリジェクション中でも Pencil は通す必要あり */
+  function _isPenTouch(e){
+    if(!e||!e.touches||!e.touches.length)return false;
+    for(var i=0;i<e.touches.length;i++){
+      var t=e.touches[i];
+      if(t.touchType==='stylus')return true;
+    }
+    return false;
   }
   // ダブルクリック: (機能削除、ユーザー要望)
 
@@ -2757,9 +2733,6 @@ function DataChart(props){
       ce("div",null,"データなし"));
   }
 
-  /* 2026-04-20: 分離モード判定 — pricePx>0 時は price/vol 2canvas 分離構造 */
-  var isSplit=pricePx>0;
-  /* volFixedArea の高さは volFixedH state (描画後に volDrawH で同期更新) */
   return ce("div",{
     ref:containerRef,
     onMouseDown:onMouseDown,
@@ -2781,49 +2754,17 @@ function DataChart(props){
         drawCrosshair();
       }
     },
-    style:isSplit
-      ? {flex:1,position:"relative",background:chartBg,minHeight:0,
-         overflow:"hidden",cursor:drawTool==='pan'?"grab":"default",
-         touchAction:"none",userSelect:"none"}
-      : {flex:1,position:"relative",background:chartBg,overflow:"hidden",overflowX:"hidden",
-         cursor:drawTool==='pan'?"grab":"default",touchAction:"none",userSelect:"none"}
+    style:{flex:1,position:"relative",background:chartBg,overflow:"hidden",overflowX:"hidden",
+       cursor:drawTool==='pan'?"grab":"default",touchAction:"none",userSelect:"none",
+       /* 2026-04-20: iPad Safari の長押しメニュー (コピー/選択部分を検索等) を抑止 */
+       WebkitTouchCallout:"none",WebkitUserSelect:"none"}
   },
-    isSplit
-      /* === 分離モード (absolute positioning で確実に画面下端固定) === */
-      ? [
-          /* 実描画先 (display:none、drawDataChart はここに描画) */
-          ce("canvas",{key:"hidden",ref:hiddenCanvasRef,style:{display:"none"}}),
-          /* priceScrollArea: top:0 〜 bottom:volFixedH、縦スクロール可 */
-          ce("div",{key:"pscroll",ref:priceScrollRef,
-            style:{position:"absolute",top:0,left:0,right:0,bottom:volFixedH,
-              overflowY:"auto",overflowX:"hidden",
-              touchAction:drawTool==='pan'?"pan-y":"none"}},
-            ce("canvas",{ref:priceCanvasRef,
-              style:{display:"block",width:"100%",pointerEvents:"none"}}),
-            ce("canvas",{ref:priceOverlayRef,
-              style:{position:"absolute",top:0,left:0,width:"100%",pointerEvents:"none"}})
-          ),
-          /* volFixedArea: 画面下端固定 (bottom:0、volFixedH state で動的調整) */
-          ce("div",{key:"volfix",
-            style:{position:"absolute",bottom:0,left:0,right:0,height:volFixedH,
-              overflow:"hidden",background:chartBg,borderTop:"1px solid #1a1a1a"}},
-            ce("canvas",{ref:volCanvasRef,
-              style:{display:"block",width:"100%",pointerEvents:"none"}}),
-            ce("canvas",{ref:volOverlayRef,
-              style:{position:"absolute",top:0,left:0,width:"100%",pointerEvents:"none"}}),
-            ce("div",{style:{position:"absolute",right:8,bottom:6,fontSize:10,color:"#555",pointerEvents:"none"}},
-              ((getUTotal(hasRef)/((view.uE||0)-(view.uS||0)||1))).toFixed(1)+'×')
-          )
-        ]
-      /* === 従来モード === */
-      : [
-          ce("canvas",{key:"main",ref:canvasRef,
-            style:{display:"block",width:"100%",height:"100%",pointerEvents:"none"}}),
-          ce("canvas",{key:"ov",ref:overlayRef,
-            style:{position:"absolute",top:0,left:0,width:"100%",height:"100%",pointerEvents:"none"}}),
-          ce("div",{key:"zoom",style:{position:"absolute",right:8,bottom:6,fontSize:10,color:"#555",pointerEvents:"none"}},
-            ((getUTotal(hasRef)/((view.uE||0)-(view.uS||0)||1))).toFixed(1)+'×')
-        ]
+    ce("canvas",{ref:canvasRef,
+      style:{display:"block",width:"100%",height:"100%",pointerEvents:"none"}}),
+    ce("canvas",{ref:overlayRef,
+      style:{position:"absolute",top:0,left:0,width:"100%",height:"100%",pointerEvents:"none"}}),
+    ce("div",{style:{position:"absolute",right:8,bottom:6,fontSize:10,color:"#555",pointerEvents:"none"}},
+      ((getUTotal(hasRef)/((view.uE||0)-(view.uS||0)||1))).toFixed(1)+'×')
   );
 }
 
@@ -2869,40 +2810,34 @@ function computeEnhancedBars(bars, refBars){
 function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,editingTextIdx,refBars,refData,gapVis,refStrokes,hideHint){
   // B完全版: EMA 前日連続化 (refData ありなら bars の EMA を上書き)
   bars=computeEnhancedBars(bars, refBars);
+  /* 2026-04-20: ローソク足の始値が前bar終値と不連続な箇所を検出・ログ (デバッグ用) */
+  if(typeof window!=='undefined'&&!window._caOpenChkLogged&&bars.length>=2){
+    var mismatches=[];
+    for(var ii=1;ii<bars.length;ii++){
+      var prevC=bars[ii-1].c, curO=bars[ii].o;
+      if(prevC!=null && curO!=null && Math.abs(prevC-curO)>0.5){
+        mismatches.push({i:ii,t:bars[ii].t,prevC:prevC,curO:curO,diff:curO-prevC});
+      }
+    }
+    if(mismatches.length>0){
+      console.warn('[candle o/c unchained] '+mismatches.length+'/'+(bars.length-1)+' bars mismatched. ticker='+(data&&data.ticker||'?')+' date='+(data&&data.date||'?'), mismatches.slice(0,5));
+    }
+    window._caOpenChkLogged=true;  /* チャート切替毎にリセットしたい場合は別実装必要 */
+  }
   var dpr=window.devicePixelRatio||1;
   var W=dim.w, H=dim.h;
 
   // レイアウト
   var padL=40, padR=40, padT=10, padB=22;
-  /* 2026-04-20: pricePx 設定時は priceH を固定 (priceRange幅 / 10 * pricePx)、
-     必要に応じて canvas を縦拡張 (外側コンテナで overflow-y:auto 受け)
-     2026-04-20: priceH に上限 3000px を設定 (極端な価格幅で canvas 縦が巨大化するバグ抑止)
-     2026-04-20: pricePx は「10円あたりの最低保証ピクセル数」— 画面に余裕あれば autoPriceH (画面フィット) を採用して下部空白を解消、
-                 minPriceH が画面を超える場合のみ縦スクロール */
-  var PRICE_H_MAX=3000;
+  /* 2026-04-20: priceH は常に画面フィット (dim.h 基準按分)。
+     pricePx の効果は priceRange 側で「レンジ幅を縮減」する形で反映される (空白ゼロ)。
+     分離モード (pricePx>0) でも canvas 縦拡張は行わず、従来通り画面内で完結 */
   var pricePx=(dim&&typeof dim.pricePx==='number'&&dim.pricePx>0)?dim.pricePx:0;
-  var volH, priceH;
-  if(pricePx>0 && priceRange){
-    /* min保証モード: minPriceH (pricePx要求) と autoPriceH (画面フィット) の大きい方を採用 */
-    var minPriceH=Math.max(44, Math.min(PRICE_H_MAX, Math.ceil((priceRange.max-priceRange.min)/10*pricePx)));
-    volH=Math.max(44,Math.round((H-padT-padB)*0.13));
-    var autoPriceH=H-padT-padB-volH-6;
-    priceH=Math.max(minPriceH, autoPriceH);
-    var requiredH=padT+priceH+6+volH+padB;
-    if(requiredH>H)H=requiredH;  /* minPriceH が画面超え時のみ拡張→縦スクロール */
-  } else {
-    /* 従来通り: dim.h 基準で按分 */
-    volH=Math.max(44,Math.round((H-padT-padB)*0.13));
-    priceH=H-padT-padB-volH-6;
-  }
+  var volH=Math.max(44,Math.round((H-padT-padB)*0.13));
+  var priceH=H-padT-padB-volH-6;
   canvas.width=Math.round(W*dpr);
   canvas.height=Math.round(H*dpr);
-  /* 固定モード: canvas の CSS 高さも実H に合わせる (scroll用) */
-  if(pricePx>0){
-    try{canvas.style.height=H+'px';}catch(e){}
-  } else {
-    try{canvas.style.height='';}catch(e){}  /* リセット */
-  }
+  try{canvas.style.height='';}catch(e){}  /* リセット */
   var ctx=canvas.getContext('2d');
   ctx.setTransform(dpr,0,0,dpr,0,0);
 
@@ -3168,6 +3103,15 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   }
   /* 2026-04-20: EMA/VWAP/strokes の clip 解除 (drawBarSet 直後の ctx.save で始まった clip) */
   ctx.restore();
+
+  /* 2026-04-20: 出来高エリアと価格エリアの境界に白い太線 (2px) を引く */
+  ctx.strokeStyle='#ffffff';
+  ctx.lineWidth=2;
+  ctx.beginPath();
+  var divY=priceBot+3;  /* priceBot と volTop の中間 */
+  ctx.moveTo(padL, divY);
+  ctx.lineTo(padL+chartW, divY);
+  ctx.stroke();
 
   // ヘッダー描画は廃止（ticker+date は panel 上部の HTML メタ行に表示済み）
   // 直近終値の水平ライン+ラベル: 2026-04-20 削除
@@ -3632,6 +3576,8 @@ function ImageAnnotator(props){
   var analysisTfRef=useRef('1m');                     // 現在の tf (stale closure回避)
   var analysisTextInputRef=useRef(null);              // stale closure 回避
   var analysisFloatDragRef=useRef(null);              // 分析モード floating undo/redo のドラッグ
+  /* 2026-04-20: トリプルタップで消しゴム⇄前ツール切替用 */
+  var prevToolBeforeEraserRef=useRef(null);
   var analysisTextareaRef=useRef(null);               // 分析モード text 入力 textarea
   /* 2026-04-20: DataChart内のpxToTimePrice/anchorToScreenを親から呼ぶためのAPI ref */
   var chartAPIRefAnalysis=useRef(null);
@@ -5391,8 +5337,9 @@ function ImageAnnotator(props){
       ),
 
       /* virtual joystick（タッチのみ、画像モード時のみ — Portal先がbodyなので
-         display:none で隠れない、分析モード用と重ならないよう条件付き） */
-      IS_TOUCH&&modeTab==='image'&&ce(VirtualJoystick,{
+         display:none で隠れない、分析モード用と重ならないよう条件付き）
+         2026-04-20: Surface Pro 等タッチ+マウスPCは SHOW_JOYSTICK=false で非表示 */
+      SHOW_JOYSTICK&&modeTab==='image'&&ce(VirtualJoystick,{
         onPanDelta:function(dx,dy){setPan(function(p){return{x:p.x-dx,y:p.y-dy};});}
       }),
 
@@ -5537,6 +5484,18 @@ function ImageAnnotator(props){
               externalCursorRef:analysisCursorRef, externalCursorBump:cursorBump,
               onExternalCursorChange:notifyAnalysisCursor,
               strokes:(analysisStrokes&&analysisStrokes[analysisTf])||[],
+              /* 2026-04-20: トリプルタップで現ツール⇄消しゴム入れ替え */
+              onTripleTap:function(){
+                if(tool==='eraser'){
+                  /* 消しゴム中 → 前ツールに戻す */
+                  var prev=prevToolBeforeEraserRef.current||'pan';
+                  switchTool(prev);
+                } else {
+                  /* 現ツールを記憶して消しゴムへ */
+                  prevToolBeforeEraserRef.current=tool;
+                  switchTool('eraser');
+                }
+              },
               /* C6: editingTextInfo={side,idx} or null を渡す */
               editingTextIdx:(analysisTextInput&&analysisTextInput.editIdx>=0)
                 ?{side:(analysisTextInput.side||'cur'),idx:analysisTextInput.editIdx}
@@ -5568,7 +5527,8 @@ function ImageAnnotator(props){
             /* 2026-04-20: 書き込みツール(line/dotted/arrow/rect/circle/marker/freehand/text)使用後は
                自動で pan に戻す (lasso/eraser は対象外)
                2026-04-20: ca_auto_pan_v1 設定でON/OFF可能 (デフォルトON) */
-            if(caLoadAutoPan()&&['line','dotted','arrow','rect','circle','marker','freehand','text'].indexOf(tool)>=0){
+            /* 2026-04-20: freehand はユーザー要望により autoPan 対象から除外 (連続描画で自動復帰しない) */
+            if(caLoadAutoPan()&&['line','dotted','arrow','rect','circle','marker','text'].indexOf(tool)>=0){
               switchTool('pan');
             }
           },
@@ -5708,8 +5668,9 @@ function ImageAnnotator(props){
         })
         ) /* end 現在チャート container div (統合chart: refAnalysis有でもこの1つに集約) */
         ), /* end 横並びコンテナ (実質ラップ1枚、旧レイアウト削除で1カラムのみ) */
-        /* F2: VirtualJoystick (タッチデバイスのみ、分析モードのpan制御) */
-        IS_TOUCH&&ce(VirtualJoystick,{
+        /* F2: VirtualJoystick (タッチデバイスのみ、分析モードのpan制御)
+           2026-04-20: Surface Pro 等タッチ+マウスPCは SHOW_JOYSTICK=false で非表示 */
+        SHOW_JOYSTICK&&ce(VirtualJoystick,{
           onPanDelta:function(dx,dy){
             // C-uaxis+C8a: u軸上で pan (1400px swipe = 1 uSpan分の pan) — tf依存uTotal
             setAnalysisView(function(v){
