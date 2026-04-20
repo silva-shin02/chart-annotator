@@ -605,9 +605,6 @@ function FbSettingsModal(props){
   var s4=useState(null); var cleanupStatus=s4[0],setCleanupStatus=s4[1]; // null|'running'|'done:N'|'error'
   /* Phase 4 (2026-04-20): 旧画像draft完全削除 status */
   var sLIC=useState(null); var legacyImgCleanStatus=sLIC[0],setLegacyImgCleanStatus=sLIC[1];
-  /* 2026-04-20: 価格軸ラベル固定ピクセル設定 */
-  var sPPx=useState(caLoadPricePx()); var pricePx=sPPx[0],setPricePxLocal=sPPx[1];
-  function updatePricePx(v){setPricePxLocal(v);caSavePricePx(v);}
   function save(){
     var nc={url:url.trim(),secret:secret.trim(),apiKey:apiKey.trim(),storageBucket:bucket.trim(),paused:paused};
     try{localStorage.setItem(FB_CFG_KEY,JSON.stringify(nc));}catch(e){}
@@ -810,27 +807,6 @@ function FbSettingsModal(props){
             legacyImgCleanStatus&&legacyImgCleanStatus.indexOf('error')===0&&ce("div",{style:{fontSize:11,color:"#fca5a5",marginTop:8}},
               "✕ "+legacyImgCleanStatus)
           ),
-          /* 2026-04-20: 表示設定 - 価格軸ラベル固定ピクセル */
-          ce("div",{style:{background:"#1a1a1a",borderRadius:10,padding:"10px 12px",
-            border:"1px solid #1e3a5f"}},
-            ce("div",{style:{fontSize:12,fontWeight:700,color:"#a5b4fc",marginBottom:4}},"📏 価格軸ラベル間隔"),
-            ce("div",{style:{fontSize:10,color:"#666",marginBottom:8,lineHeight:1.5}},
-              "10円あたりのピクセル数を固定します。",ce("br",null),
-              "0 = 自動 (画面高さに合わせて可変)、1〜40 = 固定 (超過時は縦スクロール)"),
-            ce("div",{style:{display:"flex",alignItems:"center",gap:10}},
-              ce("input",{type:"range",min:0,max:40,step:1,value:pricePx,
-                onChange:function(e){updatePricePx(+e.target.value);},
-                style:{flex:1,accentColor:"#6366F1"}}),
-              ce("input",{type:"number",min:0,max:40,value:pricePx,
-                onChange:function(e){var v=parseInt(e.target.value,10);if(isNaN(v))v=0;updatePricePx(Math.max(0,Math.min(40,v)));},
-                style:{width:60,padding:"6px 8px",background:"#2a2a2a",border:"1px solid #3a3a3a",
-                  borderRadius:6,color:"#fff",fontSize:14,textAlign:"center"}}),
-              ce("span",{style:{fontSize:11,color:"#666",flexShrink:0}},"px/10円")
-            ),
-            pricePx===0&&ce("div",{style:{fontSize:10,color:"#666",marginTop:6}},"現在: 自動モード"),
-            pricePx>0&&ce("div",{style:{fontSize:10,color:"#a5b4fc",marginTop:6,fontWeight:600}},
-              "現在: 10円 = "+pricePx+"px 固定")
-          ),
           ce("div",{style:{display:"flex",gap:10,marginTop:4}},
             ce("button",{onClick:onClose,
               style:{flex:1,padding:"12px 0",fontSize:14,fontWeight:600,background:"#2a2a2a",color:"#ccc",
@@ -862,6 +838,72 @@ var TOOLS=[
   {id:"lasso", label:"選択・変形"},
   {id:"eraser",label:"消しゴム"},
 ];
+
+/* ─── DisplaySettingsModal (表示・動作設定) ──────────────────
+   2026-04-20: FbSettingsModal から独立、今後拡張予定の設定群をまとめる
+   現状: 価格軸ラベル間隔のみ。今後予定: ツール自動復帰、背景色、パームリジェクション等 */
+function DisplaySettingsModal(props){
+  var onClose=props.onClose;
+  /* 価格軸ラベル固定ピクセル */
+  var sPPx=useState(caLoadPricePx()); var pricePx=sPPx[0],setPricePxLocal=sPPx[1];
+  function updatePricePx(v){
+    var n=(v|0); if(n<0)n=0; if(n>40)n=40;
+    setPricePxLocal(n); caSavePricePx(n);
+  }
+  return ReactDOM.createPortal(
+    ce("div",{onClick:onClose,
+      style:{position:"fixed",inset:0,background:"rgba(0,0,0,.7)",zIndex:21000,
+        display:"flex",alignItems:"center",justifyContent:"center",padding:20}},
+      ce("div",{onClick:function(e){e.stopPropagation();},
+        style:{background:"#1c1c1e",borderRadius:18,padding:"28px 24px 24px",width:"100%",maxWidth:480,
+          maxHeight:"90vh",overflowY:"auto",
+          boxShadow:"0 24px 64px rgba(0,0,0,.8)",border:"1px solid #2a2a2a"}},
+        ce("div",{style:{fontSize:18,fontWeight:700,color:"#fff",marginBottom:6,textAlign:"center"}},"📊 表示・動作設定"),
+        ce("div",{style:{fontSize:12,color:"#666",textAlign:"center",marginBottom:20,lineHeight:1.8}},
+          "チャート表示やツール動作をカスタマイズ"
+        ),
+        ce("div",{style:{display:"flex",flexDirection:"column",gap:14}},
+          /* 価格軸ラベル固定ピクセル */
+          ce("div",{style:{background:"#1a1a1a",borderRadius:10,padding:"10px 12px",
+            border:"1px solid #1e3a5f"}},
+            ce("div",{style:{fontSize:13,fontWeight:700,color:"#a5b4fc",marginBottom:4}},"📏 価格軸ラベル間隔"),
+            ce("div",{style:{fontSize:10,color:"#666",marginBottom:8,lineHeight:1.5}},
+              "10円あたりのピクセル数を固定します。",ce("br",null),
+              "0 = 自動 (画面高さに合わせて可変)、1〜40 = 固定 (超過時は縦スクロール)"),
+            ce("div",{style:{display:"flex",alignItems:"center",gap:10}},
+              ce("input",{type:"range",min:0,max:40,step:1,value:pricePx,
+                onChange:function(e){updatePricePx(+e.target.value);},
+                style:{flex:1,accentColor:"#6366F1"}}),
+              ce("input",{type:"number",min:0,max:40,value:pricePx,
+                onChange:function(e){var v=parseInt(e.target.value,10);if(isNaN(v))v=0;updatePricePx(v);},
+                style:{width:60,padding:"6px 8px",background:"#2a2a2a",border:"1px solid #3a3a3a",
+                  borderRadius:6,color:"#fff",fontSize:14,textAlign:"center"}}),
+              ce("span",{style:{fontSize:11,color:"#666",flexShrink:0}},"px/10円")
+            ),
+            pricePx===0&&ce("div",{style:{fontSize:10,color:"#666",marginTop:6}},"現在: 自動モード"),
+            pricePx>0&&ce("div",{style:{fontSize:10,color:"#a5b4fc",marginTop:6,fontWeight:600}},
+              "現在: 10円 = "+pricePx+"px 固定")
+          ),
+          /* 今後拡張予定のプレースホルダ */
+          ce("div",{style:{background:"#161616",borderRadius:10,padding:"10px 12px",
+            border:"1px dashed #333",opacity:0.6}},
+            ce("div",{style:{fontSize:11,color:"#666",textAlign:"center",lineHeight:1.8}},
+              "今後追加予定:",ce("br",null),
+              "・ツール自動復帰 (描画後panに戻る) ON/OFF",ce("br",null),
+              "・チャート背景色",ce("br",null),
+              "・パームリジェクション (iPad)")
+          ),
+          /* 閉じるボタン */
+          ce("button",{onClick:onClose,
+            style:{padding:"12px 0",fontSize:14,fontWeight:700,background:"#2563eb",color:"#fff",
+              border:"none",borderRadius:12,cursor:"pointer",fontFamily:"inherit"}
+          },"閉じる")
+        )
+      )
+    ),
+    document.body
+  );
+}
 
 /* ─── RefChartPicker（保管庫から参照画像を選択） ─────────── */
 function RefChartPicker(props){
@@ -2875,6 +2917,8 @@ function ImageAnnotator(props){
   var st16=useState(null);   var selBounds=st16[0],setSelBounds=st16[1];
   var st17=useState(new Set()); var selIdxs=st17[0],setSelIdxs=st17[1];
   var stCC=useState(false);   var cancelConfirm=stCC[0],setCancelConfirm=stCC[1];
+  /* 2026-04-20: 表示・動作設定モーダル */
+  var stDS=useState(false); var showDisplaySettings=stDS[0],setShowDisplaySettings=stDS[1];
   var stFST=useState(null);   var fbStatus=stFST[0],setFbStatus=stFST[1];
   var stLS=useState(false);   var showLocalSave=stLS[0],setShowLocalSave=stLS[1];
   var stAS=useState(null);    var autoSaveStatus=stAS[0],setAutoSaveStatus=stAS[1]; // null|'saving'|'ok'|'err'
@@ -4503,6 +4547,10 @@ function ImageAnnotator(props){
           color:_fbIsPaused(props.fbCfg)?'#f87171':autoSaveStatus==='saving'?'#93c5fd':autoSaveStatus==='ok'?'#86efac':autoSaveStatus==='err'?'#fca5a5':'#fb923c'}},
           _fbIsPaused(props.fbCfg)?'⏸ 同期停止中':autoSaveStatus==='saving'?'⏳ 自動保存中':autoSaveStatus==='ok'?'✓ 自動保存済':autoSaveStatus==='err'?'✕ 自動保存失敗':'🔥 自動保存ON'
         ),
+        /* 2026-04-20: 📊 表示・動作設定ボタン */
+        ce("button",{onClick:function(){setShowDisplaySettings(true);},
+          style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#1e3a5f",color:"#a5b4fc",fontWeight:700})},
+          "📊 設定"),
         ce("button",{onClick:function(){setCancelConfirm(true);},style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#333",color:"#ccc"})},"分析を終了する"),
         ce("button",{onClick:saveAndExport,style:Object.assign({},TS,{fontSize:12,padding:"6px 12px",background:"#2563eb",color:"#fff",fontWeight:700})},"💾 保存・出力")
       ),
@@ -5927,6 +5975,11 @@ function ImageAnnotator(props){
       onBack:function(){setCancelConfirm(false);}
     }),
 
+    /* 2026-04-20: 表示・動作設定モーダル */
+    showDisplaySettings&&ce(DisplaySettingsModal,{
+      onClose:function(){setShowDisplaySettings(false);}
+    }),
+
     /* ── 下書き保存モーダル ── */
     showLocalSave&&ce(LocalSaveModal,{
       tickers:caLoadTickers(),
@@ -6949,6 +7002,12 @@ function DraftLibrary(props){
           color:fbCfg.url?"#fb923c":"#888",
           padding:"7px 12px",borderRadius:8})},
         "⚙"),
+      /* 2026-04-20: 表示設定ボタン (App側でモーダル管理) */
+      ce("button",{onClick:function(){if(props.onOpenDisplaySettings)props.onOpenDisplaySettings();},
+        style:Object.assign({},BT,{fontSize:13,fontWeight:700,
+          background:"#2a2a2a",color:"#a5b4fc",
+          padding:"7px 12px",borderRadius:8})},
+        "📊"),
       !showTrash&&ce("button",{onClick:function(){setAdding(true);setTimeout(function(){inputRef.current&&inputRef.current.focus();},50);},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,background:"#2563eb",
           color:"#fff",padding:"7px 14px",borderRadius:8})},
@@ -7285,6 +7344,8 @@ function App(){
   var FB_DEFAULTS={url:'',secret:'',apiKey:'',storageBucket:'scalping-notebbok.firebasestorage.app',paused:true};
   var s2=useState(function(){try{var s=localStorage.getItem(FB_CFG_KEY);if(s){var p=JSON.parse(s);return Object.assign({},FB_DEFAULTS,p);}return FB_DEFAULTS;}catch(e){return FB_DEFAULTS;}}); var fbCfg=s2[0],setFbCfg=s2[1];
   var s3=useState(false); var showFbSettings=s3[0],setShowFbSettings=s3[1];
+  /* 2026-04-20: 表示・動作設定モーダル */
+  var sDS=useState(false); var showDisplaySettings=sDS[0],setShowDisplaySettings=sDS[1];
   var s4=useState(function(){try{return sessionStorage.getItem('ca_screen')==='drafts';}catch(e){return false;}}); var showDrafts=s4[0],setShowDrafts=s4[1];
   var s5=useState(function(){try{return sessionStorage.getItem('ca_draftTicker')||null;}catch(e){return null;}}); var draftInitTicker=s5[0],setDraftInitTicker=s5[1];
   var fileRef=useRef(null);
@@ -7357,13 +7418,18 @@ function App(){
       initialTicker:draftInitTicker,
       onOpen:function(d){setImg(d);setDraftInitTicker(null);},
       onClose:function(){/* no-op: DraftLibrary がホームなので戻り先なし */},
-      onOpenFbSettings:function(){setShowFbSettings(true);}
+      onOpenFbSettings:function(){setShowFbSettings(true);},
+      onOpenDisplaySettings:function(){setShowDisplaySettings(true);}
     }),
     /* Firebase設定モーダル */
     showFbSettings&&ce(FbSettingsModal,{
       cfg:fbCfg,
       onSave:function(nc){setFbCfg(nc);},
       onClose:function(){setShowFbSettings(false);}
+    }),
+    /* 2026-04-20: 表示・動作設定モーダル */
+    showDisplaySettings&&ce(DisplaySettingsModal,{
+      onClose:function(){setShowDisplaySettings(false);}
     })
   );
 }
