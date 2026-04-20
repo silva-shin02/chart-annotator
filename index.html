@@ -1325,6 +1325,18 @@ function DataChart(props){
   var ctrlPanRef=useRef(false);    // Ctrl+drag パン状態
   /* 2026-04-20: パームリジェクション用 — Apple Pencil 最終検知タイムスタンプ */
   var lastPenAtRef=useRef(0);
+  /* 2026-04-20: 出来高下端固定モード用 refs (pricePx>0 時のみ使用)
+     - hiddenCanvasRef: 従来通りの単一canvas描画先 (display:none)
+     - priceCanvasRef: 上段 (scrollable 内)、hidden の price 部分を drawImage 転写
+     - volCanvasRef:   下段 (fixed bottom)、hidden の vol+時間軸部分を drawImage 転写
+     - priceOverlayRef/volOverlayRef: 十字+preview 用
+     - priceScrollRef: scrollable 領域 (内部に priceCanvas+priceOverlay) */
+  var hiddenCanvasRef=useRef(null);
+  var priceCanvasRef=useRef(null);
+  var volCanvasRef=useRef(null);
+  var priceOverlayRef=useRef(null);
+  var volOverlayRef=useRef(null);
+  var priceScrollRef=useRef(null);
   /* 2026-04-20: 価格軸ラベル固定ピクセル設定 (localStorage連動、設定変更で再描画) */
   var stPPx=useState(caLoadPricePx()); var pricePx=stPPx[0],setPricePx=stPPx[1];
   useEffect(function(){
@@ -1385,6 +1397,17 @@ function DataChart(props){
   var moveRef=useRef(null);        // lasso: 選択ストローク移動状態 {idx, startTM, startP, origAnchors}
   var pinchRef=useRef(null);       // 2本指ピンチ状態 {d0,s0,e0,ps0,tmC,midX,midY,active}
   var containerRef=useRef(null);
+
+  /* 2026-04-20: 座標計算用の rect 取得 — 分離モード (pricePx>0) では priceCanvas の rect、
+     それ以外 (pricePx=0) は従来 containerRef の rect を返す。
+     getBoundingClientRect は clientY ベースなのでスクロール位置は自動的に反映される */
+  function getCanvasRect(){
+    if(pricePx>0&&priceCanvasRef.current){
+      return priceCanvasRef.current.getBoundingClientRect();
+    }
+    if(containerRef.current)return containerRef.current.getBoundingClientRect();
+    return {left:0,top:0,width:0,height:0};
+  }
   var sD=useState({w:800,h:520}); var dim=sD[0],setDim=sD[1];
   /* C8a: tf依存の tmVisSpan (390 - (60-g)) と uTotal計算helper */
   function getTmVisSpan(){
@@ -1483,10 +1506,50 @@ function DataChart(props){
 
   // メインチャート描画
   useEffect(function(){
-    var canvas=canvasRef.current; if(!canvas||!bars.length||!priceRange)return;
+    if(!bars.length||!priceRange)return;
     /* 2026-04-20: pricePx 設定を dim に含めて渡す (drawDataChart 内でpriceH拡張判定) */
     var dimWithPx=Object.assign({},dim,{pricePx:pricePx});
-    drawDataChart(canvas,bars,data,dimWithPx,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx,refBars,refData,getCandleGap(tf),refStrokes,moveHint);
+    if(pricePx>0){
+      /* 分離モード: hidden canvas に従来通り全描画 → price/vol canvas に drawImage クロップ転写 */
+      var hidden=hiddenCanvasRef.current;
+      if(!hidden)return;
+      drawDataChart(hidden,bars,data,dimWithPx,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx,refBars,refData,getCandleGap(tf),refStrokes,moveHint);
+      var L=layoutRef.current; if(!L){drawCrosshair();return;}
+      var dpr=window.devicePixelRatio||1;
+      var W=dim.w;
+      /* hidden の実ピクセル高さ (drawDataChart が拡張済み) */
+      var Hhidden=Math.round(hidden.height/dpr);
+      /* 境界: priceBot + 6 以上の部分が vol+時間軸エリア */
+      var boundary=L.priceBot+6;  /* CSS px */
+      var volAreaH=Hhidden-boundary;
+      if(volAreaH<10){drawCrosshair();return;}  /* 異常値保護 */
+      /* priceCanvas: 上半分を転写 (高さ=boundary) */
+      var pc=priceCanvasRef.current;
+      if(pc){
+        pc.width=Math.round(W*dpr);
+        pc.height=Math.round(boundary*dpr);
+        try{pc.style.width=W+'px';pc.style.height=boundary+'px';}catch(e){}
+        var pctx=pc.getContext('2d');
+        pctx.clearRect(0,0,pc.width,pc.height);
+        pctx.drawImage(hidden, 0,0, Math.round(W*dpr),Math.round(boundary*dpr),
+                               0,0, Math.round(W*dpr),Math.round(boundary*dpr));
+      }
+      /* volCanvas: 下半分を転写 (高さ=volAreaH、hidden 内 Y offset=boundary から) */
+      var vc=volCanvasRef.current;
+      if(vc){
+        vc.width=Math.round(W*dpr);
+        vc.height=Math.round(volAreaH*dpr);
+        try{vc.style.width=W+'px';vc.style.height=volAreaH+'px';}catch(e){}
+        var vctx=vc.getContext('2d');
+        vctx.clearRect(0,0,vc.width,vc.height);
+        vctx.drawImage(hidden, 0,Math.round(boundary*dpr), Math.round(W*dpr),Math.round(volAreaH*dpr),
+                               0,0, Math.round(W*dpr),Math.round(volAreaH*dpr));
+      }
+    } else {
+      /* 従来モード: 表示canvasに直接描画 */
+      var canvas=canvasRef.current; if(!canvas)return;
+      drawDataChart(canvas,bars,data,dimWithPx,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx,refBars,refData,getCandleGap(tf),refStrokes,moveHint);
+    }
     // 描画直後に十字カーソルも再描画 (リサイズ・ズーム等でレイアウト変わった時)
     drawCrosshair();
   },[data,bars,dim,tf,view,pShift,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes,moveHint,pricePx,chartBg]);
@@ -1504,6 +1567,12 @@ function DataChart(props){
 
   // 十字カーソル + 描画プレビュー (オーバーレイCanvas)
   function drawCrosshair(){
+    /* 2026-04-20: 分離モード (pricePx>0) 時は priceOverlay と volOverlay の2つに描画、
+       非分離モードは従来通り overlayRef に描画 */
+    if(pricePx>0){
+      _drawCrosshairSplit();
+      return;
+    }
     var overlay=overlayRef.current; if(!overlay)return;
     var dpr=window.devicePixelRatio||1;
     var W=dim.w, H=dim.h;
@@ -1619,6 +1688,152 @@ function DataChart(props){
     }
   }
 
+  /* 2026-04-20: 分離モード用 drawCrosshair — price/vol 両overlay に分割描画
+     priceOverlay: preview + 十字(price部分) + 水平ライン + 時刻ラベル + 価格ラベル
+     volOverlay: 十字縦線(vol部分) のみ */
+  function _drawCrosshairSplit(){
+    var pov=priceOverlayRef.current;
+    var vov=volOverlayRef.current;
+    if(!pov&&!vov)return;
+    var dpr=window.devicePixelRatio||1;
+    var W=dim.w;
+    var L=layoutRef.current;
+    var boundary=L?(L.priceBot+6):0;
+    var Hhidden=hiddenCanvasRef.current?Math.round(hiddenCanvasRef.current.height/dpr):0;
+    var volAreaH=Hhidden-boundary;
+    /* priceOverlay サイズ同期 */
+    if(pov){
+      pov.width=Math.round(W*dpr);
+      pov.height=Math.round(boundary*dpr);
+      try{pov.style.width=W+'px';pov.style.height=boundary+'px';}catch(e){}
+    }
+    if(vov&&volAreaH>0){
+      vov.width=Math.round(W*dpr);
+      vov.height=Math.round(volAreaH*dpr);
+      try{vov.style.width=W+'px';vov.style.height=volAreaH+'px';}catch(e){}
+    }
+    if(!L){return;}
+    var pctx=pov?pov.getContext('2d'):null;
+    var vctx=vov?vov.getContext('2d'):null;
+    if(pctx){pctx.setTransform(dpr,0,0,dpr,0,0);pctx.clearRect(0,0,W,boundary);}
+    if(vctx){vctx.setTransform(dpr,0,0,dpr,0,0);vctx.clearRect(0,0,W,volAreaH);}
+
+    /* ── preview / 移動プレビュー: priceOverlay にのみ描画 (Y は price 座標系そのまま) ── */
+    if(pctx){
+      if(drawRef.current&&drawRef.current.on){
+        var d=drawRef.current;
+        var dSide=d.side||'cur';
+        (function(){
+          function minToXloc(m){return minToXWithSide(m,dSide);}
+          function pToYloc(p){return L.priceTop+(1-(p-L.pmin)/(L.pmax-L.pmin))*L.priceH;}
+          if(d.freehand&&d.pts&&d.pts.length){
+            var preview={type:'freehand',anchors:d.pts,
+              color:drawColor,width:drawWidth,opacity:drawOpacity};
+            drawAnalysisStrokeExt(pctx,preview,minToXloc,pToYloc,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
+          } else {
+            var preview2={type:drawTool,
+              anchors:[{tm:d.sTM,p:d.sP},{tm:d.cTM,p:d.cP}],
+              color:drawColor,width:drawWidth,opacity:drawOpacity};
+            drawAnalysisStroke(pctx,preview2,minToXloc,pToYloc,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
+          }
+        })();
+      }
+      if(moveRef.current&&moveRef.current.moving){
+        var m=moveRef.current;
+        var mSrcArr=(m.side==='ref')?(refStrokes||[]):(strokes||[]);
+        var sm=mSrcArr[m.idx];
+        if(sm){
+          (function(){
+            var mSide=m.side||sm.side||'cur';
+            function minToXloc2(mm){return minToXWithSide(mm,mSide);}
+            function pToYloc2(pp){return L.priceTop+(1-(pp-L.pmin)/(L.pmax-L.pmin))*L.priceH;}
+            var shifted=Object.assign({},sm,{
+              anchors:sm.anchors.map(function(a){return {tm:a.tm+m.dtm, p:a.p+m.dp};})
+            });
+            var tp2=shifted.type||shifted.tool;
+            if(tp2==='freehand'||tp2==='text'){
+              drawAnalysisStrokeExt(pctx,shifted,minToXloc2,pToYloc2,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
+            } else {
+              drawAnalysisStroke(pctx,shifted,minToXloc2,pToYloc2,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
+            }
+            drawSelectionHighlight(pctx,shifted,minToXloc2,pToYloc2,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
+          })();
+        }
+      }
+    }
+
+    /* ── 十字カーソル ── */
+    if(!showCrosshair)return;
+    var cx, cy, tmForLabel;
+    var extRef=props.externalCursorRef;
+    if(!L.hasRef && extRef && extRef.current){
+      var ec=extRef.current;
+      cx=minToXWithSide(ec.tm,'cur');
+      cy=L.priceTop+ec.yOffset;
+      tmForLabel=ec.tm;
+      if(cx<L.padL||cx>L.padL+L.chartW)return;
+    } else {
+      var pos=cursorRef.current; if(!pos)return;
+      cx=pos.x; cy=pos.y;
+      if(cx<L.padL||cx>L.padL+L.chartW)return;
+      /* pricePx>0 時、cursor は priceCanvas 内座標 (0..boundary)。vol エリア上では cursor 無効 */
+      if(cy<L.padT||cy>boundary)return;
+      var xst=xToSideTm(cx);
+      tmForLabel=xst.tm;
+    }
+    var CROSS='#4a9de3';
+    /* 縦線: priceOverlay 全域 + volOverlay 全域 (2 canvas 跨ぎ) */
+    if(pctx){
+      pctx.strokeStyle=CROSS; pctx.setLineDash([3,3]); pctx.lineWidth=1;
+      pctx.beginPath();
+      pctx.moveTo(Math.round(cx)+0.5,L.priceTop);
+      pctx.lineTo(Math.round(cx)+0.5,boundary);
+      pctx.stroke();
+      if(cy>=L.priceTop&&cy<=L.priceBot){
+        pctx.beginPath();
+        pctx.moveTo(L.padL,Math.round(cy)+0.5);
+        pctx.lineTo(L.padL+L.chartW,Math.round(cy)+0.5);
+        pctx.stroke();
+      }
+      pctx.setLineDash([]);
+      /* 時刻ラベル (priceBot の直下 = priceOverlay の下端付近) */
+      var hh=Math.floor(tmForLabel/60), mm=Math.round(tmForLabel%60);
+      if(mm>=60){hh++;mm-=60;}
+      var tStr=(data.date?data.date.replace(/-/g,'/')+' ':'')+(hh<10?'0':'')+hh+':'+(mm<10?'0':'')+mm;
+      pctx.font='bold 11px -apple-system,Helvetica,sans-serif';
+      pctx.textBaseline='middle'; pctx.textAlign='center';
+      var tw=pctx.measureText(tStr).width+10;
+      var ty=L.priceBot+3;
+      if(ty+14<=boundary){
+        pctx.fillStyle=CROSS;
+        pctx.fillRect(cx-tw/2,ty,tw,14);
+        pctx.fillStyle='#000';
+        pctx.fillText(tStr,cx,ty+7);
+      }
+      /* 価格ラベル */
+      if(cy>=L.priceTop&&cy<=L.priceBot){
+        var fracY=(cy-L.priceTop)/L.priceH;
+        var priceAt=L.pmax-fracY*(L.pmax-L.pmin);
+        var pStr=priceAt.toFixed(0);
+        var pw=pctx.measureText(pStr).width+10;
+        pctx.textAlign='left';
+        pctx.fillStyle=CROSS;
+        pctx.fillRect(L.padL+L.chartW+2,cy-8,pw,16);
+        pctx.fillStyle='#000';
+        pctx.fillText(pStr,L.padL+L.chartW+7,cy);
+      }
+    }
+    /* volOverlay: 縦線のみ (Y は 0..volAreaH 範囲全域) */
+    if(vctx&&volAreaH>0){
+      vctx.strokeStyle=CROSS; vctx.setLineDash([3,3]); vctx.lineWidth=1;
+      vctx.beginPath();
+      vctx.moveTo(Math.round(cx)+0.5,0);
+      vctx.lineTo(Math.round(cx)+0.5,volAreaH);
+      vctx.stroke();
+      vctx.setLineDash([]);
+    }
+  }
+
   // F2: 自分の cursorRef.current から親に {tm, yOffset} を通知 (両チャート連動)
   // C-uaxis: 統合chart時 (L.hasRef=true) は外部cursor不要 (過去chart container非render)。
   //   gap にいる場合は通知しない。
@@ -1633,7 +1848,7 @@ function DataChart(props){
   }
   // マウスムーブハンドラ (十字カーソル座標更新専用)
   function onChartMouseMove(e){
-    var rect=containerRef.current.getBoundingClientRect();
+    var rect=getCanvasRect();
     cursorRef.current={x:e.clientX-rect.left,y:e.clientY-rect.top};
     notifyExternalCursorFromLocal();
     if(!rafRef.current){
@@ -1689,7 +1904,7 @@ function DataChart(props){
   /* Pointer → 時刻+価格に変換 */
   function pxToTimePrice(clientX,clientY){
     var L=layoutRef.current; if(!L)return null;
-    var rect=containerRef.current.getBoundingClientRect();
+    var rect=getCanvasRect();
     var cx=clientX-rect.left, cy=clientY-rect.top;
     /* C-uaxis: u軸対応で side/tm/u 算出 */
     var xst=xToSideTm(cx);
@@ -1746,7 +1961,7 @@ function DataChart(props){
 
   function hitTestStroke(clientX,clientY){
     var L=layoutRef.current; if(!L)return null;
-    var rect=containerRef.current.getBoundingClientRect();
+    var rect=getCanvasRect();
     var cx=clientX-rect.left, cy=clientY-rect.top;
     /* C6+C8a: クリック側を判定。xToSideTmがgap帯も近い側に境界clampするので 'gap'返しは無し */
     var clickSide='cur';
@@ -2020,7 +2235,7 @@ function DataChart(props){
     if(props.textInputActive)return;
     // 十字カーソル座標更新 (hoverでも描画中でも)
     if(containerRef.current){
-      var rect=containerRef.current.getBoundingClientRect();
+      var rect=getCanvasRect();
       cursorRef.current={x:e.clientX-rect.left,y:e.clientY-rect.top};
       notifyExternalCursorFromLocal();
     }
@@ -2115,7 +2330,7 @@ function DataChart(props){
       return;
     }
     if(drawTool!=='pan'&&!ctrlPanRef.current){panStartRef.current=null;return;}
-    var rect2=containerRef.current.getBoundingClientRect();
+    var rect2=getCanvasRect();
     var padL=40, padR=40;
     var chartW=rect2.width-padL-padR;
     /* C-uaxis: u軸上でpan — 画面1chartW幅のswipeで 1uSpan分のpan */
@@ -2260,7 +2475,7 @@ function DataChart(props){
       var newUSpan=pr.uSpan0/r;
       if(newUSpan<2)newUSpan=2;
       if(newUSpan>uTotalNow)newUSpan=uTotalNow;
-      var rect=containerRef.current.getBoundingClientRect();
+      var rect=getCanvasRect();
       var cxLocal=pr.cx0-rect.left;
       var cxRatio=(cxLocal-L.padL)/L.chartW;
       if(cxRatio<0)cxRatio=0; if(cxRatio>1)cxRatio=1;
@@ -2295,7 +2510,7 @@ function DataChart(props){
     if(props.textInputActive)return;
     if(e.pointerType!=='pen'||e.buttons!==0)return;
     if(!containerRef.current)return;
-    var rect=containerRef.current.getBoundingClientRect();
+    var rect=getCanvasRect();
     cursorRef.current={x:e.clientX-rect.left,y:e.clientY-rect.top};
     notifyExternalCursorFromLocal();
     if(!rafRef.current){
@@ -2340,6 +2555,8 @@ function DataChart(props){
       ce("div",null,"データなし"));
   }
 
+  /* 2026-04-20: 分離モード判定 — pricePx>0 時は price/vol 2canvas 分離構造 */
+  var isSplit=pricePx>0;
   return ce("div",{
     ref:containerRef,
     onMouseDown:onMouseDown,
@@ -2361,14 +2578,47 @@ function DataChart(props){
         drawCrosshair();
       }
     },
-    style:{flex:1,position:"relative",background:chartBg,overflow:pricePx>0?"auto":"hidden",overflowX:"hidden",cursor:drawTool==='pan'?"grab":"default",touchAction:pricePx>0?"pan-y":"none",userSelect:"none"}
+    style:isSplit
+      ? {flex:1,position:"relative",background:chartBg,display:"flex",flexDirection:"column",
+         overflow:"hidden",cursor:drawTool==='pan'?"grab":"default",
+         touchAction:"none",userSelect:"none"}
+      : {flex:1,position:"relative",background:chartBg,overflow:"hidden",overflowX:"hidden",
+         cursor:drawTool==='pan'?"grab":"default",touchAction:"none",userSelect:"none"}
   },
-    ce("canvas",{ref:canvasRef,style:{display:"block",width:"100%",height:pricePx>0?"auto":"100%",pointerEvents:"none"}}),
-    /* 十字カーソル用オーバーレイ (常に配置、showCrosshair=false時は空) */
-    ce("canvas",{ref:overlayRef,style:{position:"absolute",top:0,left:0,width:"100%",height:pricePx>0?"auto":"100%",pointerEvents:"none"}}),
-    /* ズーム倍率表示 (右下) — C-uaxis: uTotal/uSpan */
-    ce("div",{style:{position:"absolute",right:8,bottom:6,fontSize:10,color:"#555",pointerEvents:"none"}},
-      ((getUTotal(hasRef)/((view.uE||0)-(view.uS||0)||1))).toFixed(1)+'×')
+    isSplit
+      /* === 分離モード === */
+      ? [
+          /* 実描画先 (display:none、drawDataChart はここに描画) */
+          ce("canvas",{key:"hidden",ref:hiddenCanvasRef,style:{display:"none"}}),
+          /* priceScrollArea: 縦スクロール可、内部に priceCanvas + priceOverlay */
+          ce("div",{key:"pscroll",ref:priceScrollRef,
+            style:{flex:1,position:"relative",overflowY:"auto",overflowX:"hidden",
+              touchAction:drawTool==='pan'?"pan-y":"none",minHeight:0}},
+            ce("canvas",{ref:priceCanvasRef,
+              style:{display:"block",width:"100%",pointerEvents:"none"}}),
+            ce("canvas",{ref:priceOverlayRef,
+              style:{position:"absolute",top:0,left:0,width:"100%",pointerEvents:"none"}})
+          ),
+          /* volFixedArea: 画面下部固定、内部に volCanvas + volOverlay + ズーム表示 */
+          ce("div",{key:"volfix",
+            style:{position:"relative",overflow:"hidden",flexShrink:0,background:chartBg}},
+            ce("canvas",{ref:volCanvasRef,
+              style:{display:"block",width:"100%",pointerEvents:"none"}}),
+            ce("canvas",{ref:volOverlayRef,
+              style:{position:"absolute",top:0,left:0,width:"100%",pointerEvents:"none"}}),
+            ce("div",{style:{position:"absolute",right:8,bottom:6,fontSize:10,color:"#555",pointerEvents:"none"}},
+              ((getUTotal(hasRef)/((view.uE||0)-(view.uS||0)||1))).toFixed(1)+'×')
+          )
+        ]
+      /* === 従来モード === */
+      : [
+          ce("canvas",{key:"main",ref:canvasRef,
+            style:{display:"block",width:"100%",height:"100%",pointerEvents:"none"}}),
+          ce("canvas",{key:"ov",ref:overlayRef,
+            style:{position:"absolute",top:0,left:0,width:"100%",height:"100%",pointerEvents:"none"}}),
+          ce("div",{key:"zoom",style:{position:"absolute",right:8,bottom:6,fontSize:10,color:"#555",pointerEvents:"none"}},
+            ((getUTotal(hasRef)/((view.uE||0)-(view.uS||0)||1))).toFixed(1)+'×')
+        ]
   );
 }
 
