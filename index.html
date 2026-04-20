@@ -595,6 +595,58 @@ function caSavePricePx(v){
   try{window.dispatchEvent(new CustomEvent('ca_price_px_changed',{detail:n}));}catch(e){}
 }
 
+/* 2026-04-20: ツール自動復帰 (書込ツール使用後 pan に戻す) ON/OFF
+   true = 従来通り自動で pan に戻す (デフォルト)
+   false = ツール切替しない (連続描画に便利) */
+var CA_AUTO_PAN_KEY='ca_auto_pan_v1';
+function caLoadAutoPan(){
+  try{var v=localStorage.getItem(CA_AUTO_PAN_KEY);return v==null?true:v==='1';}
+  catch(e){return true;}
+}
+function caSaveAutoPan(b){
+  try{localStorage.setItem(CA_AUTO_PAN_KEY,b?'1':'0');}catch(e){}
+  try{window.dispatchEvent(new CustomEvent('ca_auto_pan_changed',{detail:!!b}));}catch(e){}
+}
+
+/* 2026-04-20: チャート背景色 (drawDataChart / PNG一括DL が参照)
+   '#000000' が HSBI2 同等のデフォルト */
+var CA_CHART_BG_KEY='ca_chart_bg_v1';
+function caLoadChartBg(){
+  try{var v=localStorage.getItem(CA_CHART_BG_KEY);
+    if(v&&/^#[0-9a-fA-F]{6}$/.test(v))return v;
+    return '#000000';
+  }catch(e){return '#000000';}
+}
+function caSaveChartBg(c){
+  var s=String(c||'').trim();
+  if(!/^#[0-9a-fA-F]{6}$/.test(s))s='#000000';
+  try{localStorage.setItem(CA_CHART_BG_KEY,s);}catch(e){}
+  try{window.dispatchEvent(new CustomEvent('ca_chart_bg_changed',{detail:s}));}catch(e){}
+}
+
+/* 2026-04-20: パームリジェクション (iPad限定, Apple Pencil 検出後 N ms touch無視)
+   false = 従来通り touch=描画 (デフォルト)
+   true  = ペン検出後 800ms 内の touch を全て無視 */
+var CA_PALM_REJECT_KEY='ca_palm_reject_v1';
+var CA_PALM_REJECT_MS=800;
+function caLoadPalmReject(){
+  try{var v=localStorage.getItem(CA_PALM_REJECT_KEY);return v==='1';}
+  catch(e){return false;}
+}
+function caSavePalmReject(b){
+  try{localStorage.setItem(CA_PALM_REJECT_KEY,b?'1':'0');}catch(e){}
+  try{window.dispatchEvent(new CustomEvent('ca_palm_reject_changed',{detail:!!b}));}catch(e){}
+}
+function caIsIPad(){
+  try{
+    var ua=navigator.userAgent||'';
+    if(/iPad/i.test(ua))return true;
+    /* iPadOS 13+ は navigator.platform='MacIntel' + maxTouchPoints>=5 */
+    if(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>=5)return true;
+    return false;
+  }catch(e){return false;}
+}
+
 function FbSettingsModal(props){
   var cfg=props.cfg, onSave=props.onSave, onClose=props.onClose;
   var s0=useState(cfg.url||'');    var url=s0[0],setUrl=s0[1];
@@ -841,7 +893,7 @@ var TOOLS=[
 
 /* ─── DisplaySettingsModal (表示・動作設定) ──────────────────
    2026-04-20: FbSettingsModal から独立、今後拡張予定の設定群をまとめる
-   現状: 価格軸ラベル間隔のみ。今後予定: ツール自動復帰、背景色、パームリジェクション等 */
+   2026-04-20: ツール自動復帰 / チャート背景色 / パームリジェクション を追加 */
 function DisplaySettingsModal(props){
   var onClose=props.onClose;
   /* 価格軸ラベル固定ピクセル */
@@ -850,6 +902,27 @@ function DisplaySettingsModal(props){
     var n=(v|0); if(n<0)n=0; if(n>40)n=40;
     setPricePxLocal(n); caSavePricePx(n);
   }
+  /* ツール自動復帰 ON/OFF */
+  var sAP=useState(caLoadAutoPan()); var autoPan=sAP[0],setAutoPan=sAP[1];
+  function updateAutoPan(b){setAutoPan(!!b); caSaveAutoPan(!!b);}
+  /* チャート背景色 */
+  var sBG=useState(caLoadChartBg()); var chartBg=sBG[0],setChartBg=sBG[1];
+  function updateChartBg(c){
+    var s=String(c||'').trim();
+    if(!/^#[0-9a-fA-F]{6}$/.test(s))return;
+    setChartBg(s); caSaveChartBg(s);
+  }
+  /* パームリジェクション */
+  var sPR=useState(caLoadPalmReject()); var palmRej=sPR[0],setPalmRej=sPR[1];
+  function updatePalmRej(b){setPalmRej(!!b); caSavePalmReject(!!b);}
+  var isIPad=caIsIPad();
+  /* 背景色プリセット */
+  var BG_PRESETS=[
+    {c:'#000000',label:'漆黒'},
+    {c:'#0a1628',label:'濃紺'},
+    {c:'#0a1f0a',label:'濃緑'},
+    {c:'#1a1a1a',label:'濃灰'}
+  ];
   return ReactDOM.createPortal(
     ce("div",{onClick:onClose,
       style:{position:"fixed",inset:0,background:"rgba(0,0,0,.7)",zIndex:21000,
@@ -884,14 +957,73 @@ function DisplaySettingsModal(props){
             pricePx>0&&ce("div",{style:{fontSize:10,color:"#a5b4fc",marginTop:6,fontWeight:600}},
               "現在: 10円 = "+pricePx+"px 固定")
           ),
-          /* 今後拡張予定のプレースホルダ */
-          ce("div",{style:{background:"#161616",borderRadius:10,padding:"10px 12px",
-            border:"1px dashed #333",opacity:0.6}},
-            ce("div",{style:{fontSize:11,color:"#666",textAlign:"center",lineHeight:1.8}},
-              "今後追加予定:",ce("br",null),
-              "・ツール自動復帰 (描画後panに戻る) ON/OFF",ce("br",null),
-              "・チャート背景色",ce("br",null),
-              "・パームリジェクション (iPad)")
+          /* ツール自動復帰 ON/OFF */
+          ce("div",{style:{background:"#1a1a1a",borderRadius:10,padding:"10px 12px",
+            border:"1px solid #1e3a5f"}},
+            ce("div",{style:{fontSize:13,fontWeight:700,color:"#a5b4fc",marginBottom:4}},"🖱 ツール自動復帰"),
+            ce("div",{style:{fontSize:10,color:"#666",marginBottom:8,lineHeight:1.5}},
+              "描画ツール(ライン/矢印/ボックス/マーカー/フリーハンド/テキスト等)",ce("br",null),
+              "使用後に自動で選択モードを pan(画面移動) に戻します。",ce("br",null),
+              "OFF にすると同じツールで連続描画できます (lasso/eraser は元から対象外)"),
+            ce("label",{style:{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}},
+              ce("input",{type:"checkbox",checked:autoPan,
+                onChange:function(e){updateAutoPan(e.target.checked);},
+                style:{width:18,height:18,accentColor:"#6366F1",cursor:"pointer"}}),
+              ce("span",{style:{fontSize:13,color:"#ddd"}},"描画後 pan に戻す (デフォルト: ON)")
+            )
+          ),
+          /* チャート背景色 */
+          ce("div",{style:{background:"#1a1a1a",borderRadius:10,padding:"10px 12px",
+            border:"1px solid #1e3a5f"}},
+            ce("div",{style:{fontSize:13,fontWeight:700,color:"#a5b4fc",marginBottom:4}},"🎨 チャート背景色"),
+            ce("div",{style:{fontSize:10,color:"#666",marginBottom:8,lineHeight:1.5}},
+              "チャート描画領域の背景色を変更します。",ce("br",null),
+              "※既存チャートのサムネは旧色のまま (次回保存時に新色で再生成)"),
+            ce("div",{style:{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}},
+              BG_PRESETS.map(function(p){
+                var sel=chartBg.toLowerCase()===p.c.toLowerCase();
+                return ce("button",{key:p.c,onClick:function(){updateChartBg(p.c);},
+                  style:{flex:"1 1 auto",padding:"8px 6px",background:p.c,
+                    border:sel?"3px solid #6366F1":"1px solid #333",
+                    borderRadius:8,color:"#ddd",fontSize:11,fontWeight:600,
+                    cursor:"pointer",fontFamily:"inherit",minWidth:60}},
+                  p.label+(sel?" ✓":""));
+              })
+            ),
+            ce("div",{style:{display:"flex",alignItems:"center",gap:10}},
+              ce("span",{style:{fontSize:11,color:"#888",flexShrink:0}},"カスタム:"),
+              ce("input",{type:"color",value:chartBg,
+                onChange:function(e){updateChartBg(e.target.value);},
+                style:{width:50,height:32,border:"1px solid #333",borderRadius:6,
+                  background:"#2a2a2a",cursor:"pointer",padding:2}}),
+              ce("input",{type:"text",value:chartBg,
+                onChange:function(e){var v=e.target.value.trim();
+                  if(/^#[0-9a-fA-F]{6}$/.test(v))updateChartBg(v);
+                  else setChartBg(v);},
+                style:{flex:1,padding:"6px 8px",background:"#2a2a2a",border:"1px solid #3a3a3a",
+                  borderRadius:6,color:"#fff",fontSize:13,fontFamily:"monospace"}})
+            )
+          ),
+          /* パームリジェクション (iPad限定) */
+          ce("div",{style:{background:"#1a1a1a",borderRadius:10,padding:"10px 12px",
+            border:"1px solid "+(isIPad?"#1e3a5f":"#2a2a2a"),opacity:isIPad?1:0.5}},
+            ce("div",{style:{fontSize:13,fontWeight:700,color:"#a5b4fc",marginBottom:4}},
+              "✋ パームリジェクション",
+              !isIPad&&ce("span",{style:{fontSize:10,color:"#666",fontWeight:400,marginLeft:8}},"(iPad限定)")
+            ),
+            ce("div",{style:{fontSize:10,color:"#666",marginBottom:8,lineHeight:1.5}},
+              "Apple Pencil 検出後 "+CA_PALM_REJECT_MS+"ms 以内の指タッチを無視します。",ce("br",null),
+              "手のひらが画面に触れて誤って線が引かれるのを防ぎます。",ce("br",null),
+              "※ ON中はペン検出直後 "+CA_PALM_REJECT_MS+"ms 内は 2本指パン/ピンチも無視されます"),
+            ce("label",{style:{display:"flex",alignItems:"center",gap:10,
+              cursor:isIPad?"pointer":"not-allowed"}},
+              ce("input",{type:"checkbox",checked:palmRej&&isIPad,disabled:!isIPad,
+                onChange:function(e){if(isIPad)updatePalmRej(e.target.checked);},
+                style:{width:18,height:18,accentColor:"#6366F1",
+                  cursor:isIPad?"pointer":"not-allowed"}}),
+              ce("span",{style:{fontSize:13,color:isIPad?"#ddd":"#666"}},
+                isIPad?"パームリジェクションを有効化":"iPad でのみ利用可能")
+            )
           ),
           /* 閉じるボタン */
           ce("button",{onClick:onClose,
@@ -1191,12 +1323,21 @@ function DataChart(props){
   var rafRef=useRef(null);
   var drawRef=useRef({on:false});  // ドラッグ式描画状態 {on, sTM, sP, cTM, cP, pts(freehand用)}
   var ctrlPanRef=useRef(false);    // Ctrl+drag パン状態
+  /* 2026-04-20: パームリジェクション用 — Apple Pencil 最終検知タイムスタンプ */
+  var lastPenAtRef=useRef(0);
   /* 2026-04-20: 価格軸ラベル固定ピクセル設定 (localStorage連動、設定変更で再描画) */
   var stPPx=useState(caLoadPricePx()); var pricePx=stPPx[0],setPricePx=stPPx[1];
   useEffect(function(){
     function handler(e){setPricePx(caLoadPricePx());}
     window.addEventListener('ca_price_px_changed',handler);
     return function(){window.removeEventListener('ca_price_px_changed',handler);};
+  },[]);
+  /* 2026-04-20: ca_chart_bg_changed listener — 背景色変更時に再描画トリガ */
+  var stBg=useState(caLoadChartBg()); var chartBg=stBg[0],setChartBg=stBg[1];
+  useEffect(function(){
+    function handler(e){setChartBg(caLoadChartBg());}
+    window.addEventListener('ca_chart_bg_changed',handler);
+    return function(){window.removeEventListener('ca_chart_bg_changed',handler);};
   },[]);
   /* C8a: 昼休み(11:30=690〜12:30=750)の60分を g分(=ローソク1本分) に圧縮した仮想時間軸
      drawDataChart と同じ定義 (props.tf依存) */
@@ -1348,7 +1489,7 @@ function DataChart(props){
     drawDataChart(canvas,bars,data,dimWithPx,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx,refBars,refData,getCandleGap(tf),refStrokes,moveHint);
     // 描画直後に十字カーソルも再描画 (リサイズ・ズーム等でレイアウト変わった時)
     drawCrosshair();
-  },[data,bars,dim,tf,view,pShift,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes,moveHint,pricePx]);
+  },[data,bars,dim,tf,view,pShift,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes,moveHint,pricePx,chartBg]);
 
   // showCrosshair 切替時: OFFなら消す、ONなら再描画
   useEffect(function(){
@@ -2066,6 +2207,9 @@ function DataChart(props){
   // タッチ (iPad/スマホ) - 1本指: 描画、2本指: ピンチズーム＋パン
   function onTouchStart(e){
     if(props.textInputActive)return;
+    /* 2026-04-20: パームリジェクション — ペン検知直後の touch は全て無視
+       (iPad + 設定ON のみ、ピンチズームも無視される点注意) */
+    if(shouldRejectTouch())return;
     if(e.touches.length===2){
       // ピンチ開始
       if(e.preventDefault)e.preventDefault();
@@ -2096,6 +2240,8 @@ function DataChart(props){
   }
   function onTouchMove(e){
     if(props.textInputActive)return;
+    /* 2026-04-20: パームリジェクション — ペン検知直後の touch は全て無視 */
+    if(shouldRejectTouch())return;
     // ピンチ中
     if(pinchRef.current&&e.touches.length>=2){
       if(e.preventDefault)e.preventDefault();
@@ -2143,6 +2289,9 @@ function DataChart(props){
   }
   // ペンのホバー (Apple Pencil / S Pen 等) - 触れず浮かせている時に十字カーソル追従
   function onPointerMoveHover(e){
+    /* 2026-04-20: パームリジェクション用 — pen pointer 検出時タイムスタンプ更新
+       (hover / press 中問わず) */
+    if(e.pointerType==='pen'){lastPenAtRef.current=Date.now();}
     if(props.textInputActive)return;
     if(e.pointerType!=='pen'||e.buttons!==0)return;
     if(!containerRef.current)return;
@@ -2152,6 +2301,18 @@ function DataChart(props){
     if(!rafRef.current){
       rafRef.current=requestAnimationFrame(function(){drawCrosshair();rafRef.current=null;});
     }
+  }
+  /* 2026-04-20: onPointerDown — pen 押下時も lastPenAtRef 更新
+     (ホバーせず直接タッチしたケース対策) */
+  function onPointerDownPalm(e){
+    if(e.pointerType==='pen'){lastPenAtRef.current=Date.now();}
+  }
+  /* 2026-04-20: パームリジェクション判定ヘルパー — 設定ON + iPad + 直近 CA_PALM_REJECT_MS 内にペン検知あり */
+  function shouldRejectTouch(){
+    if(!caLoadPalmReject())return false;
+    if(!caIsIPad())return false;
+    var dt=Date.now()-lastPenAtRef.current;
+    return dt>=0&&dt<CA_PALM_REJECT_MS;
   }
   // ダブルクリック: (機能削除、ユーザー要望)
 
@@ -2190,6 +2351,8 @@ function DataChart(props){
     onTouchEnd:onTouchEnd,
     onTouchCancel:onTouchEnd,
     onPointerMove:onPointerMoveHover,
+    /* 2026-04-20: パームリジェクション用 — pen 押下検出タイムスタンプ更新 */
+    onPointerDown:onPointerDownPalm,
     onPointerLeave:function(e){
       // ペンのホバーがチャート外に出たら十字カーソル消す
       if(e.pointerType==='pen'){
@@ -2198,7 +2361,7 @@ function DataChart(props){
         drawCrosshair();
       }
     },
-    style:{flex:1,position:"relative",background:"#000000",overflow:pricePx>0?"auto":"hidden",overflowX:"hidden",cursor:drawTool==='pan'?"grab":"default",touchAction:pricePx>0?"pan-y":"none",userSelect:"none"}
+    style:{flex:1,position:"relative",background:chartBg,overflow:pricePx>0?"auto":"hidden",overflowX:"hidden",cursor:drawTool==='pan'?"grab":"default",touchAction:pricePx>0?"pan-y":"none",userSelect:"none"}
   },
     ce("canvas",{ref:canvasRef,style:{display:"block",width:"100%",height:pricePx>0?"auto":"100%",pointerEvents:"none"}}),
     /* 十字カーソル用オーバーレイ (常に配置、showCrosshair=false時は空) */
@@ -2282,8 +2445,8 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   var ctx=canvas.getContext('2d');
   ctx.setTransform(dpr,0,0,dpr,0,0);
 
-  // 背景 (HSBI2 と同じ漆黒)
-  ctx.fillStyle='#000000';
+  // 背景 (HSBI2 と同じ漆黒 / 2026-04-20: ca_chart_bg_v1 設定で変更可能)
+  ctx.fillStyle=caLoadChartBg();
   ctx.fillRect(0,0,W,H);
 
   var chartW=W-padL-padR;
@@ -4119,8 +4282,8 @@ function ImageAnnotator(props){
     var tc=document.createElement('canvas');
     tc.width=W; tc.height=H;
     var tctx=tc.getContext('2d');
-    /* 背景漆黒 */
-    tctx.fillStyle='#000000';
+    /* 背景 (2026-04-20: ca_chart_bg_v1 設定参照) */
+    tctx.fillStyle=caLoadChartBg();
     tctx.fillRect(0,0,W,H);
 
     /* ヘッダー描画 (ticker + refDate ⇄ curDate) */
@@ -4914,8 +5077,9 @@ function ImageAnnotator(props){
               analysisCommit(next);
             }
             /* 2026-04-20: 書き込みツール(line/dotted/arrow/rect/circle/marker/freehand/text)使用後は
-               自動で pan に戻す (lasso/eraser は対象外) */
-            if(['line','dotted','arrow','rect','circle','marker','freehand','text'].indexOf(tool)>=0){
+               自動で pan に戻す (lasso/eraser は対象外)
+               2026-04-20: ca_auto_pan_v1 設定でON/OFF可能 (デフォルトON) */
+            if(caLoadAutoPan()&&['line','dotted','arrow','rect','circle','marker','freehand','text'].indexOf(tool)>=0){
               switchTool('pan');
             }
           },
@@ -5575,8 +5739,9 @@ function ImageAnnotator(props){
           }
           setAnalysisTextInput(null);
           /* 2026-04-20: text tool使用後は自動で pan に戻す
-             lasso から開いた既存編集の場合は lasso のまま (tool==='text' の時のみ) */
-          if(tool==='text'){switchTool('pan');}
+             lasso から開いた既存編集の場合は lasso のまま (tool==='text' の時のみ)
+             2026-04-20: ca_auto_pan_v1 設定でON/OFF可能 (デフォルトON) */
+          if(tool==='text'&&caLoadAutoPan()){switchTool('pan');}
         }
         function deleteAnalysisText(){
           if(ati.editIdx>=0){
@@ -7007,7 +7172,7 @@ function DraftLibrary(props){
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,
           background:"#2a2a2a",color:"#a5b4fc",
           padding:"7px 12px",borderRadius:8})},
-        "📊"),
+        "📊 各種設定"),
       !showTrash&&ce("button",{onClick:function(){setAdding(true);setTimeout(function(){inputRef.current&&inputRef.current.focus();},50);},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,background:"#2563eb",
           color:"#fff",padding:"7px 14px",borderRadius:8})},
