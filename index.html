@@ -1022,6 +1022,9 @@ function DataChart(props){
   var sPR=useState(null); var priceRange=sPR[0],setPriceRange=sPR[1];
   /* 選択ストロークの index (lasso用) */
   var sSI=useState(null); var selectedIdx=sSI[0],setSelectedIdx=sSI[1];
+  /* 2026-04-20: 移動中のストローク非表示用ヒント — moveRefの{side,idx}と同期、
+     drawDataChartに渡してforEachで該当stroke描画をskipする */
+  var sMH=useState(null); var moveHint=sMH[0],setMoveHint=sMH[1];
 
   // C1+: 統合chart用 — refData から refBars を算出
   var refData=props.refData;
@@ -1087,10 +1090,10 @@ function DataChart(props){
   // メインチャート描画
   useEffect(function(){
     var canvas=canvasRef.current; if(!canvas||!bars.length||!priceRange)return;
-    drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx,refBars,refData,getCandleGap(tf),refStrokes);
+    drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx,refBars,refData,getCandleGap(tf),refStrokes,moveHint);
     // 描画直後に十字カーソルも再描画 (リサイズ・ズーム等でレイアウト変わった時)
     drawCrosshair();
-  },[data,bars,dim,tf,view,pShift,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes]);
+  },[data,bars,dim,tf,view,pShift,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes,moveHint]);
 
   // showCrosshair 切替時: OFFなら消す、ONなら再描画
   useEffect(function(){
@@ -1307,6 +1310,31 @@ function DataChart(props){
   /* ヒットテスト: クリック位置に近いストロークを返す (全ツール対応)
      C6: {side, idx} を返す。hasRef時は クリック側の strokes (cur or ref) のみ対象。
          gap領域は null。hit無しも null。 */
+
+  /* 2026-04-20: stroke anchor位置 → screen座標変換ヘルパー
+     テキスト編集モード起動時に、クリック位置ではなくテキスト実位置にtextareaを配置する用途 */
+  function anchorToScreen(stk, stkSide){
+    try{
+      if(!stk||!stk.anchors||!stk.anchors[0])return null;
+      var lay=layoutRef.current, cvs=canvasRef.current;
+      if(!lay||!cvs)return null;
+      var rect=cvs.getBoundingClientRect();
+      if(!rect||!rect.width)return null;
+      var dpr=dprRef.current||1;
+      var sw=rect.width/(cvs.width/dpr);
+      var sh=rect.height/(cvs.height/dpr);
+      var a=stk.anchors[0];
+      var cvsX=minToXWithSide(a.tm, stkSide||'cur');
+      var den=(lay.pmax-lay.pmin)||1;
+      var cvsY=lay.priceTop+(1-(a.p-lay.pmin)/den)*lay.priceH;
+      return {
+        screenX: rect.left+cvsX*sw,
+        screenY: rect.top+cvsY*sh,
+        tm: a.tm, p: a.p
+      };
+    }catch(err){return null;}
+  }
+
   function hitTestStroke(clientX,clientY){
     var L=layoutRef.current; if(!L)return null;
     var rect=containerRef.current.getBoundingClientRect();
@@ -1479,16 +1507,18 @@ function DataChart(props){
       }
       setSelectedIdx(hi);
       /* 2026-04-20: 既存textをhitした場合はtext modeと同じ挙動 (moveRefに_isTextTool+_editReq)
-         — mouseUpで moving=false なら editor overlay open、movingなら通常移動 */
+         — mouseUpで moving=false なら editor overlay open、movingなら通常移動
+         — screenX/screenY は stroke anchor位置から計算 (テキスト位置を保持) */
       var hiArr=(hi.side==='ref')?(refStrokes||[]):(strokes||[]);
       var hiStk=hiArr[hi.idx];
       if(hiStk&&(hiStk.type||hiStk.tool)==='text'){
+        var lScr=anchorToScreen(hiStk,hi.side);
         moveRef.current={
           side:hi.side, idx:hi.idx, startTM:tp.tm, startP:tp.p, dtm:0, dp:0, moving:false,
           _isTextTool:true,
           _editReq:{
-            tm:tp.tm, p:tp.p,
-            screenX:e.clientX, screenY:e.clientY,
+            tm:(lScr?lScr.tm:tp.tm), p:(lScr?lScr.p:tp.p),
+            screenX:(lScr?lScr.screenX:e.clientX), screenY:(lScr?lScr.screenY:e.clientY),
             editIdx:hi.idx, side:hi.side
           }
         };
@@ -1509,14 +1539,16 @@ function DataChart(props){
         if(hitStk&&(hitStk.type||hitStk.tool)==='text'){
           editIdxT=hitT.idx;
           editSideT=hitT.side;
-          /* moveRef で move/edit を切り分け — mouseUpで moving=true なら移動、false ならedit portal open */
+          /* moveRef で move/edit を切り分け — mouseUpで moving=true なら移動、false ならedit portal open
+             screenX/screenY は anchor位置から計算 (#2+#4 テキスト位置保持) */
+          var tScr=anchorToScreen(hitStk,editSideT);
           moveRef.current={
             side:editSideT, idx:editIdxT, startTM:tp.tm, startP:tp.p, dtm:0, dp:0, moving:false,
             /* text移動用フラグ: mouseUp時に moving=false ならedit、true なら通常の stroke update */
             _isTextTool:true,
             _editReq:{
-              tm:tp.tm, p:tp.p,
-              screenX:e.clientX, screenY:e.clientY,
+              tm:(tScr?tScr.tm:tp.tm), p:(tScr?tScr.p:tp.p),
+              screenX:(tScr?tScr.screenX:e.clientX), screenY:(tScr?tScr.screenY:e.clientY),
               editIdx:editIdxT, side:editSideT
             }
           };
@@ -1569,7 +1601,11 @@ function DataChart(props){
           var mx1=minToXWithSide(tpm.tm,mSide);
           var dxPx=Math.abs(mx1-mx0);
           var dyPx=Math.abs(((tpm.p-mref.startP)/(L0.pmax-L0.pmin))*L0.priceH);
-          if(!mref.moving&&Math.hypot(dxPx,dyPx)>=3)mref.moving=true;
+          if(!mref.moving&&Math.hypot(dxPx,dyPx)>=3){
+            mref.moving=true;
+            /* 2026-04-20: 元位置のstroke描画を抑制するため moveHint を同期 */
+            setMoveHint({side:mref.side||'cur', idx:mref.idx});
+          }
         }
       }
       if(!rafRef.current){
@@ -1688,6 +1724,8 @@ function DataChart(props){
         props.onRequestTextInput(m._editReq);
       }
       moveRef.current=null;
+      /* 2026-04-20: 移動終了したら元位置表示抑制を解除 */
+      setMoveHint(null);
       drawCrosshair();
       return;
     }
@@ -1876,7 +1914,7 @@ function DataChart(props){
 
 /* DataChart 描画関数 (Canvas 2D 直接描画、HSBI2色、ズーム対応、10円固定グリッド、時刻+価格ストローク)
    C-uaxis: view は u軸単位 {uS, uE} で管理 — 連続した1本の時間軸上を pan/zoom */
-function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,editingTextIdx,refBars,refData,gapVis,refStrokes){
+function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,editingTextIdx,refBars,refData,gapVis,refStrokes,hideHint){
   var dpr=window.devicePixelRatio||1;
   var W=dim.w, H=dim.h;
   canvas.width=Math.round(W*dpr);
@@ -2085,6 +2123,8 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     strokes.forEach(function(s,idx){
       // 編集中のテキストは重複描画を避けるためスキップ (C6: side一致も見る)
       if(editingTextIdx&&editingTextIdx.side==='cur'&&editingTextIdx.idx===idx)return;
+      /* 2026-04-20: 移動中stroke は元位置に描画しない (drawCrosshair側でshifted位置に描画) */
+      if(hideHint&&hideHint.side==='cur'&&hideHint.idx===idx)return;
       var tp=s.type||s.tool;
       if(tp==='freehand'||tp==='text'){
         drawAnalysisStrokeExt(ctx,s,minToXCur,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
@@ -2102,6 +2142,8 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     refStrokes.forEach(function(s,idx){
       // 編集中のテキストはスキップ
       if(editingTextIdx&&editingTextIdx.side==='ref'&&editingTextIdx.idx===idx)return;
+      /* 2026-04-20: 移動中stroke スキップ (ref側) */
+      if(hideHint&&hideHint.side==='ref'&&hideHint.idx===idx)return;
       var tp=s.type||s.tool;
       if(tp==='freehand'||tp==='text'){
         drawAnalysisStrokeExt(ctx,s,minToXRef,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
@@ -3936,7 +3978,9 @@ function ImageAnnotator(props){
       onTouchMove:function(e){if(e.touches.length>=2){e.stopPropagation();e.preventDefault();}},
       onTouchEnd:function(e){e.stopPropagation();}
     },
-      /* Row 1: tools — C8a-fix3: PCでもhorizontal wheel scroll可 */
+      /* Row 1: tools — C8a-fix3: PCでもhorizontal wheel scroll可
+         2026-04-20: タブレット/スマホでタッチスワイプによるツールバー移動を禁止
+         (touchAction:none で指ジェスチャ無効、ボタンtapは通る) */
       ce("div",{className:"toolbar-row",
         onWheel:function(e){
           var el=e.currentTarget;
@@ -3945,8 +3989,8 @@ function ImageAnnotator(props){
           if(e.deltaY!==0){e.preventDefault();el.scrollLeft+=e.deltaY;}
         },
         style:{display:"flex",gap:IS_TOUCH?4:6,alignItems:"center",padding:IS_TOUCH?"6px 8px":"10px 14px",
-        flexWrap:"nowrap",overflowX:"auto",overflowY:"hidden",WebkitOverflowScrolling:"touch",
-        borderBottom:"1px solid #1e1e1e",justifyContent:"flex-start",touchAction:"pan-x"}},
+        flexWrap:"nowrap",overflowX:"auto",overflowY:"hidden",
+        borderBottom:"1px solid #1e1e1e",justifyContent:"flex-start",touchAction:"none"}},
         /* B1: モードタブ（画像 / 分析） — 常に表示 */
         ce("div",{style:{display:"flex",gap:2,flexShrink:0,marginRight:8}},
           ['image','analysis'].map(function(m){
@@ -4061,7 +4105,8 @@ function ImageAnnotator(props){
         ce("button",{onClick:function(){setCancelConfirm(true);},style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#333",color:"#ccc"})},"分析を終了する"),
         ce("button",{onClick:saveAndExport,style:Object.assign({},TS,{fontSize:12,padding:"6px 12px",background:"#2563eb",color:"#fff",fontWeight:700})},"💾 保存・出力")
       ),
-      /* Row 2: color + lineW + opacity + zoom — C8a-fix3: PCでもhorizontal wheel scroll可 */
+      /* Row 2: color + lineW + opacity + zoom — C8a-fix3: PCでもhorizontal wheel scroll可
+         2026-04-20: タッチスクロール禁止 (touchAction:none、iOS慣性スクロール削除) */
       (modeTab==='image'||(modeTab==='analysis'&&analysisData)) && ce("div",{
         onWheel:function(e){
           var el=e.currentTarget;
@@ -4069,8 +4114,8 @@ function ImageAnnotator(props){
           if(e.deltaY!==0){e.preventDefault();el.scrollLeft+=e.deltaY;}
         },
         style:{display:"flex",gap:IS_TOUCH?6:14,alignItems:"center",padding:IS_TOUCH?"5px 8px":"10px 14px",
-        flexWrap:"nowrap",overflowX:"auto",overflowY:"hidden",WebkitOverflowScrolling:"touch",
-        justifyContent:"flex-start",touchAction:"pan-x"}},
+        flexWrap:"nowrap",overflowX:"auto",overflowY:"hidden",
+        justifyContent:"flex-start",touchAction:"none"}},
         ce(ColorPicker,{value:color,onChange:setColor,
           history:colorHist,
           onHistory:function(c5){setColorHist(function(prev){return [c5].concat(prev.filter(function(x){return x!==c5;})).slice(0,16);});},
@@ -4417,6 +4462,11 @@ function ImageAnnotator(props){
               setAnalysisStrokes(next);
               analysisCommit(next);
             }
+            /* 2026-04-20: 書き込みツール(line/dotted/arrow/rect/circle/marker/freehand/text)使用後は
+               自動で pan に戻す (lasso/eraser は対象外) */
+            if(['line','dotted','arrow','rect','circle','marker','freehand','text'].indexOf(tool)>=0){
+              switchTool('pan');
+            }
           },
           /* C6: onStrokeDelete(side, idx, silent) */
           onStrokeDelete:function(side, idx, silent){
@@ -4510,6 +4560,9 @@ function ImageAnnotator(props){
           onRequestTextInput:function(req){
             var initText='', initFS=fontSize, initBold=fontBold, initColor=color, initOp=opacity, initBoxW=null;
             var reqSide=req.side||'cur';
+            /* 2026-04-20: 既存編集時は anchor を stroke側から取得 (テキスト位置保持)
+               — ImageAnnotator側で req.tm/p に anchor値を入れてるが、親側でも最終保険として上書き */
+            var initTm=req.tm, initP=req.p;
             if(req.editIdx>=0){
               var srcObj;
               if(reqSide==='ref'){
@@ -4528,10 +4581,15 @@ function ImageAnnotator(props){
                 initOp=es.opacity!=null?es.opacity:opacity;
                 /* C9後-fix: 既存のboxW を引き継ぐ (無ければ未設定) */
                 initBoxW=es.boxW||null;
+                /* 2026-04-20: anchor を stroke側から取得して確定時の位置ずれを防止 */
+                if(es.anchors&&es.anchors[0]){
+                  initTm=es.anchors[0].tm;
+                  initP=es.anchors[0].p;
+                }
               }
             }
             setAnalysisTextInput({
-              tm:req.tm, p:req.p,
+              tm:initTm, p:initP,
               screenX:req.screenX, screenY:req.screenY,
               text:initText,
               fontSize:initFS, fontBold:initBold,
@@ -5065,6 +5123,9 @@ function ImageAnnotator(props){
             setTfArrCommit(curArr);
           }
           setAnalysisTextInput(null);
+          /* 2026-04-20: text tool使用後は自動で pan に戻す
+             lasso から開いた既存編集の場合は lasso のまま (tool==='text' の時のみ) */
+          if(tool==='text'){switchTool('pan');}
         }
         function deleteAnalysisText(){
           if(ati.editIdx>=0){
@@ -5143,6 +5204,26 @@ function ImageAnnotator(props){
             quickColors.map(function(qc,qi){
               var isA=ati.color===qc;
               var QS=IS_TOUCH?24:20;
+              var circleStyle={width:QS,height:QS,borderRadius:"50%",background:qc,cursor:"pointer",flexShrink:0,
+                  boxShadow:isA?"0 0 0 2px #111,0 0 0 3.5px #6366F1":"0 1px 3px rgba(0,0,0,.4)",
+                  border:"1.5px solid rgba(255,255,255,.4)",
+                  transform:isA?"scale(1.15)":"scale(1)",transition:"transform .1s"};
+              if(isA){
+                /* 2026-04-20: active時はlabel+hidden color inputでスロット色を直接編集可能 */
+                return ce("label",{key:qi,
+                  onMouseDown:function(e){e.preventDefault();e.stopPropagation();},
+                  onTouchStart:function(e){e.stopPropagation();},
+                  style:Object.assign({},circleStyle,{display:"inline-block",position:"relative"})},
+                  ce("input",{type:"color",value:qc,
+                    onInput:function(ev){
+                      var nc=ev.target.value;
+                      setAnalysisTextInput(Object.assign({},analysisTextInputRef.current||ati,{color:nc}));
+                      var nq=quickColors.slice();nq[qi]=nc;setQuickColorsAndSave(nq);
+                    },
+                    onChange:function(){if(analysisTextareaRef.current)analysisTextareaRef.current.focus();},
+                    style:{position:"absolute",opacity:0,width:1,height:1,top:0,left:0}})
+                );
+              }
               return ce("span",{key:qi,
                 onMouseDown:function(e){e.preventDefault();e.stopPropagation();},
                 onTouchStart:function(e){e.stopPropagation();},
@@ -5150,10 +5231,7 @@ function ImageAnnotator(props){
                   setAnalysisTextInput(Object.assign({},analysisTextInputRef.current||ati,{color:qc}));
                   if(analysisTextareaRef.current)analysisTextareaRef.current.focus();
                 },
-                style:{width:QS,height:QS,borderRadius:"50%",background:qc,cursor:"pointer",flexShrink:0,
-                  boxShadow:isA?"0 0 0 2px #111,0 0 0 3.5px #6366F1":"0 1px 3px rgba(0,0,0,.4)",
-                  border:"1.5px solid rgba(255,255,255,.4)",
-                  transform:isA?"scale(1.15)":"scale(1)",transition:"transform .1s"}
+                style:circleStyle
               });
             }),
             ce("label",{
@@ -5203,12 +5281,19 @@ function ImageAnnotator(props){
           ce("textarea",{
             ref:function(el){
               analysisTextareaRef.current=el;
-              /* 2026-04-20: マウント直後に高さを内容に合わせて初期化 (boxW wrap時の2行目以降見切れ対策) */
+              /* 2026-04-20: マウント直後に高さを内容に合わせて初期化 (boxW wrap時の2行目以降見切れ対策)
+                 + 確実にフォーカス (autoFocus失敗保険、タブレットのタッチ合成対策) */
               if(el){
                 requestAnimationFrame(function(){
                   if(!el)return;
                   el.style.height="auto";
                   el.style.height=el.scrollHeight+"px";
+                  try{
+                    el.focus();
+                    var lenT=(el.value||'').length;
+                    /* 既存編集: 末尾にカーソル / 新規: そのまま (空なのでどっちでも) */
+                    el.setSelectionRange(lenT,lenT);
+                  }catch(er){}
                 });
               }
             },
