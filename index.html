@@ -582,12 +582,16 @@ function CancelConfirmModal(props){
 var FB_CFG_KEY='chart_annotator_fb_v1';
 
 /* 2026-04-20: 価格軸ラベル間固定ピクセル設定
-   0 = 自動 (従来通り priceH から自動算出、labelEvery=1 で常に10円刻み)
-   N>0 = 固定 (10円 = N px、必要に応じてチャート縦拡張しスクロール) */
+   0 = 自動 (priceH から自動算出)
+   N>0 = 固定 (10円 = N px、必要に応じてチャート縦拡張しスクロール)
+   2026-04-21: 初期値 0 → 35 (チャートズーム時の相対位置を安定させる) */
 var CA_PRICE_PX_KEY='ca_price_gap_px_v1';
+var CA_PRICE_PX_DEFAULT=35;
 function caLoadPricePx(){
-  try{var v=localStorage.getItem(CA_PRICE_PX_KEY);var n=v?parseInt(v,10):0;return (n>=0&&n<=100)?n:0;}
-  catch(e){return 0;}
+  try{var v=localStorage.getItem(CA_PRICE_PX_KEY);
+    if(v===null)return CA_PRICE_PX_DEFAULT;
+    var n=parseInt(v,10);return (n>=0&&n<=100)?n:CA_PRICE_PX_DEFAULT;}
+  catch(e){return CA_PRICE_PX_DEFAULT;}
 }
 function caSavePricePx(v){
   var n=(v|0); if(n<0)n=0; if(n>100)n=100;
@@ -3094,9 +3098,8 @@ function drawAnalysisStrokeExt(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,pric
     displayLines.forEach(function(l){var m=ctx.measureText(l).width; if(m>maxW)maxW=m;});
     if(s.boxW&&s.boxW>maxW)maxW=s.boxW;
     var boxH=displayLines.length*fs*1.3;
-    ctx.globalAlpha=op*0.6; ctx.fillStyle='#000';
-    ctx.fillRect(x-3,y-2,maxW+6,boxH+4);
-    ctx.globalAlpha=op; ctx.fillStyle=col;
+    /* 2026-04-21: テキスト背景 透明化 (旧: rgba(0,0,0,0.6) fillRect) */
+    ctx.fillStyle=col;
     displayLines.forEach(function(l,i){ctx.fillText(l,x,y+i*fs*1.3);});
   }
   ctx.globalAlpha=1;
@@ -3401,12 +3404,24 @@ function ImageAnnotator(props){
   }
   var stAV=useState({uS:0,uE:getUTotalIA('1m',false)});  var analysisView=stAV[0],setAnalysisView=stAV[1];         // 時間軸ビュー u軸 (両chart共通)
   var stAPS=useState(0);             var analysisPShift=stAPS[0],setAnalysisPShift=stAPS[1];   // 現在チャートの pShift
+  /* 2026-04-21: 初期表示スケール (px/u) — 12 で最新データを右端に配置
+     chartWは mount時の window幅 - padL(40) - padR(40) - 左右マージン余裕(20) で推定
+     (正確なchartWはDataChart側の dim 確定後に決まるが、初期表示用の近似で十分) */
+  function computeInitialView(tfLocal, hasR){
+    var uT=getUTotalIA(tfLocal,hasR);
+    var pxPerU=12;
+    var chartWApprox=Math.max(400,(typeof window!=='undefined'?window.innerWidth:1200)-100);
+    var uSpan=chartWApprox/pxPerU;
+    if(uSpan>=uT)return {uS:0,uE:uT};  /* 全体収まる → フィット */
+    return {uS:uT-uSpan, uE:uT};       /* 最新データを右端に */
+  }
   /* C-uaxis: analysisData/analysisTf/refAnalysis(id) 変更時に view/pShift をリセット (u軸、uTotal変化に追従)
      C8a-bugfix: deps を refAnalysis.id に絞る — refAnalysis全体だと setRefAnalysis(...analysisStrokes...) のたびに発火して
-                 ref側書込直後に view が全体表示にreset され、書いた線が画面外にスクロール (=消えたように見える) する */
+                 ref側書込直後に view が全体表示にreset され、書いた線が画面外にスクロール (=消えたように見える) する
+     2026-04-21: リセット先を「最新データ右端 + 12 px/u」に変更 */
   useEffect(function(){
     if(analysisData){
-      setAnalysisView({uS:0,uE:getUTotalIA(analysisTf,!!refAnalysis)});
+      setAnalysisView(computeInitialView(analysisTf,!!refAnalysis));
       setAnalysisPShift(0);
     }
   },[analysisData,analysisTf,refAnalysis?refAnalysis.id:null]);
