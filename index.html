@@ -1462,6 +1462,27 @@ function DataChart(props){
     if(props.pShift===undefined)setPShift(0);
   },[tf,data]);
 
+  /* 2026-04-21: X軸スケール固定 (12 px/u)
+     dim.w 変化時に uSpan = (dim.w - padL - padR) / 12 に再調整。
+     uS は維持して uE だけ更新 (左端固定、右端が動く)。
+     uE > uTotal 時は右寄せで uS を前にずらす (全体より広い画面にならないよう) */
+  useEffect(function(){
+    if(!dim||!dim.w||dim.w<200)return;
+    var chartW=dim.w-40-40;  /* padL=40, padR=40 */
+    var BAR_PX=12;
+    var targetUSpan=chartW/BAR_PX;
+    var uT=getUTotal(hasRef);
+    setView(function(v){
+      var uS=v.uS||0;
+      var uE=uS+targetUSpan;
+      if(targetUSpan>=uT){uS=0; uE=uT;}                    /* 全体収まる → フィット */
+      else if(uE>uT){uE=uT; uS=uT-targetUSpan;}            /* 右端超過 → 右寄せ */
+      if(uS<0)uS=0;
+      if(Math.abs((v.uE-v.uS)-targetUSpan)<0.5)return v;  /* ほぼ同じなら変更なし (無限ループ防止) */
+      return {uS:uS, uE:uE};
+    });
+  },[dim.w,tf,hasRef]);
+
   // コンテナサイズ追従 (ResizeObserver で display:none → 表示切替も捉える)
   useEffect(function(){
     var el=containerRef.current; if(!el)return;
@@ -1836,38 +1857,26 @@ function DataChart(props){
     drawCrosshair();
   }
 
-  // ホイール: ズーム (カーソル位置中心) — C-uaxis: u軸直接
+  // ホイール: 縦ズーム (pricePx変更) + Ctrl+ホイール: 縦シフト (pShift)
+  // 2026-04-21: X軸ズーム廃止 (バー横幅 12 px/u 固定)。X軸はドラッグpanのみ
   useEffect(function(){
     var el=containerRef.current; if(!el)return;
     function handler(e){
       e.preventDefault();
-      var rect=el.getBoundingClientRect();
-      var padL=40, padR=40;
-      var chartW=rect.width-padL-padR;
-      var cxAbs=e.clientX-rect.left;
-      var cx=cxAbs-padL;
-      if(cx<0||cx>chartW)return;
-      var L=layoutRef.current;
-      setView(function(v){
-        var uS=v.uS||0, uE=v.uE!=null?v.uE:(L?L.uTotal:getTmVisSpan());
-        var uSpan=uE-uS;
-        var frac=cx/chartW;
-        var uCenter=uS+frac*uSpan;
-        // Ctrl+ホイール = 価格軸シフト
-        if(e.ctrlKey||e.metaKey){
-          setPShift(function(p){return p + (e.deltaY>0?-0.02:0.02);});
-          return v;
-        }
-        var uTotalNow=(L&&L.uTotal)||getUTotal(hasRef);
-        var factor=e.deltaY<0?0.85:1/0.85;
-        var newUSpan=Math.max(2,Math.min(uTotalNow,uSpan*factor));
-        var newUS=uCenter-frac*newUSpan;
-        var newUE=newUS+newUSpan;
-        if(newUS<0){newUS=0;newUE=newUS+newUSpan;}
-        if(newUE>uTotalNow){newUE=uTotalNow;newUS=newUE-newUSpan;}
-        if(newUS<0)newUS=0;
-        return {uS:newUS,uE:newUE};
-      });
+      // Ctrl+ホイール = 価格軸シフト (縦パン)
+      if(e.ctrlKey||e.metaKey){
+        setPShift(function(p){return p + (e.deltaY>0?-0.02:0.02);});
+        return;
+      }
+      /* 通常ホイール = 縦ズーム (pricePx変更)
+         deltaY<0 (up) → pricePx増加 (ズームイン、価格軸拡大)
+         deltaY>0 (down) → pricePx減少 (ズームアウト)
+         感度: 1刻みで段階的に (速すぎないよう deltaY 大小問わず ±1) */
+      var delta=e.deltaY<0?1:-1;
+      var cur=caLoadPricePx();
+      var next=cur+delta;
+      if(next<1)next=1; if(next>100)next=100;
+      if(next!==cur)caSavePricePx(next);  /* localStorage保存 + 'ca_price_px_changed' event 発火で再描画 */
     }
     el.addEventListener('wheel',handler,{passive:false});
     return function(){el.removeEventListener('wheel',handler);};
@@ -2455,7 +2464,8 @@ function DataChart(props){
         uSpan0:view.uE-view.uS,
         uCenter:tpC.u,           // ピンチ開始時の指位置のu値 (ズーム中この u が cxRatio位置に固定)
         pCenter:tpC.p,           // ピンチ中心の価格
-        side:tpC.side             // 参考 (cur/ref)
+        side:tpC.side,             // 参考 (cur/ref)
+        ppx0:caLoadPricePx()     // 2026-04-21: ピンチ開始時pricePx (縦ズーム基準値)
       };
       // 既存の描画/パン/移動をキャンセル
       drawRef.current={on:false};
@@ -2469,7 +2479,7 @@ function DataChart(props){
   }
   function onTouchMove(e){
     if(props.textInputActive)return;
-    // ピンチ中
+    // ピンチ中 — 2026-04-21: X軸ズーム廃止、縦ズーム (pricePx) + pShift のみ
     if(pinchRef.current&&e.touches.length>=2){
       if(e.preventDefault)e.preventDefault();
       var t1=e.touches[0], t2=e.touches[1];
@@ -2482,22 +2492,14 @@ function DataChart(props){
       if(r<0.1)r=0.1; if(r>20)r=20;
       var L=layoutRef.current;
       if(!L||!containerRef.current){return;}
-      /* C-uaxis: u軸ズーム — uCenter を cxRatio 位置に固定 */
-      var uTotalNow=L.uTotal||getUTotal(hasRef);
-      var newUSpan=pr.uSpan0/r;
-      if(newUSpan<2)newUSpan=2;
-      if(newUSpan>uTotalNow)newUSpan=uTotalNow;
-      var rect=getCanvasRect();
-      var cxLocal=pr.cx0-rect.left;
-      var cxRatio=(cxLocal-L.padL)/L.chartW;
-      if(cxRatio<0)cxRatio=0; if(cxRatio>1)cxRatio=1;
-      var newUS=pr.uCenter-cxRatio*newUSpan;
-      var newUE=newUS+newUSpan;
-      if(newUS<0){newUS=0;newUE=newUS+newUSpan;}
-      if(newUE>uTotalNow){newUE=uTotalNow;newUS=newUE-newUSpan;}
-      if(newUS<0)newUS=0;
-      setView({uS:newUS,uE:newUE});
-      // 価格軸縦シフト: 中心のy移動量で pShift 変化
+      /* ピンチ広げ (r>1) = ズームイン = pricePx 増加
+         ピンチ狭め (r<1) = ズームアウト = pricePx 減少
+         pinchRef.ppx0 (開始時pricePx) を保存しておき、r の対数比例で増減 */
+      var base=pr.ppx0||caLoadPricePx()||35;
+      var nextPpx=Math.round(base*r);
+      if(nextPpx<1)nextPpx=1; if(nextPpx>100)nextPpx=100;
+      if(nextPpx!==caLoadPricePx())caSavePricePx(nextPpx);
+      /* 価格軸縦シフト: 中心のy移動量で pShift 変化 */
       var priceH=L.priceH;
       var yenPerPx=(L.pmax-L.pmin)/priceH;
       setPShift(pr.ps0 + (cy-pr.cy0)*yenPerPx);
