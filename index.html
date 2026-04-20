@@ -647,6 +647,92 @@ function caIsIPad(){
   }catch(e){return false;}
 }
 
+
+/* ─── 銘柄コード ↔ ticker 対応 (2026-04-20: scalping-notebook連携用) ──
+   URLパラメータ ?5016_2025-04-19 から銘柄を特定するため、ticker毎に銘柄コードを保持する。
+   デフォルトは CA_DEFAULT_TICKER_CODES。 */
+var CA_TICKER_CODES_KEY='ca_ticker_codes_v1';
+var CA_DEFAULT_TICKER_CODES={
+  'INPEX':'1605',
+  'JX金属':'5016',
+  'フジクラ':'5803',
+  '川崎重工業':'7012',
+  'IHI':'7013',
+  'ソフトバンク':'9984'
+};
+function caLoadTickerCodes(){
+  try{
+    var s=localStorage.getItem(CA_TICKER_CODES_KEY);
+    if(!s)return Object.assign({},CA_DEFAULT_TICKER_CODES);
+    var p=JSON.parse(s);
+    /* 保存されたデータとデフォルトをマージ (新規デフォルト追加時に自動反映) */
+    return Object.assign({},CA_DEFAULT_TICKER_CODES,p);
+  }catch(e){return Object.assign({},CA_DEFAULT_TICKER_CODES);}
+}
+function caSaveTickerCodes(m){
+  try{localStorage.setItem(CA_TICKER_CODES_KEY,JSON.stringify(m));}catch(e){}
+  try{window.dispatchEvent(new CustomEvent('ca_ticker_codes_changed',{detail:m}));}catch(e){}
+}
+/* コード→ticker 逆引き */
+function caResolveTickerByCode(code){
+  if(!code)return null;
+  var m=caLoadTickerCodes();
+  var keys=Object.keys(m);
+  for(var i=0;i<keys.length;i++){
+    if(String(m[keys[i]])===String(code))return keys[i];
+  }
+  return null;
+}
+/* ticker→コード */
+function caGetCodeByTicker(ticker){
+  if(!ticker)return '';
+  var m=caLoadTickerCodes();
+  return m[ticker]||'';
+}
+
+/* ─── URLパラメータ解析 (2026-04-20: scalping-notebook連携用) ──
+   対応フォーマット:
+   - ?5016_2025-04-19         (code_date)
+   - ?5016_2025-04-19&id=abc  (code_date + id)
+   戻り値: {code, date, id} または null
+   パース後URLから即座にパラメータをクリアする (履歴/リロードで再適用させない) */
+function caParseUrlParams(){
+  try{
+    var search=window.location.search||'';
+    if(!search||search.length<2)return null;
+    var raw=search.slice(1); /* 先頭の?を除去 */
+    /* id=XXX を抽出して除去 */
+    var id='';
+    var idMatch=raw.match(/(?:^|&)id=([^&]*)/);
+    if(idMatch){
+      id=decodeURIComponent(idMatch[1]||'');
+      raw=raw.replace(/(?:^|&)id=[^&]*/,'');
+    }
+    /* 先頭の & を除去 */
+    raw=raw.replace(/^&+/,'').replace(/&+$/,'');
+    if(!raw)return null;
+    /* 残った文字列を第1セグメントとして扱う (& で複数ある場合は先頭のみ) */
+    var first=raw.split('&')[0];
+    try{first=decodeURIComponent(first);}catch(e){}
+    if(!first||first.indexOf('_')<=0)return null;
+    /* code_date 分解: 最初の_で分割 */
+    var u=first.indexOf('_');
+    if(u<=0)return null;
+    var code=first.slice(0,u).trim();
+    var date=first.slice(u+1).trim();
+    if(!code||!date)return null;
+    /* date 形式チェック: YYYY-MM-DD */
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(date))return null;
+    return {code:code,date:date,id:id||''};
+  }catch(e){console.warn('[caParseUrlParams] error:',e);return null;}
+}
+/* URLからパラメータをクリア (pushState) */
+function caClearUrlParams(){
+  try{
+    var url=window.location.pathname+window.location.hash;
+    window.history.replaceState(window.history.state||{},'',url);
+  }catch(e){}
+}
 function FbSettingsModal(props){
   var cfg=props.cfg, onSave=props.onSave, onClose=props.onClose;
   var s0=useState(cfg.url||'');    var url=s0[0],setUrl=s0[1];
@@ -915,6 +1001,15 @@ function DisplaySettingsModal(props){
   /* パームリジェクション */
   var sPR=useState(caLoadPalmReject()); var palmRej=sPR[0],setPalmRej=sPR[1];
   function updatePalmRej(b){setPalmRej(!!b); caSavePalmReject(!!b);}
+  /* 銘柄コード対応 (scalping-notebook連携) */
+  var sTC=useState(caLoadTickerCodes()); var tickerCodes=sTC[0],setTickerCodes=sTC[1];
+  var allTickers=caLoadTickers();
+  function updateTickerCode(ticker,code){
+    var sanitized=String(code||'').replace(/[^0-9A-Za-z]/g,'');
+    var next=Object.assign({},tickerCodes);
+    next[ticker]=sanitized;
+    setTickerCodes(next); caSaveTickerCodes(next);
+  }
   var isIPad=caIsIPad();
   /* 背景色プリセット */
   var BG_PRESETS=[
@@ -1024,6 +1119,28 @@ function DisplaySettingsModal(props){
               ce("span",{style:{fontSize:13,color:isIPad?"#ddd":"#666"}},
                 isIPad?"パームリジェクションを有効化":"iPad でのみ利用可能")
             )
+          ),
+          /* 銘柄コード対応 (scalping-notebook連携) */
+          ce("div",{style:{background:"#1a1a1a",borderRadius:10,padding:"10px 12px",
+            border:"1px solid #1e3a5f"}},
+            ce("div",{style:{fontSize:13,fontWeight:700,color:"#a5b4fc",marginBottom:4}},"🔗 銘柄コード (scalping-notebook連携)"),
+            ce("div",{style:{fontSize:10,color:"#666",marginBottom:8,lineHeight:1.5}},
+              "scalping-notebook からこのツールをURL経由で開く際に使われる銘柄コード。",ce("br",null),
+              "URL形式: ?{コード}_{日付YYYY-MM-DD}&id={チャートID}"),
+            allTickers.length===0
+              ?ce("div",{style:{fontSize:11,color:"#777",padding:"6px 0"}},"銘柄が未登録です。まず左カラムから銘柄を追加してください。")
+              :ce("div",{style:{display:"flex",flexDirection:"column",gap:4}},
+                allTickers.map(function(t){
+                  return ce("div",{key:t,style:{display:"flex",alignItems:"center",gap:8,padding:"4px 0"}},
+                    ce("div",{style:{flex:1,fontSize:12,color:"#ddd",fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},t),
+                    ce("input",{type:"text",value:tickerCodes[t]||'',
+                      onChange:function(e){updateTickerCode(t,e.target.value);},
+                      placeholder:"1234",
+                      style:{width:80,padding:"5px 8px",background:"#2a2a2a",border:"1px solid #3a3a3a",
+                        borderRadius:5,color:"#fff",fontSize:12,textAlign:"center",fontFamily:"inherit"}})
+                  );
+                })
+              )
           ),
           /* 閉じるボタン */
           ce("button",{onClick:onClose,
@@ -6764,6 +6881,8 @@ function exportAllDraftsAsPng(metaList, fbCfg, onProgress, onDone){
 
 function DraftLibrary(props){
   var onOpen=props.onOpen, onClose=props.onClose, fbCfg=props.fbCfg||{}, initialTicker=props.initialTicker||null;
+  var highlightDate=props.highlightDate||null;
+  var onClearHighlight=props.onClearHighlight||function(){};
   var s0=useState(caLoadTickers);   var tickers=s0[0],setTickers=s0[1];
   var s1=useState(initialTicker);   var selTicker=s1[0],setSelTicker=s1[1];
   var s2=useState(caLoadMeta);      var meta=s2[0],setMeta=s2[1];
@@ -6783,6 +6902,19 @@ function DraftLibrary(props){
   var s9=useState(function(){try{var v=localStorage.getItem(CA_SORT_KEY);if(v&&SORT_MODES.find(function(m){return m.id===v;}))return v;}catch(e){}return 'name_desc';});
   var sortMode=s9[0],setSortMode=s9[1];
   function changeSortMode(v){setSortMode(v);try{localStorage.setItem(CA_SORT_KEY,v);}catch(e){}}
+  /* highlightDate がある場合、該当カードまで自動スクロール */
+  useEffect(function(){
+    if(!highlightDate||!selTicker)return;
+    var tid=setTimeout(function(){
+      try{
+        var el=document.querySelector('[data-ca-highlight="1"]');
+        if(el&&el.scrollIntoView){
+          el.scrollIntoView({block:'center',behavior:'smooth'});
+        }
+      }catch(e){}
+    },200);
+    return function(){clearTimeout(tid);};
+  },[highlightDate,selTicker,meta]);
   var inputRef=useRef(null);
   var dragSrcRef=useRef(null);
   var addFileRef=useRef(null);
@@ -7566,6 +7698,19 @@ function DraftLibrary(props){
                 background:isA?"#2563eb":"#222",color:isA?"#fff":"#888"})},sm.label);
           })
         ),
+        /* 日付ハイライトバナー (scalping-notebookからURL遷移) */
+        highlightDate&&ce("div",{
+          style:{margin:"0 12px 8px",padding:"8px 12px",background:"#0a1f0a",
+            border:"1.5px solid #4ade80",borderRadius:8,display:"flex",alignItems:"center",gap:10,flexShrink:0}
+        },
+          ce("span",{style:{fontSize:13,color:"#86efac",fontWeight:700}},
+            "📅 " + highlightDate + " のチャートをハイライト表示中"),
+          ce("span",{style:{flex:1}}),
+          ce("button",{onClick:onClearHighlight,
+            style:Object.assign({},BT,{fontSize:11,fontWeight:600,padding:"4px 10px",borderRadius:5,
+              background:"#1c2e1a",color:"#86efac",border:"1px solid #4ade80"})
+          },"ハイライト解除")
+        ),
         ce("div",{
           onDragOver:selTicker?function(e){e.preventDefault();}:null,
           onDrop:selTicker?function(e){e.preventDefault();var files=e.dataTransfer.files;if(!files)return;for(var i=0;i<files.length;i++)addJsonDirect(files[i]);}:null,
@@ -7580,11 +7725,19 @@ function DraftLibrary(props){
               "またはここにJSONをドラッグ＆ドロップ")
             :charts.map(function(m){
               var dateStr=new Date(m.savedAt).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+              var isHighlight=highlightDate&&m.analysisDate&&m.analysisDate===highlightDate;
               return ce("div",{key:m.id,
-                style:{width:IS_TOUCH?450:510,background:"#1a1a1a",borderRadius:10,
-                  border:"1px solid #2a2a2a",overflow:"hidden",cursor:"pointer",flexShrink:0},
+                "data-ca-highlight":isHighlight?"1":null,
+                style:{width:IS_TOUCH?450:510,background:isHighlight?"#1c2e1a":"#1a1a1a",borderRadius:10,
+                  border:isHighlight?"2px solid #4ade80":"1px solid #2a2a2a",overflow:"hidden",cursor:"pointer",flexShrink:0,
+                  boxShadow:isHighlight?"0 0 0 3px rgba(74,222,128,0.25)":"none"},
                 onClick:function(){openChart(m.id);}},
                 ce("div",{style:{position:"relative"}},
+                  isHighlight&&ce("div",{
+                    style:{position:"absolute",top:6,left:6,zIndex:2,padding:"3px 8px",
+                      background:"#4ade80",color:"#0a1f0a",fontSize:10,fontWeight:700,
+                      borderRadius:4,letterSpacing:0.3}
+                  },"📅 "+highlightDate),
                   (m.thumbUrl||_thumbMemCache[m.id]||m.thumb)?ce("img",{src:_thumbMemCache[m.id]||m.thumbUrl||m.thumb,style:{width:"100%",display:"block",height:"auto"},draggable:false,onError:function(e){e.target.style.display="none";}})
                     :ce("div",{style:{width:"100%",height:80,background:"#222",display:"flex",
                       alignItems:"center",justifyContent:"center",color:"#555",fontSize:11}},"no preview"),
@@ -7598,7 +7751,8 @@ function DraftLibrary(props){
                 ce("div",{style:{padding:"7px 9px"}},
                   ce("div",{style:{fontSize:12,fontWeight:700,color:"#ddd",
                     overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},m.name),
-                  ce("div",{style:{fontSize:10,color:"#555",marginTop:2}},dateStr)
+                  ce("div",{style:{fontSize:10,color:isHighlight?"#86efac":"#555",marginTop:2}},
+                    m.analysisDate?m.analysisDate+" · ":"", dateStr)
                 )
               );
             })
@@ -7787,7 +7941,56 @@ function App(){
   var sDS=useState(false); var showDisplaySettings=sDS[0],setShowDisplaySettings=sDS[1];
   var s4=useState(function(){try{return sessionStorage.getItem('ca_screen')==='drafts';}catch(e){return false;}}); var showDrafts=s4[0],setShowDrafts=s4[1];
   var s5=useState(function(){try{return sessionStorage.getItem('ca_draftTicker')||null;}catch(e){return null;}}); var draftInitTicker=s5[0],setDraftInitTicker=s5[1];
+  /* 2026-04-20: URLパラメータ経由で指定された日付 (DraftLibrary で該当チャートをハイライト) */
+  var s6=useState(null); var highlightDate=s6[0],setHighlightDate=s6[1];
   var fileRef=useRef(null);
+  /* ─── 起動時: URLパラメータ解析 (scalping-notebook連携) ───
+     対応: ?{code}_{date}&id={id}
+     - id あり & 該当チャート存在 → エディタ直接起動
+     - id なし or 該当なし → コード→ticker解決して DraftLibrary で ticker + 日付ハイライト
+     セッション復帰(img/showDrafts)中は URL 処理をスキップして通常復元を優先 */
+  useEffect(function(){
+    /* 既に img や drafts に復帰中なら URL 処理しない */
+    if(img)return;
+    var params=caParseUrlParams();
+    if(!params)return;
+    /* URL をクリア (リロード時の再適用防止) */
+    caClearUrlParams();
+    var ticker=caResolveTickerByCode(params.code);
+    /* id 指定あり: 該当チャートを検索して直接開く */
+    if(params.id){
+      var all=caLoadMeta();
+      var hit=all.find(function(m){return m.id===params.id;});
+      if(hit){
+        /* openChart 相当: dataを読み込んでエディタに遷移 */
+        var extra={_draftId:hit.id,_ticker:hit.ticker||'',_name:hit.name||'',_thumb:hit.thumb||'',_savedAt:hit.savedAt||0};
+        caLoadDataAsync(hit.id,function(d){
+          if(d&&(d.orig_base64||d.base64)){
+            setImg(Object.assign({},d,extra));
+          } else if(d&&d.analysisData){
+            /* JSONのみdraft */
+            setImg(Object.assign({},d,extra));
+          } else {
+            /* データなし → Firebase フォールバックは複雑なので、DraftLibrary へ案内 */
+            console.warn('[caURLParam] id指定あるがローカルにデータなし。DraftLibraryへ:',params.id);
+            if(ticker)setDraftInitTicker(ticker);
+            setHighlightDate(params.date);
+            try{window.caToast&&window.caToast('該当チャートのローカルデータがありません。一覧から開いてください');}catch(e){}
+          }
+        });
+        return;
+      }
+      /* id あるが該当なし → フォールバック: コード+日付ハイライト */
+    }
+    /* id なし or id 該当なし → DraftLibrary で ticker 選択 + 日付ハイライト */
+    if(ticker){
+      setDraftInitTicker(ticker);
+      setHighlightDate(params.date);
+    } else {
+      /* コード未登録 */
+      try{window.caToast&&window.caToast('銘柄コード「'+params.code+'」は未登録です。表示設定で追加してください');}catch(e){}
+    }
+  },[]);  /* 初回マウントのみ */
   useEffect(function(){
     try{sessionStorage.setItem('ca_screen',img?'editor':showDrafts?'drafts':'home');
     if(draftInitTicker)sessionStorage.setItem('ca_draftTicker',draftInitTicker);
@@ -7855,10 +8058,12 @@ function App(){
     ce(DraftLibrary,{
       fbCfg:fbCfg,
       initialTicker:draftInitTicker,
-      onOpen:function(d){setImg(d);setDraftInitTicker(null);},
+      highlightDate:highlightDate,
+      onOpen:function(d){setImg(d);setDraftInitTicker(null);setHighlightDate(null);},
       onClose:function(){/* no-op: DraftLibrary がホームなので戻り先なし */},
       onOpenFbSettings:function(){setShowFbSettings(true);},
-      onOpenDisplaySettings:function(){setShowDisplaySettings(true);}
+      onOpenDisplaySettings:function(){setShowDisplaySettings(true);},
+      onClearHighlight:function(){setHighlightDate(null);}
     }),
     /* Firebase設定モーダル */
     showFbSettings&&ce(FbSettingsModal,{
