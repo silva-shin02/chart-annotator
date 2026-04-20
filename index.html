@@ -2744,8 +2744,8 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   var gridSides = hasRef?['ref','cur']:['cur'];
   gridSides.forEach(function(sd){
     for(var m=540; m<=930; m+=stepMin){
-      /* 2026-04-20: 昼休み(11:30-12:30)中のラベルはスキップ (境界は下で別途描画) */
-      if(m>690 && m<750)continue;
+      /* 2026-04-20: 昼休み(11:30-12:30)はループ内で全スキップ、11:30/12:30 は境界ブロックで描画 */
+      if(m>=690 && m<=750)continue;
       var u=tmSideToU(m,sd);
       if(u<uS-0.1||u>uE+0.1)continue;
       var x=uToX(u);
@@ -2756,7 +2756,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
       ctx.beginPath(); ctx.moveTo(x,priceTop); ctx.lineTo(x,volBot); ctx.stroke();
       ctx.fillStyle='#666'; ctx.fillText(tStr,x,volBot+4);
     }
-    // 昼休み境界 (11:30, 12:30) — 縦線 + 時刻ラベル強制表示
+    // 昼休み境界 (11:30, 12:30) — 縦線 + 時刻ラベル強制表示 (ここでのみ描画)
     [690,750].forEach(function(m){
       var u=tmSideToU(m,sd);
       if(u<uS||u>uE)return;
@@ -2764,7 +2764,6 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
       ctx.strokeStyle='#2a2a2a'; ctx.setLineDash([2,3]); ctx.lineWidth=0.5;
       ctx.beginPath(); ctx.moveTo(x,priceTop); ctx.lineTo(x,volBot); ctx.stroke();
       ctx.setLineDash([]);
-      /* 2026-04-20: 11:30/12:30 は昼休みスキップで抜けるので、ここで時刻ラベルを強制描画 */
       if(x>=padL-1&&x<=padL+chartW+1){
         var hh2=Math.floor(m/60), mm2=m%60;
         var tStr2=(hh2<10?'0':'')+hh2+':'+(mm2<10?'0':'')+mm2;
