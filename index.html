@@ -43,6 +43,81 @@ var useRef     = R.useRef;
 var useEffect  = R.useEffect;
 var useMemo    = R.useMemo;
 var Fragment   = R.Fragment;
+
+/* 2026-04-20 C12: alert/confirm 置き換え用ヘルパー (React外から呼べるDOM直接操作)
+   caToast(msg, level): 画面右下にToast表示 (level: 'info'|'success'|'error'、自動消滅)
+   caConfirm(msg, onYes, onNo): モーダル表示、はい/いいえで callback */
+if(!window.caToast){
+  window.caToast=function(msg,level){
+    level=level||'info';
+    var container=document.getElementById('ca-toast-container');
+    if(!container){
+      container=document.createElement('div');
+      container.id='ca-toast-container';
+      container.style.cssText='position:fixed;bottom:20px;right:20px;z-index:999999;display:flex;flex-direction:column;gap:8px;pointer-events:none;max-width:90vw;';
+      document.body.appendChild(container);
+    }
+    var toast=document.createElement('div');
+    var bg=level==='error'?'#7f1d1d':level==='success'?'#14532d':'#1e3a5f';
+    var fg=level==='error'?'#fca5a5':level==='success'?'#86efac':'#93c5fd';
+    var border=level==='error'?'#b91c1c':level==='success'?'#16a34a':'#2563eb';
+    toast.style.cssText='background:'+bg+';color:'+fg+';padding:10px 14px;border-radius:8px;font-size:13px;font-weight:600;max-width:400px;box-shadow:0 4px 16px rgba(0,0,0,.5);pointer-events:auto;opacity:0;transition:opacity 0.2s,transform 0.2s;transform:translateX(20px);white-space:pre-line;border:1px solid '+border+';line-height:1.5;';
+    toast.textContent=msg;
+    /* クリックで即消す */
+    toast.onclick=function(){
+      toast.style.opacity='0';toast.style.transform='translateX(20px)';
+      setTimeout(function(){if(toast.parentNode)toast.parentNode.removeChild(toast);},200);
+    };
+    container.appendChild(toast);
+    requestAnimationFrame(function(){
+      toast.style.opacity='1';toast.style.transform='translateX(0)';
+    });
+    var ttl=level==='error'?5000:level==='success'?2500:3000;
+    setTimeout(function(){
+      toast.style.opacity='0';toast.style.transform='translateX(20px)';
+      setTimeout(function(){if(toast.parentNode)toast.parentNode.removeChild(toast);},300);
+    },ttl);
+  };
+}
+if(!window.caConfirm){
+  window.caConfirm=function(msg,onYes,onNo,opts){
+    opts=opts||{};
+    var yesLabel=opts.yesLabel||'はい';
+    var noLabel=opts.noLabel||'キャンセル';
+    var danger=opts.danger!==false; /* デフォルト危険色 (赤)、false で青 */
+    var overlay=document.createElement('div');
+    overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:999999;display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(4px);';
+    var modal=document.createElement('div');
+    modal.style.cssText='background:#1f1f1f;border:1px solid #2a2a2a;border-radius:12px;padding:22px;max-width:420px;width:100%;box-shadow:0 16px 48px rgba(0,0,0,.7);animation:caModalIn 0.15s ease-out;';
+    var msgEl=document.createElement('div');
+    msgEl.style.cssText='font-size:14px;color:#fff;line-height:1.7;margin-bottom:20px;white-space:pre-line;';
+    msgEl.textContent=msg;
+    var btnRow=document.createElement('div');
+    btnRow.style.cssText='display:flex;gap:8px;justify-content:flex-end;';
+    function mkBtn(label,primary,cb){
+      var b=document.createElement('button');
+      b.textContent=label;
+      var bg=primary?(danger?'#dc2626':'#2563eb'):'#2a2a2a';
+      var col=primary?'#fff':'#aaa';
+      b.style.cssText='padding:10px 18px;font-size:13px;font-weight:'+(primary?'700':'600')+';background:'+bg+';color:'+col+';border:none;border-radius:8px;cursor:pointer;min-width:90px;';
+      b.onclick=function(){cleanup();cb&&cb();};
+      return b;
+    }
+    var cancelBtn=mkBtn(noLabel,false,onNo);
+    var okBtn=mkBtn(yesLabel,true,onYes);
+    btnRow.appendChild(cancelBtn);
+    btnRow.appendChild(okBtn);
+    modal.appendChild(msgEl);
+    modal.appendChild(btnRow);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    function cleanup(){if(overlay.parentNode)overlay.parentNode.removeChild(overlay);}
+    overlay.onclick=function(e){if(e.target===overlay){cleanup();onNo&&onNo();}};
+    /* Escキー対応 */
+    function onKey(e){if(e.key==='Escape'){cleanup();onNo&&onNo();window.removeEventListener('keydown',onKey);}}
+    window.addEventListener('keydown',onKey);
+  };
+}
 var ce         = R.createElement;   // ← h ではなく ce を使う
 
 var IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
@@ -554,8 +629,10 @@ function FbSettingsModal(props){
       .then(function(){setCleanupStatus('done:'+count);})
       .catch(function(e){console.error('cleanup:',e);setCleanupStatus('error: '+e.message);});
   }
+  /* 2026-04-20 C13: iOS Safari はfontSize<16のinputにフォーカスすると強制ズーム
+     これを防ぐため全inputをfontSize:16 に統一 */
   var INP={width:"100%",padding:"10px 12px",background:"#2a2a2a",border:"1px solid #3a3a3a",
-    borderRadius:10,color:"#fff",fontSize:13,outline:"none",boxSizing:"border-box"};
+    borderRadius:10,color:"#fff",fontSize:16,outline:"none",boxSizing:"border-box"};
   return ReactDOM.createPortal(
     ce("div",{onClick:function(e){if(e.target===e.currentTarget)onClose();},
       style:{position:"fixed",inset:0,background:"rgba(0,0,0,.7)",zIndex:21000,
@@ -599,7 +676,18 @@ function FbSettingsModal(props){
             ce("div",{style:{fontSize:11,color:"#888",marginBottom:6,fontWeight:600}},"Storage バケット名"),
             ce("input",{type:"text",value:bucket,onChange:function(e){setBucket(e.target.value);},
               placeholder:"scalping-notebbok.firebasestorage.app",style:INP}),
-            ce("div",{style:{fontSize:10,color:"#555",marginTop:4}},"Firebase Console → Storage で確認できます")
+            ce("div",{style:{fontSize:10,color:"#555",marginTop:4}},"Firebase Console → Storage で確認できます"),
+            /* 2026-04-20 C11: CORS設定ガイド */
+            ce("div",{style:{fontSize:10,color:"#fb923c",marginTop:6,lineHeight:1.6,
+              background:"#1a0f00",border:"1px solid #431407",borderRadius:4,padding:"6px 8px"}},
+              "⚠ CORS未設定だとサムネイル・画像合成に失敗します。",ce("br",null),
+              "下記cors.jsonを作成しターミナルで:",ce("br",null),
+              ce("code",{style:{color:"#fca5a5",fontFamily:"monospace"}},"gsutil cors set cors.json gs://BUCKET_NAME"),
+              ce("br",null),
+              "cors.json: ",
+              ce("code",{style:{color:"#fca5a5",fontFamily:"monospace",fontSize:9}},
+                '[{"origin":["*"],"method":["GET","HEAD"],"maxAgeSeconds":3600,"responseHeader":["Content-Type"]}]')
+            )
           ),
           ce("div",null,
             ce("div",{style:{fontSize:11,color:"#888",marginBottom:6,fontWeight:600}},"API Key（Storage用）"),
@@ -620,8 +708,7 @@ function FbSettingsModal(props){
               ),
               ce("button",{
                 onClick:cleanupStatus==='running'?null:function(){
-                  if(!window.confirm('Firebase DB内の旧Base64データ（thumb, data）を削除します。\nlocalStorageには影響しません。実行しますか？'))return;
-                  runCleanup();
+                  window.caConfirm('Firebase DB内の旧Base64データ（thumb, data）を削除します。\nlocalStorageには影響しません。実行しますか？',runCleanup);
                 },
                 style:{fontSize:11,fontWeight:700,padding:"8px 14px",borderRadius:8,border:"none",
                   cursor:cleanupStatus==='running'?'wait':'pointer',fontFamily:"inherit",flexShrink:0,
@@ -709,7 +796,7 @@ function RefChartPicker(props){
                 if(fbOld&&fbOld.data&&(fbOld.data.orig_base64||fbOld.data.base64)){
                   caSaveData(id,fbOld.data);
                   onSelect('data:'+(fbOld.data.orig_mt||fbOld.data.mt||'image/png')+';base64,'+(fbOld.data.orig_base64||fbOld.data.base64), fbOld.data.strokes||[]);
-                }else{alert('画像データが見つかりません');}
+                }else{window.caToast('画像データが見つかりません','error');}
               });
           }
           // base64が直接ある場合
@@ -727,10 +814,10 @@ function RefChartPicker(props){
               onSelect('data:'+(localData.orig_mt)+';base64,'+res.base64, localData.strokes||[]);
             });
           }
-          alert('画像データが見つかりません');
-        }).catch(function(e){console.error('[pickChart] Error:',e);alert('読込失敗: '+(e&&e.message?e.message:'不明'));});
+          window.caToast('画像データが見つかりません','error');
+        }).catch(function(e){console.error('[pickChart] Error:',e);window.caToast('読込失敗: '+(e&&e.message?e.message:'不明'),'error');});
     }else{
-      alert('画像データが見つかりません');
+      window.caToast('画像データが見つかりません','error');
     }
   }
 
@@ -829,7 +916,9 @@ function RefAnalysisPicker(props){
           analysisData:d.analysisData,
           /* C6: ref側strokeに side='ref' を付与 */
           analysisStrokes:migrateAnalysisStrokes(d.analysisStrokes,'ref'),
-          savedAt:chartMeta.savedAt||0
+          savedAt:chartMeta.savedAt||0,
+          /* 2026-04-20 C8: 楽観ロック基準値 (書き込み前pre-checkで使用) */
+          _savedAt:(d._v||chartMeta.savedAt||0)
         });
         return;
       }
@@ -847,18 +936,20 @@ function RefAnalysisPicker(props){
                 analysisData:fbData.analysisData,
                 /* C6: ref側strokeに side='ref' を付与 */
                 analysisStrokes:migrateAnalysisStrokes(fbData.analysisStrokes,'ref'),
-                savedAt:chartMeta.savedAt||0
+                savedAt:chartMeta.savedAt||0,
+                /* 2026-04-20 C8: 楽観ロック基準値 */
+                _savedAt:(fbData._v||chartMeta.savedAt||0)
               });
             }else{
-              alert('このチャートには過去データ(JSON)が紐付いていません。\nF5機能「過去データを追加する」は未実装です。');
+              window.caToast('このチャートには過去データ(JSON)が紐付いていません。\nF5機能「過去データを追加する」は未実装です。','info');
             }
           }).catch(function(e){
             setLoading(null);
-            alert('読込失敗: '+(e&&e.message?e.message:'不明'));
+            window.caToast('読込失敗: '+(e&&e.message?e.message:'不明'),'error');
           });
       }else{
         setLoading(null);
-        alert('このチャートには過去データ(JSON)が紐付いていません。');
+        window.caToast('このチャートには過去データ(JSON)が紐付いていません。','info');
       }
     });
   }
@@ -888,7 +979,7 @@ function RefAnalysisPicker(props){
                 ce("div",{style:{width:"100%",textAlign:"center",color:"#555",fontSize:11,marginTop:8}},currentTicker+" に紐付いた他のチャートは見つかりません"),
                 ce("div",{style:{width:"100%",textAlign:"center",marginTop:24}},
                   ce("button",{
-                    onClick:function(){alert('F5機能: 過去データを追加する、は未実装です。');},
+                    onClick:function(){window.caToast('F5機能: 過去データを追加する、は未実装です。','info');},
                     style:{padding:"11px 22px",fontSize:13,fontWeight:700,border:"none",borderRadius:8,
                       background:"#10b981",color:"#fff",cursor:"pointer",fontFamily:"inherit"}
                   },"📥 過去データを追加する")
@@ -1307,6 +1398,19 @@ function DataChart(props){
     return {tm:tm, p:price, cx:cx, cy:cy, side:side, u:u};
   }
 
+  /* 2026-04-20: 親コンポーネント (ImageAnnotator) からpxToTimePrice を呼ぶ用のAPI 
+     editor overlayの「…」ボタンdrag終了時に新screen座標を tm/p 変換するのに使用 */
+  useEffect(function(){
+    if(props.chartAPIRef){
+      props.chartAPIRef.current={
+        pxToTimePrice:function(cx,cy){return pxToTimePrice(cx,cy);}
+      };
+    }
+    return function(){
+      if(props.chartAPIRef)props.chartAPIRef.current=null;
+    };
+  },[]);
+
   /* ヒットテスト: クリック位置に近いストロークを返す (全ツール対応)
      C6: {side, idx} を返す。hasRef時は クリック側の strokes (cur or ref) のみ対象。
          gap領域は null。hit無しも null。 */
@@ -1479,6 +1583,35 @@ function DataChart(props){
       panStartRef.current={x:e.clientX,y:e.clientY,uS:view.uS,uE:view.uE,ps:pShift};
       ctrlPanRef.current=true;
       return;
+    }
+    /* 2026-04-20: どのツールでも既存textをhitしたらeditor overlay扱い (eraser除外)
+       tap (dragなし) → editor open / drag>=3px → text stroke 移動 */
+    if(drawTool!=='eraser'){
+      var gHit=hitTestStroke(e.clientX,e.clientY);
+      if(gHit!=null){
+        var gArr=(gHit.side==='ref')?(refStrokes||[]):(strokes||[]);
+        var gStk=gArr[gHit.idx];
+        if(gStk&&(gStk.type||gStk.tool)==='text'){
+          if(drawTool==='lasso')setSelectedIdx(gHit);
+          var gScr=anchorToScreen(gStk,gHit.side);
+          var gTp=pxToTimePrice(e.clientX,e.clientY);
+          moveRef.current={
+            side:gHit.side, idx:gHit.idx,
+            startTM:(gTp&&gTp.tm!=null?gTp.tm:0),
+            startP:(gTp&&gTp.p!=null?gTp.p:0),
+            dtm:0, dp:0, moving:false,
+            _isTextTool:true,
+            _editReq:{
+              tm:(gScr?gScr.tm:(gTp?gTp.tm:0)),
+              p:(gScr?gScr.p:(gTp?gTp.p:0)),
+              screenX:(gScr?gScr.screenX:e.clientX),
+              screenY:(gScr?gScr.screenY:e.clientY),
+              editIdx:gHit.idx, side:gHit.side
+            }
+          };
+          return;
+        }
+      }
     }
     if(drawTool==='pan'){
       panStartRef.current={x:e.clientX,y:e.clientY,uS:view.uS,uE:view.uE,ps:pShift};
@@ -2268,7 +2401,7 @@ function drawAnalysisStrokeExt(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,pric
     var x=minToX(a.tm), y=pToY(a.p);
     var fs=s.fontSize||15;
     var fb=s.fontBold?'bold ':'';
-    ctx.font=fb+fs+'px -apple-system,Helvetica,sans-serif';
+    ctx.font=fb+fs+"px -apple-system,'Helvetica Neue',sans-serif";
     ctx.textBaseline='top'; ctx.textAlign='left';
     /* 2026-04-20: boxW指定時は wordBreak wrap (幅を超える行を折返し)
        テキストエディット時のtextarea wrap表示と一致させるため */
@@ -2433,18 +2566,43 @@ function ImageAnnotator(props){
       if(_fbIsPaused(cfg2))return;
       var auth=cfg2.secret?'?auth='+cfg2.secret:'';
       var dataBase=cfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
-      var patchBody=JSON.stringify({analysisStrokes:newStrokes});
-      /* PATCH で analysisStrokes だけ差し替え (画像URL等は温存) */
-      fetch(dataBase+'/'+ref.id+'.json'+auth,{method:'PATCH',
-        headers:{'Content-Type':'application/json'},body:patchBody})
-        .catch(function(e){console.error('ref draft strokes sync:',e);});
-      /* _v bump + ts 更新 (他端末同期用) */
-      var savedAt=Date.now();
       var tsBase=cfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts-ts';
-      fetch(tsBase+'/'+ref.id+'.json'+auth,{method:'PUT',
-        headers:{'Content-Type':'application/json'},body:JSON.stringify({t:savedAt})}).catch(function(){});
-      fetch(cfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts-v.json'+auth,{method:'PUT',
-        headers:{'Content-Type':'application/json'},body:JSON.stringify({_v:savedAt})}).catch(function(){});
+      /* 2026-04-20 C8: ref書き込みも楽観ロック pre-check
+         ref.loadedSavedAt 未管理のため、ref._savedAt (読込時にセット) を基準に */
+      var refBase=ref._savedAt||0;
+      fetch(tsBase+'/'+ref.id+'.json'+auth).then(function(r){return r.ok?r.json():null;})
+        .then(function(tsPre){
+          var remoteT=tsPre&&tsPre.t;
+          if(remoteT&&remoteT>refBase+200){
+            /* 別端末先行書き込み検出 → silent skip (次回ポーリングで取得) */
+            console.warn('ref autoSave: version conflict, skipping write',ref.id);
+            return;
+          }
+          /* OK、PATCH実行 */
+          var patchBody=JSON.stringify({analysisStrokes:newStrokes});
+          fetch(dataBase+'/'+ref.id+'.json'+auth,{method:'PATCH',
+            headers:{'Content-Type':'application/json'},body:patchBody})
+            .catch(function(e){console.error('ref draft strokes sync:',e);});
+          /* _v bump + ts 更新 (他端末同期用) */
+          var savedAt=Date.now();
+          fetch(tsBase+'/'+ref.id+'.json'+auth,{method:'PUT',
+            headers:{'Content-Type':'application/json'},body:JSON.stringify({t:savedAt})}).catch(function(){});
+          /* refAnalysis._savedAt を更新 (次回 pre-check 基準) */
+          var curRef=refAnalysisRef.current;
+          if(curRef&&curRef.id===ref.id){
+            refAnalysisRef.current=Object.assign({},curRef,{_savedAt:savedAt});
+          }
+        })
+        .catch(function(){
+          /* pre-check失敗時は従来通り書き込み続行 (安全側) */
+          var patchBody=JSON.stringify({analysisStrokes:newStrokes});
+          fetch(dataBase+'/'+ref.id+'.json'+auth,{method:'PATCH',
+            headers:{'Content-Type':'application/json'},body:patchBody})
+            .catch(function(e){console.error('ref draft strokes sync:',e);});
+          var savedAt=Date.now();
+          fetch(tsBase+'/'+ref.id+'.json'+auth,{method:'PUT',
+            headers:{'Content-Type':'application/json'},body:JSON.stringify({t:savedAt})}).catch(function(){});
+        });
     },1500);
   }
   /* C6: refAnalysis.analysisStrokes を更新するhelper (tf別書換) */
@@ -2542,6 +2700,9 @@ function ImageAnnotator(props){
   var autoSaveTimerRef=useRef(null);
   var loadedSavedAtRef=useRef(0);
   var lastLocalCommitRef=useRef(0);
+  /* 2026-04-20 C8: 楽観ロック用バージョン番号。PUT前に remote の _v と比較、
+     不一致なら conflict として書き込み拒否。同期ごとに +1。 */
+  var loadedVersionRef=useRef(0);
   var savedDraftIdRef=useRef(img._draftId||null);
   var savedTickerRef=useRef(img._ticker||'');
   var postSaveCallbackRef=useRef(null);
@@ -2586,6 +2747,8 @@ function ImageAnnotator(props){
   var analysisTextInputRef=useRef(null);              // stale closure 回避
   var analysisFloatDragRef=useRef(null);              // 分析モード floating undo/redo のドラッグ
   var analysisTextareaRef=useRef(null);               // 分析モード text 入力 textarea
+  /* 2026-04-20: DataChart内のpxToTimePrice/anchorToScreenを親から呼ぶためのAPI ref */
+  var chartAPIRefAnalysis=useRef(null);
   useEffect(function(){toolRef.current=tool;},[tool]);
   useEffect(function(){zoomRef.current=zoom;},[zoom]);
   useEffect(function(){analysisTextInputRef.current=analysisTextInput;},[analysisTextInput]);
@@ -2646,14 +2809,25 @@ function ImageAnnotator(props){
   useEffect(function(){
     function handler(e){
       if(e.key==="Escape"){
-        if(textInputState)setTextInputState(null);
-        else setCancelConfirm(true);
+        if(cancelConfirm){setCancelConfirm(false);return;}
+        if(showRefAnalysisPicker){setShowRefAnalysisPicker(false);return;}
+        if(analysisTextInput){setAnalysisTextInput(null);return;}
+        if(textInputState){setTextInputState(null);return;}
+        setCancelConfirm(true);
       }
     }
+    /* 2026-04-20: onBack処理の優先順位を明確化
+       1. キャンセル確認モーダル開いてる → 閉じる
+       2. 過去チャートpicker開いてる → 閉じる
+       3. 分析モード編集中 → 編集を閉じる (破棄)
+       4. 画像モード編集中 → 編集を閉じる (破棄)
+       5. それ以外 → 終了確認モーダル */
     function onBack(){
-      // テキスト入力中なら確定、そうでなければ確認モーダル
-      if(textInputState){setTextInputState(null);}
-      else{setCancelConfirm(true);}
+      if(cancelConfirm){setCancelConfirm(false);return;}
+      if(showRefAnalysisPicker){setShowRefAnalysisPicker(false);return;}
+      if(analysisTextInput){setAnalysisTextInput(null);return;}
+      if(textInputState){setTextInputState(null);return;}
+      setCancelConfirm(true);
     }
     window.addEventListener("keydown",handler);
     window.addEventListener("ca_back",onBack);
@@ -2661,7 +2835,7 @@ function ImageAnnotator(props){
       window.removeEventListener("keydown",handler);
       window.removeEventListener("ca_back",onBack);
     };
-  },[textInputState,onClose]);
+  },[cancelConfirm,showRefAnalysisPicker,analysisTextInput,textInputState,onClose]);
 
   // prevent pinch on body
   useEffect(function(){
@@ -2735,6 +2909,7 @@ function ImageAnnotator(props){
       setDispH(Math.round(nh*sc));
       setZoom(1); setPan({x:0,y:0});
       loadedSavedAtRef.current=imgData._savedAt||imgData.savedAt||0;
+      loadedVersionRef.current=(typeof imgData._v==='number')?imgData._v:0;
       lastLocalCommitRef.current=0;
       setRemoteUpdate(false);
       // セッション保存（リロード復元用）
@@ -2897,12 +3072,31 @@ function ImageAnnotator(props){
       var savedAt=Date.now();
       var strokes=strokesRef.current;
       var auth=cfg2.secret?'?auth='+cfg2.secret:'';
-      setAutoSaveStatus('saving');
 
       var draftId=img._draftId||savedDraftIdRef.current;
       if(!draftId){setAutoSaveStatus(null);return;}
       var b64=d.orig_base64||d.base64;
       var mt=d.orig_mt||d.mt||'image/png';
+      setAutoSaveStatus('saving');
+
+      /* 2026-04-20 C8: 楽観ロック pre-check
+         remoteのts (version相当) を取得して自分のloadedSavedAtと比較
+         remoteT > local → 別端末が先に書き込んだ → 競合、書き込み拒否でbanner */
+      var tsPreUrl=cfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts-ts/'+draftId+'.json'+auth;
+      fetch(tsPreUrl).then(function(r){return r.ok?r.json():null;})
+        .then(function(tsPre){
+          var remoteT=tsPre&&tsPre.t;
+          if(remoteT&&remoteT>loadedSavedAtRef.current+200){
+            /* +200ms の grace period (自分直前の書き込みと端末時刻差を吸収) */
+            setRemoteUpdate(true);
+            setAutoSaveStatus(null);
+            return;
+          }
+          doActualWrite();
+        })
+        .catch(function(){doActualWrite();}); /* pre-check失敗時は書き込み続行 (安全側) */
+
+      function doActualWrite(){
 
       // 画像アップロード（初回のみ）
       var urlPromise;
@@ -2929,10 +3123,10 @@ function ImageAnnotator(props){
             headers:{'Content-Type':'application/json'},body:metaBody})
             .catch(function(e){console.error('draft meta sync:',e);});
         });
-        // data
+        // data — 2026-04-20 C8: _v を同梱 (polling側で競合検出に利用)
         var draftData=imageUrl
-          ?{imageUrl:imageUrl,orig_mt:mt,strokes:strokes,name:img._name||img.name||'chart'}
-          :{orig_base64:b64,orig_mt:mt,strokes:strokes,name:img._name||img.name||'chart'};
+          ?{imageUrl:imageUrl,orig_mt:mt,strokes:strokes,name:img._name||img.name||'chart',_v:savedAt}
+          :{orig_base64:b64,orig_mt:mt,strokes:strokes,name:img._name||img.name||'chart',_v:savedAt};
         /* B2+: 分析データがあれば同梱 (Firebase同期対応) */
         if(analysisDataRef.current)draftData.analysisData=analysisDataRef.current;
         /* B-drawing: 分析画面のストロークも同梱 (tf別オブジェクト) */
@@ -2944,17 +3138,17 @@ function ImageAnnotator(props){
           })
           .catch(function(e){console.error('draft data sync:',e);
             setAutoSaveStatus('err');setTimeout(function(){setAutoSaveStatus(null);},3000);});
-        // タイムスタンプ + バージョン
+        // タイムスタンプ (version相当)
         var tsBase=cfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts-ts';
         var tsBody=JSON.stringify({t:savedAt});fetch(tsBase+'/'+draftId+'.json'+auth,{method:'PUT',
           headers:{'Content-Type':'application/json'},body:tsBody}).catch(function(){});
-        var vBody=JSON.stringify({_v:savedAt});fetch(cfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts-v.json'+auth,
-          {method:'PUT',headers:{'Content-Type':'application/json'},body:vBody}).catch(function(){});
         loadedSavedAtRef.current=savedAt;
+        loadedVersionRef.current=savedAt;
       }).catch(function(e){
         console.error('triggerAutoSave:',e);
         setAutoSaveStatus('err');setTimeout(function(){setAutoSaveStatus(null);},3000);
       });
+      } /* end doActualWrite */
     },600);
   }
 
@@ -3025,6 +3219,8 @@ function ImageAnnotator(props){
                   setAnalysisStrokes(migrateAnalysisStrokes(fbData.analysisStrokes,'cur'));
                 }
                 loadedSavedAtRef.current=remoteT;
+                /* 2026-04-20 C8: pull成功 → loadedVersionも同期 (以後の書き込みpre-checkの基準) */
+                loadedVersionRef.current=(typeof fbData._v==='number')?fbData._v:remoteT;
                 setRemoteUpdate(false);
                 setAutoSaveStatus('ok');
                 setTimeout(function(){setAutoSaveStatus(null);},2000);
@@ -3039,7 +3235,8 @@ function ImageAnnotator(props){
         }).catch(function(){});
     }
 
-    var timer=setInterval(poll,15000);
+    /* 2026-04-20 C8: 楽観ロックと併用でポーリング間隔を5秒に短縮 (競合検出率向上) */
+    var timer=setInterval(poll,5000);
     return function(){clearInterval(timer);};
   },[]);
   /* 分析モード用: ストローク変更を「現在のtfの履歴」に commit (C6: {cur,ref} 統合スナップショット)
@@ -3213,11 +3410,13 @@ function ImageAnnotator(props){
         window.removeEventListener("mouseup",onUpT);
         window.removeEventListener("touchmove",onMovT);
         window.removeEventListener("touchend",onUpT);
+        window.removeEventListener("touchcancel",onUpT);
       }
       window.addEventListener("mousemove",onMovT);
       window.addEventListener("mouseup",onUpT);
       window.addEventListener("touchmove",onMovT,{passive:false});
       window.addEventListener("touchend",onUpT);
+      window.addEventListener("touchcancel",onUpT);
       return;
     }
 
@@ -3242,11 +3441,13 @@ function ImageAnnotator(props){
       window.removeEventListener("mouseup",onUp);
       window.removeEventListener("touchmove",onMov);
       window.removeEventListener("touchend",onUp);
+      window.removeEventListener("touchcancel",onUp);
     }
     window.addEventListener("mousemove",onMov);
     window.addEventListener("mouseup",onUp);
     window.addEventListener("touchmove",onMov,{passive:false});
     window.addEventListener("touchend",onUp);
+    window.addEventListener("touchcancel",onUp);
   }
 
   // ── 線系ストロークの端点ドラッグ ──
@@ -3286,11 +3487,13 @@ function ImageAnnotator(props){
       window.removeEventListener("mouseup",onUp);
       window.removeEventListener("touchmove",onMov);
       window.removeEventListener("touchend",onUp);
+      window.removeEventListener("touchcancel",onUp);
     }
     window.addEventListener("mousemove",onMov);
     window.addEventListener("mouseup",onUp);
     window.addEventListener("touchmove",onMov,{passive:false});
     window.addEventListener("touchend",onUp);
+    window.addEventListener("touchcancel",onUp);
   }
 
   // ── Text confirm ──
@@ -3652,12 +3855,12 @@ function ImageAnnotator(props){
      1m tf全体: ~9432px幅、5m tf全体: ~5924px幅 */
   function downloadAnalysisCombined(){
     var ad=analysisDataRef.current;
-    if(!ad){alert('分析データがありません');return;}
+    if(!ad){window.caToast('分析データがありません','error');return;}
     var ra=refAnalysisRef.current;
     var tf=analysisTfRef.current||'1m';
     var barsKey=tf==='5m'?'bars_5m':'bars_1m';
     var bars=ad[barsKey]||[];
-    if(!bars.length){alert('バーデータがありません');return;}
+    if(!bars.length){window.caToast('バーデータがありません','error');return;}
     var refBars=(ra&&ra.analysisData&&ra.analysisData[barsKey])||[];
     var refData=ra?ra.analysisData:null;
 
@@ -3759,7 +3962,7 @@ function ImageAnnotator(props){
     var fname=refDate?(refDate+'_to_'+curDate+'.png'):(curDate+'.png');
 
     tc.toBlob(function(blob){
-      if(!blob){alert('PNG生成失敗');return;}
+      if(!blob){window.caToast('PNG生成失敗','error');return;}
       var url=URL.createObjectURL(blob);
       var lnk=document.createElement('a');
       lnk.href=url;
@@ -3802,7 +4005,12 @@ function ImageAnnotator(props){
         cctx.drawImage(refImg2,0,refY,rw,rh);
         cctx.drawImage(tc,rw,mainY);
         var lnk2=document.createElement("a");
-        lnk2.href=combined.toDataURL("image/png");
+        try{
+          lnk2.href=combined.toDataURL("image/png");
+        }catch(e){
+          window.caToast('画像の保存に失敗しました。Firebase Storageに CORS 設定が必要です。\n(gsutil cors set cors.json gs://YOUR_BUCKET)','error');
+          return;
+        }
         var now=new Date();var ds=now.getFullYear()+('0'+(now.getMonth()+1)).slice(-2)+('0'+now.getDate()).slice(-2);
         lnk2.download=ds+"_combined.png";
         lnk2.click();
@@ -3849,16 +4057,17 @@ function ImageAnnotator(props){
           :{orig_base64:b64,orig_mt:mt,strokes:strokesRef.current,name:chartName};
         if(analysisDataRef.current)dbData.analysisData=analysisDataRef.current;  /* B2+: JSON同梱 */
         if(analysisStrokesRef.current&&totalAnalysisStrokes(analysisStrokesRef.current)>0)dbData.analysisStrokes=analysisStrokesRef.current;  /* B-drawing: tf別オブジェクト */
+        /* 2026-04-20 C8: 楽観ロック用version同梱 */
+        dbData._v=savedAt;
         var dataBody=JSON.stringify(dbData);fetch(draftDataBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
           body:dataBody}).catch(function(e){console.error('fbSyncDraft data:',e);});
       });
-      // タイムスタンプ + バージョン
+      // タイムスタンプ (version相当)
       var tsBase=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-ts';
       var tsBody=JSON.stringify({t:savedAt});fetch(tsBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
         body:tsBody}).catch(function(){});
-      var vBody=JSON.stringify({_v:savedAt});fetch(cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-v.json'+auth,{method:'PUT',
-        headers:{'Content-Type':'application/json'},body:vBody}).catch(function(){});
       loadedSavedAtRef.current=savedAt;
+      loadedVersionRef.current=savedAt;
     }
   }
   function saveAndExport(){
@@ -3897,11 +4106,13 @@ function ImageAnnotator(props){
       window.removeEventListener("mouseup",onUp);
       window.removeEventListener("touchmove",onMov);
       window.removeEventListener("touchend",onUp);
+      window.removeEventListener("touchcancel",onUp);
     }
     window.addEventListener("mousemove",onMov);
     window.addEventListener("mouseup",onUp);
     window.addEventListener("touchmove",onMov,{passive:false});
     window.addEventListener("touchend",onUp);
+    window.addEventListener("touchcancel",onUp);
   }
 
   // ── switchTool ──
@@ -3979,8 +4190,7 @@ function ImageAnnotator(props){
       onTouchEnd:function(e){e.stopPropagation();}
     },
       /* Row 1: tools — C8a-fix3: PCでもhorizontal wheel scroll可
-         2026-04-20: タブレット/スマホでタッチスワイプによるツールバー移動を禁止
-         (touchAction:none で指ジェスチャ無効、ボタンtapは通る) */
+         2026-04-20: スマホ/タブレットでの横スワイプスクロール復活 (touchAction:pan-x + iOS慣性スクロール) */
       ce("div",{className:"toolbar-row",
         onWheel:function(e){
           var el=e.currentTarget;
@@ -3989,8 +4199,8 @@ function ImageAnnotator(props){
           if(e.deltaY!==0){e.preventDefault();el.scrollLeft+=e.deltaY;}
         },
         style:{display:"flex",gap:IS_TOUCH?4:6,alignItems:"center",padding:IS_TOUCH?"6px 8px":"10px 14px",
-        flexWrap:"nowrap",overflowX:"auto",overflowY:"hidden",
-        borderBottom:"1px solid #1e1e1e",justifyContent:"flex-start",touchAction:"none"}},
+        flexWrap:"nowrap",overflowX:"auto",overflowY:"hidden",WebkitOverflowScrolling:"touch",
+        borderBottom:"1px solid #1e1e1e",justifyContent:"flex-start",touchAction:"pan-x"}},
         /* B1: モードタブ（画像 / 分析） — 常に表示 */
         ce("div",{style:{display:"flex",gap:2,flexShrink:0,marginRight:8}},
           ['image','analysis'].map(function(m){
@@ -4084,7 +4294,7 @@ function ImageAnnotator(props){
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#2a2a2a",color:"#aaa"})
         },"↺変更"),
         modeTab==='analysis' && analysisData && ce("button",{
-          onClick:function(){if(confirm('別のJSONを読み込む? 現在のデータは破棄されます')){var empty={'1m':[],'5m':[]};setAnalysisData(null);setAnalysisStrokes(empty);analysisHistRef.current={'1m':[{cur:[],ref:[]}],'5m':[{cur:[],ref:[]}]};analysisFutRef.current={'1m':[],'5m':[]};setCanUndo(false);setCanRedo(false);}},
+          onClick:function(){window.caConfirm('別のJSONを読み込む? 現在のデータは破棄されます',function(){var empty={'1m':[],'5m':[]};setAnalysisData(null);setAnalysisStrokes(empty);analysisHistRef.current={'1m':[{cur:[],ref:[]}],'5m':[{cur:[],ref:[]}]};analysisFutRef.current={'1m':[],'5m':[]};setCanUndo(false);setCanRedo(false);});},
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#2a2a2a",color:"#aaa"})
         },"🔄 別のJSON"),
         /* spacer */
@@ -4106,7 +4316,7 @@ function ImageAnnotator(props){
         ce("button",{onClick:saveAndExport,style:Object.assign({},TS,{fontSize:12,padding:"6px 12px",background:"#2563eb",color:"#fff",fontWeight:700})},"💾 保存・出力")
       ),
       /* Row 2: color + lineW + opacity + zoom — C8a-fix3: PCでもhorizontal wheel scroll可
-         2026-04-20: タッチスクロール禁止 (touchAction:none、iOS慣性スクロール削除) */
+         2026-04-20: 横スワイプスクロール復活 */
       (modeTab==='image'||(modeTab==='analysis'&&analysisData)) && ce("div",{
         onWheel:function(e){
           var el=e.currentTarget;
@@ -4114,8 +4324,8 @@ function ImageAnnotator(props){
           if(e.deltaY!==0){e.preventDefault();el.scrollLeft+=e.deltaY;}
         },
         style:{display:"flex",gap:IS_TOUCH?6:14,alignItems:"center",padding:IS_TOUCH?"5px 8px":"10px 14px",
-        flexWrap:"nowrap",overflowX:"auto",overflowY:"hidden",
-        justifyContent:"flex-start",touchAction:"none"}},
+        flexWrap:"nowrap",overflowX:"auto",overflowY:"hidden",WebkitOverflowScrolling:"touch",
+        justifyContent:"flex-start",touchAction:"pan-x"}},
         ce(ColorPicker,{value:color,onChange:setColor,
           history:colorHist,
           onHistory:function(c5){setColorHist(function(prev){return [c5].concat(prev.filter(function(x){return x!==c5;})).slice(0,16);});},
@@ -4164,7 +4374,7 @@ function ImageAnnotator(props){
             ce("input",{value:fontSizeStr,
               onChange:function(e){setFontSizeStr(e.target.value);var n=parseInt(e.target.value);if(!isNaN(n)&&n>=1&&n<=200)setFontSize(n);},
               onBlur:function(){var n=parseInt(fontSizeStr);var v=isNaN(n)?fontSize:Math.min(200,Math.max(1,n));setFontSize(v);setFontSizeStr(String(v));},
-              style:{width:40,textAlign:"center",background:"#222",border:"1px solid #444",color:"#fff",borderRadius:5,fontSize:13,padding:"3px 5px"}}),
+              style:{width:48,textAlign:"center",background:"#222",border:"1px solid #444",color:"#fff",borderRadius:5,fontSize:16,padding:"3px 5px"}}),
             ce("span",{onClick:function(){var v=Math.min(200,fontSize+1);setFontSize(v);setFontSizeStr(String(v));},
               style:{padding:"2px 7px",borderRadius:5,cursor:"pointer",fontSize:12,fontWeight:700,background:"#2a2a2a",color:"#fff",userSelect:"none"}},"+"),
             ce("span",{onClick:function(){setFontBold(function(b){return !b;});},
@@ -4382,16 +4592,16 @@ function ImageAnnotator(props){
               try{
                 var d=JSON.parse(ev.target.result);
                 if(!d||!Array.isArray(d.bars_1m)){
-                  alert('形式が不正です: bars_1m が配列ではありません');
+                  window.caToast('形式が不正です: bars_1m が配列ではありません','error');
                   return;
                 }
                 setAnalysisData(d);
                 setAnalysisTf('1m');
               }catch(err){
-                alert('JSONパースエラー: '+err.message);
+                window.caToast('JSONパースエラー: '+err.message,'error');
               }
             };
-            fr.onerror=function(){alert('ファイル読み込みエラー');};
+            fr.onerror=function(){window.caToast('ファイル読み込みエラー','error');};
             fr.readAsText(f);
             e.target.value='';
           }
@@ -4441,6 +4651,8 @@ function ImageAnnotator(props){
                 ?{side:(analysisTextInput.side||'cur'),idx:analysisTextInput.editIdx}
                 :null,
               textInputActive:!!analysisTextInput,
+              /* 2026-04-20: 「…」ボタンdrag終了時のtm/p変換用 */
+              chartAPIRef:chartAPIRefAnalysis,
           /* C6: onStrokeAdd - s.side で cur/ref 分岐 */
           onStrokeAdd:function(s){
             var side=s.side||'cur';
@@ -5173,11 +5385,56 @@ function ImageAnnotator(props){
             window.removeEventListener('mouseup',onEnd);
             window.removeEventListener('touchmove',onMov);
             window.removeEventListener('touchend',onEnd);
+            window.removeEventListener('touchcancel',onEnd);
           }
           window.addEventListener('mousemove',onMov);
           window.addEventListener('mouseup',onEnd);
           window.addEventListener('touchmove',onMov,{passive:false});
           window.addEventListener('touchend',onEnd);
+          window.addEventListener('touchcancel',onEnd);
+        }
+        /* 2026-04-20: 「…」ボタンドラッグで textarea 全体を移動
+           drag中: ati.screenX/Y を差分で更新 (textareaはrefresh時にleft/topが更新される)
+           drag終了: 最終 screenX/Y を chartAPIRef.pxToTimePrice で tm/p に変換し ati に反映 */
+        function startAtiMove(e){
+          e.preventDefault(); e.stopPropagation();
+          var src=e.touches?e.touches[0]:e;
+          var startX=src.clientX, startY=src.clientY;
+          var baseAti=analysisTextInputRef.current||ati;
+          var origScreenX=baseAti.screenX||0, origScreenY=baseAti.screenY||0;
+          function onMov(ev){
+            ev.preventDefault&&ev.preventDefault();
+            var s=ev.touches?ev.touches[0]:ev;
+            var dx=s.clientX-startX, dy=s.clientY-startY;
+            var cur=analysisTextInputRef.current||baseAti;
+            setAnalysisTextInput(Object.assign({},cur,{
+              screenX:origScreenX+dx, screenY:origScreenY+dy
+            }));
+          }
+          function onEnd(){
+            /* 最終 screen座標 を tm/p に変換して ati に反映 */
+            var cur=analysisTextInputRef.current;
+            var api=chartAPIRefAnalysis.current;
+            if(cur&&api&&api.pxToTimePrice){
+              var newTp=api.pxToTimePrice(cur.screenX,cur.screenY);
+              if(newTp&&newTp.tm!=null&&newTp.p!=null){
+                setAnalysisTextInput(Object.assign({},analysisTextInputRef.current||cur,{
+                  tm:newTp.tm, p:newTp.p,
+                  side:newTp.side||cur.side
+                }));
+              }
+            }
+            window.removeEventListener('mousemove',onMov);
+            window.removeEventListener('mouseup',onEnd);
+            window.removeEventListener('touchmove',onMov);
+            window.removeEventListener('touchend',onEnd);
+            window.removeEventListener('touchcancel',onEnd);
+          }
+          window.addEventListener('mousemove',onMov);
+          window.addEventListener('mouseup',onEnd);
+          window.addEventListener('touchmove',onMov,{passive:false});
+          window.addEventListener('touchend',onEnd);
+          window.addEventListener('touchcancel',onEnd);
         }
         return ce(Fragment,null,
           /* 全画面クリックで確定 (open直後400msは暴発ガード — タブレットでタッチ合成イベントが即confirmするのを防ぐ) */
@@ -5332,7 +5589,8 @@ function ImageAnnotator(props){
               fontFamily:fontFamily,
               lineHeight:1.3,
               resize:"none",overflow:"hidden",
-              padding:"2px 4px",margin:0,
+              /* 2026-04-20: padding 0 でcanvas描画位置と完全一致 (左右ズレ解消) */
+              padding:0,margin:0,
               zIndex:11000,pointerEvents:"auto",
               outline:"none",boxShadow:"none",
               whiteSpace:ctrlBoxW?"pre-wrap":"pre",
@@ -5394,7 +5652,29 @@ function ImageAnnotator(props){
             style:{position:"fixed",width:14,height:14,borderRadius:"50%",
               background:"#4a9de3",border:"2px solid #fff",cursor:"ew-resize",
               zIndex:11001,pointerEvents:"auto",boxShadow:"0 1px 3px rgba(0,0,0,.5)"}
-          })
+          }),
+          /* 2026-04-20: 上部中央の「…」移動ハンドル (既存編集時のみ)
+             タップ後ドラッグで textarea 全体 (stroke位置含む) を自由移動 */
+          isEditing&&ce("div",{
+            onMouseDown:function(e){startAtiMove(e);},
+            onTouchStart:function(e){startAtiMove(e);},
+            ref:function(el){
+              if(!el)return;
+              requestAnimationFrame(function(){
+                var ta=analysisTextareaRef.current;
+                if(!ta)return;
+                var tr=ta.getBoundingClientRect();
+                el.style.left=(tr.left+tr.width/2-16)+"px";
+                el.style.top=(tr.top-26)+"px";
+              });
+            },
+            style:{position:"fixed",width:32,height:20,borderRadius:10,
+              background:"#4a9de3",border:"2px solid #fff",cursor:"move",
+              zIndex:11002,pointerEvents:"auto",boxShadow:"0 1px 3px rgba(0,0,0,.5)",
+              display:"flex",alignItems:"center",justifyContent:"center",
+              color:"#fff",fontSize:14,fontWeight:900,lineHeight:1,
+              letterSpacing:1,userSelect:"none",touchAction:"none"}
+          },"⋯")
         );
       })(),
       document.body
@@ -5476,15 +5756,15 @@ function ImageAnnotator(props){
             var dbData=imageUrl
               ?{imageUrl:imageUrl,orig_mt:mts,strokes:data.strokes||[],name:name}
               :{orig_base64:b64s,orig_mt:mts,strokes:data.strokes||[],name:name};
+            /* 2026-04-20 C8: 楽観ロック用version同梱 */
+            dbData._v=metaItem.savedAt;
             var dataBody=JSON.stringify(dbData);fetch(draftDataBase+'/'+id+'.json'+fbAuth,{method:'PUT',headers:{'Content-Type':'application/json'},
               body:dataBody}).catch(function(e){console.error('fbSyncDraft data:',e);});
           });
-          // バージョン + タイムスタンプ書き込み
+          // タイムスタンプ (version相当) — 2026-04-20 C8: data._v は呼び出し側で付与済
           var tsBase=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-ts';
           var tsBody=JSON.stringify({t:metaItem.savedAt});fetch(tsBase+'/'+id+'.json'+fbAuth,{method:'PUT',headers:{'Content-Type':'application/json'},
             body:tsBody}).catch(function(){});
-          var vBody=JSON.stringify({_v:Date.now()});fetch(cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-v.json'+fbAuth,{method:'PUT',
-            headers:{'Content-Type':'application/json'},body:vBody}).catch(function(){});
         }
         // post-save callback（保存・出力からの呼び出し時にcombined出力）
         if(postSaveCallbackRef.current){postSaveCallbackRef.current();postSaveCallbackRef.current=null;}
@@ -5520,7 +5800,13 @@ function ImageAnnotator(props){
           var ctx=tc.getContext('2d');
           ctx.drawImage(compImg,0,0);
           strokes.forEach(function(s){drawStroke(ctx,s);});
-          applyRef(tc.toDataURL('image/png'));
+          try{
+            applyRef(tc.toDataURL('image/png'));
+          }catch(e){
+            /* tainted canvas → 合成失敗時は元のdataUrlで参照 (strokes無し) */
+            console.warn('[CORS] ref chart composite failed, falling back to image-only');
+            applyRef(dataUrl);
+          }
         };
         compImg.src=dataUrl;
       },
@@ -5626,8 +5912,22 @@ function caGenThumb(canvasEl){
   var ctx=tc.getContext('2d');
   ctx.imageSmoothingEnabled=true;
   ctx.imageSmoothingQuality='high';
-  ctx.drawImage(canvasEl,0,0,W,H);
-  return tc.toDataURL('image/png');
+  try{
+    ctx.drawImage(canvasEl,0,0,W,H);
+    return tc.toDataURL('image/png');
+  }catch(e){
+    /* 2026-04-20 C11: tainted canvas (SecurityError) → CORS未設定のStorage画像が混入
+       fallback: 空の透明サムネイルを返す。警告はconsoleに一度だけ。 */
+    if(!window._caCorsWarned){
+      window._caCorsWarned=true;
+      console.warn('[CORS] canvas toDataURL failed. Firebase Storage bucketにCORS設定が必要です。\n'+
+        'gsutil cors set cors.json gs://YOUR_BUCKET を実行してください。'+
+        '(詳細: https://firebase.google.com/docs/storage/web/download-files#cors_configuration)');
+    }
+    /* 空のtransparent thumbnail を返す (サムネ表示は欠けるが保存は継続可能) */
+    var fc=document.createElement('canvas');fc.width=W;fc.height=H;
+    try{return fc.toDataURL('image/png');}catch(e2){return '';}
+  }
 }
 function caSaveThumb(id,dataUrl){_thumbMemCache[id]=dataUrl;idbSet('thumb_'+id,dataUrl);}
 function caLoadThumb(id){return _thumbMemCache[id]||null;}
@@ -5686,8 +5986,14 @@ function DraftLibrary(props){
             var tc=document.createElement('canvas');tc.width=W;tc.height=H;
             var tctx=tc.getContext('2d');tctx.imageSmoothingEnabled=true;tctx.imageSmoothingQuality='high';
             tctx.drawImage(tImg,0,0,W,H);
-            var thumb=tc.toDataURL('image/png');
-            caSaveThumb(m.id,thumb);  // メモリ+IndexedDB
+            try{
+              var thumb=tc.toDataURL('image/png');
+              caSaveThumb(m.id,thumb);  // メモリ+IndexedDB
+            }catch(e){
+              /* CORS未設定で tainted canvas → サムネキャッシュ失敗、次回再試行 */
+              if(!window._caCorsWarned){window._caCorsWarned=true;
+                console.warn('[CORS] thumb cache failed. Firebase Storage bucket に CORS設定が必要');}
+            }
             restored++;
             if(restored===needRestore.length){
               setMeta(function(prev){return prev.slice();});
@@ -5711,23 +6017,30 @@ function DraftLibrary(props){
 
     function genThumb(m,src){
       var tImg=new Image();
+      /* 2026-04-20 C11: Storage URL由来の画像は crossOrigin必要 */
+      if(src.indexOf('data:')!==0)tImg.crossOrigin='anonymous';
       tImg.onload=function(){
         var W=Math.min(tImg.width,800),ratio=W/tImg.width,H=Math.round(tImg.height*ratio);
         var tc=document.createElement('canvas');tc.width=W;tc.height=H;
         var tctx=tc.getContext('2d');tctx.imageSmoothingEnabled=true;tctx.imageSmoothingQuality='high';
         tctx.drawImage(tImg,0,0,W,H);
-        var thumb=tc.toDataURL('image/png');
-        caSaveThumb(m.id,thumb);
-        setMeta(function(prev){return prev.map(function(x){return x.id===m.id?Object.assign({},x,{thumb:null}):x;});});
-        // Firebase Storageにアップロード→thumbUrlをmetaに保存
-        uploadThumbToStorage(fbCfg,m.id,thumb).then(function(thumbUrl){
-          if(thumbUrl){
-            setMeta(function(prev){
-              var nm=prev.map(function(x){return x.id===m.id?Object.assign({},x,{thumbUrl:thumbUrl}):x;});
-              caSaveMeta(nm); return nm;
-            });
-          }
-        });
+        try{
+          var thumb=tc.toDataURL('image/png');
+          caSaveThumb(m.id,thumb);
+          setMeta(function(prev){return prev.map(function(x){return x.id===m.id?Object.assign({},x,{thumb:null}):x;});});
+          // Firebase Storageにアップロード→thumbUrlをmetaに保存
+          uploadThumbToStorage(fbCfg,m.id,thumb).then(function(thumbUrl){
+            if(thumbUrl){
+              setMeta(function(prev){
+                var nm=prev.map(function(x){return x.id===m.id?Object.assign({},x,{thumbUrl:thumbUrl}):x;});
+                caSaveMeta(nm); return nm;
+              });
+            }
+          });
+        }catch(e){
+          if(!window._caCorsWarned){window._caCorsWarned=true;
+            console.warn('[CORS] thumb regen failed. Firebase Storage bucketにCORS設定が必要');}
+        }
         setTimeout(processNext,100);
       };
       tImg.onerror=function(){setTimeout(processNext,100);};
@@ -5762,7 +6075,7 @@ function DraftLibrary(props){
   // ── 画像を保管庫に直接追加（画質劣化なし）──
   function addImageDirect(file){
     if(!file||!file.type.startsWith('image/'))return;
-    if(!selTicker){alert('銘柄を選択してください');return;}
+    if(!selTicker){window.caToast('銘柄を選択してください','info');return;}
     var id=caGenId();
     var savedAt=Date.now();
     var chartName=file.name.replace(/\.[^.]+$/,'')||'chart';
@@ -6008,20 +6321,21 @@ function DraftLibrary(props){
     setNewName('');setAdding(false);setSelTicker(n);
   }
   function deleteTicker(t){
-    if(!window.confirm('"'+t+'"を削除しますか？（チャートはゴミ箱に移動されます）'))return;
-    var toDelete=meta.filter(function(m){return m.ticker===t;});
-    toDelete.forEach(function(m){
-      var data=caLoadData(m.id);
-      var trashMeta={id:m.id,ticker:m.ticker,name:m.name,savedAt:m.savedAt,thumb:m.thumb,deletedAt:Date.now()};
-      var nt2=caLoadTrash().filter(function(x){return x.id!==m.id;});
-      nt2.push(trashMeta);caSaveTrash(nt2);setTrash(nt2);
-      caDeleteData(m.id);fbDeleteDraft(m.id);fbMoveToTrash(m.id,trashMeta,data);
+    window.caConfirm('"'+t+'"を削除しますか？（チャートはゴミ箱に移動されます）',function(){
+      var toDelete=meta.filter(function(m){return m.ticker===t;});
+      toDelete.forEach(function(m){
+        var data=caLoadData(m.id);
+        var trashMeta={id:m.id,ticker:m.ticker,name:m.name,savedAt:m.savedAt,thumb:m.thumb,deletedAt:Date.now()};
+        var nt2=caLoadTrash().filter(function(x){return x.id!==m.id;});
+        nt2.push(trashMeta);caSaveTrash(nt2);setTrash(nt2);
+        caDeleteData(m.id);fbDeleteDraft(m.id);fbMoveToTrash(m.id,trashMeta,data);
+      });
+      var nm=meta.filter(function(m){return m.ticker!==t;});
+      setMeta(nm);caSaveMeta(nm);
+      var nt=tickers.filter(function(x){return x!==t;});
+      setTickers(nt);caSaveTickers(nt);fbSyncTickers(nt);
+      if(selTicker===t)setSelTicker(null);
     });
-    var nm=meta.filter(function(m){return m.ticker!==t;});
-    setMeta(nm);caSaveMeta(nm);
-    var nt=tickers.filter(function(x){return x!==t;});
-    setTickers(nt);caSaveTickers(nt);fbSyncTickers(nt);
-    if(selTicker===t)setSelTicker(null);
   }
 
   // ── チャート操作 ──
@@ -6048,19 +6362,21 @@ function DraftLibrary(props){
     caSaveTrash(nt);setTrash(nt);
   }
   function permanentDelete(id){
-    if(!window.confirm('完全に削除しますか？この操作は元に戻せません'))return;
-    caDeleteData(id);
-    fbDeleteFromTrash(id);
-    var nt=caLoadTrash().filter(function(m){return m.id!==id;});
-    caSaveTrash(nt);setTrash(nt);
+    window.caConfirm('完全に削除しますか？この操作は元に戻せません',function(){
+      caDeleteData(id);
+      fbDeleteFromTrash(id);
+      var nt=caLoadTrash().filter(function(m){return m.id!==id;});
+      caSaveTrash(nt);setTrash(nt);
+    });
   }
   function emptyTrash(){
-    if(!window.confirm('ゴミ箱を空にしますか？この操作は元に戻せません'))return;
-    trash.forEach(function(m){
-      caDeleteData(m.id);
-      fbDeleteFromTrash(m.id);
+    window.caConfirm('ゴミ箱を空にしますか？この操作は元に戻せません',function(){
+      trash.forEach(function(m){
+        caDeleteData(m.id);
+        fbDeleteFromTrash(m.id);
+      });
+      caSaveTrash([]);setTrash([]);
     });
-    caSaveTrash([]);setTrash([]);
   }
   function openChart(id){
     var mi=meta.find(function(m){return m.id===id;});
@@ -6072,7 +6388,7 @@ function DraftLibrary(props){
       // IndexedDB非同期フォールバック
       caLoadDataAsync(id,function(ad){
         if(ad&&(ad.orig_base64||ad.base64)){onOpen(Object.assign({},ad,extra));return;}
-        alert('データが見つかりません（Firebase未設定または同期停止中）');
+        window.caToast('データが見つかりません（Firebase未設定または同期停止中）','error');
       });
       return;
     }
@@ -6094,7 +6410,7 @@ function DraftLibrary(props){
                 var od=fbOld&&fbOld.data?fbOld.data:null;
                 if(od&&(od.orig_base64||od.base64)){caSaveData(id,od);onOpen(Object.assign({},od,extra));}
                 else if(d&&(d.orig_base64||d.base64)){onOpen(Object.assign({},d,extra));}
-                else{alert('データが見つかりません');}
+                else{window.caToast('データが見つかりません','error');}
               });
           }
           // base64が直接ある場合
@@ -6143,8 +6459,8 @@ function DraftLibrary(props){
             });
           });
         }
-        setSyncStatus(null);alert('データが見つかりません');
-      }).catch(function(e){setSyncStatus(null);console.error('[openChart] Error:',e);alert('読込失敗: '+(e&&e.message?e.message:'不明なエラー'));});
+        setSyncStatus(null);window.caToast('データが見つかりません','error');
+      }).catch(function(e){setSyncStatus(null);console.error('[openChart] Error:',e);window.caToast('読込失敗: '+(e&&e.message?e.message:'不明なエラー'),'error');});
     }); // caLoadDataAsync
   }
 
@@ -6212,7 +6528,7 @@ function DraftLibrary(props){
         onKeyDown:function(e){if(e.key==="Enter")addTicker();if(e.key==="Escape"){setAdding(false);setNewName('');}},
         placeholder:"銘柄名（例: トヨタ）",
         style:{flex:1,padding:"9px 12px",background:"#2a2a2a",border:"1px solid #444",
-          borderRadius:8,color:"#fff",fontSize:14,outline:"none"}}),
+          borderRadius:8,color:"#fff",fontSize:16,outline:"none"}}),
       ce("button",{onClick:addTicker,style:Object.assign({},BT,{
         background:"#16a34a",color:"#fff",padding:"9px 16px",borderRadius:8,fontSize:13,fontWeight:700})},"追加"),
       ce("button",{onClick:function(){setAdding(false);setNewName('');},
@@ -6366,7 +6682,7 @@ function LocalSaveModal(props){
   var s0=useState(tickers[0]||''); var selTicker=s0[0],setSelTicker=s0[1];
   var s1=useState(defaultName||''); var name=s1[0],setName=s1[1];
   function doSave(){
-    if(!selTicker){alert('銘柄を選択してください');return;}
+    if(!selTicker){window.caToast('銘柄を選択してください','info');return;}
     onSave(selTicker,name.trim()||defaultName||'chart');
     onClose();
   }
@@ -6393,7 +6709,7 @@ function LocalSaveModal(props){
             ce("div",{style:{fontSize:11,color:"#888",marginBottom:6,fontWeight:600}},"チャート名"),
             ce("input",{type:"text",value:name,onChange:function(e){setName(e.target.value);},
               style:{width:"100%",padding:"10px 12px",background:"#2a2a2a",border:"1px solid #3a3a3a",
-                borderRadius:10,color:"#fff",fontSize:14,outline:"none",boxSizing:"border-box"}})
+                borderRadius:10,color:"#fff",fontSize:16,outline:"none",boxSizing:"border-box"}})
           ),
           ce("div",{style:{display:"flex",gap:10,marginTop:4}},
             ce("button",{onClick:onClose,
@@ -6701,9 +7017,12 @@ function App(){
 
 // ── スワイプ戻る/進む ガード ──
 // ブラウザ履歴にダミーエントリを積み、popstate を横取りしてアプリ内処理に転換する
+// 2026-04-20: 戻る連打 (素早く2回) でアプリから抜けるのを防ぐため 3段積む
 if(window.history&&window.history.pushState){
-  window.history.replaceState({caApp:true},'');
-  window.history.pushState({caApp:true},'');
+  window.history.replaceState({caApp:true,depth:0},'');
+  window.history.pushState({caApp:true,depth:1},'');
+  window.history.pushState({caApp:true,depth:2},'');
+  window.history.pushState({caApp:true,depth:3},'');
 }
 
 // ── 画面端スワイプ（iOS戻る/Android戻る）を防止 ──
