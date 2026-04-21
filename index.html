@@ -2873,17 +2873,17 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   }
   for(var p=pStart;p<=pEnd;p+=pStep){
     var y=pToY(p);
-    /* 2026-04-20: ラウンドナンバーは段階的に太線化
-       1000円刻み: 最太 (1.5px, #3c3c3c)
-       100円刻み: 中太 (1.2px, #323232)
-       50円刻み:  100円と同じ (1.2px, #323232) — 2026-04-20 ユーザー要望で100に合わせる
-       10円刻み:  従来 (1px,   #262626) */
-    if(p%1000===0){ ctx.strokeStyle='#3c3c3c'; ctx.lineWidth=1.5; }
-    else if(p%100===0){ ctx.strokeStyle='#323232'; ctx.lineWidth=1.2; }
-    else if(p%50===0){ ctx.strokeStyle='#323232'; ctx.lineWidth=1.2; }
-    else { ctx.strokeStyle='#262626'; ctx.lineWidth=1; }
-    ctx.beginPath(); ctx.moveTo(padL,Math.round(y)+0.5); ctx.lineTo(padL+chartW,Math.round(y)+0.5); ctx.stroke();
-    if(p%labelYen===0){
+    /* 2026-04-21: 横線は labelYen に該当する価格のみ描画 (ラベルある所にだけ線)
+       ラウンドナンバー (1000/100) は labelYen 関係なく強調線 */
+    var isLabel=(p%labelYen===0);
+    var drawLine=false;
+    if(p%1000===0){ ctx.strokeStyle='#3c3c3c'; ctx.lineWidth=1.5; drawLine=true; }
+    else if(p%100===0){ ctx.strokeStyle='#323232'; ctx.lineWidth=1.2; drawLine=true; }
+    else if(isLabel){ ctx.strokeStyle='#262626'; ctx.lineWidth=1; drawLine=true; }
+    if(drawLine){
+      ctx.beginPath(); ctx.moveTo(padL,Math.round(y)+0.5); ctx.lineTo(padL+chartW,Math.round(y)+0.5); ctx.stroke();
+    }
+    if(isLabel){
       ctx.fillStyle='#888';
       // 右側ラベル (textAlign='right' 前提、末端より4px内側)
       ctx.fillText(p.toFixed(0),padL+chartW+padR-4,y);
