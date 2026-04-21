@@ -1444,14 +1444,15 @@ function DataChart(props){
        実効priceH は dim.h から volH 按分で推定 (drawDataChart と同じ式)
        rangeByPx = priceH / pricePx × 10 (円) — データ中心に切り出し
        → データ範囲がレンジを超える場合ははみ出し、縦方向パン (pShift) で残り領域を見る
-       2026-04-21: pricePx は基準値 (zoom=1時)、ズームは ctx.scale で自動反映されるので zoom依存なし */
-    if(pricePx>0 && dim.h>0){
+       2026-04-21: Google Maps的ズーム — effective pricePx = base × zoom で Y軸も連動 */
+    var effPricePx=pricePx>0?pricePx*zoom:0;
+    if(effPricePx>0 && dim.h>0){
       var padT=10, padB=22;
       var estVolH=Math.max(44,Math.round((dim.h-padT-padB)*0.13));
       var estPriceH=dim.h-padT-padB-estVolH-6;
       if(estPriceH>44){
-        var rangeByPx=estPriceH/pricePx*10;  /* 円単位 */
-        /* データ中心に rangeByPx 幅で切り出し (超過可否に関わらず常に適用) */
+        var rangeByPx=estPriceH/effPricePx*10;  /* 円単位 */
+        /* データ中心に rangeByPx 幅で切り出し (中心固定、ホイール=Y中央) */
         var mid=(mn+mx)/2;
         var half=rangeByPx/2;
         mn=Math.floor((mid-half)/10)*10;
@@ -1460,7 +1461,7 @@ function DataChart(props){
     }
     var pr={min:mn, max:mx};
     setPriceRange(pr);
-  },[data,tf,refData,hasRef,pricePx,dim.h]);
+  },[data,tf,refData,hasRef,pricePx,dim.h,zoom]);
 
   // tf 変更時にビューリセット (controlled 時は親が制御するのでスキップ) — C8a: tf依存uTotal
   useEffect(function(){
@@ -2851,12 +2852,13 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   var pStart=Math.ceil(pmin/pStep)*pStep;
   var pEnd=Math.floor(pmax/pStep)*pStep;
   var pxPerStep=(priceH/(pmax-pmin))*pStep;
-  /* labelYen: ラベル描画する円単位 (10/25/50/100)
-     2026-04-21: ctx.scale撤去に伴い pxPerStep (実画面px) で判定 */
+  /* labelYen: ラベル描画する円単位 (10/20/25/50/100)
+     2026-04-21: ctx.scale撤去に伴い pxPerStep (実画面px) で判定
+     2026-04-21: 20円刻みを追加 (10円→20円→50円→100円の自然な段階、25円も残す) */
   var labelYen;
   if(pxPerStep>=20)      labelYen=10;
-  else if(pxPerStep>=10) labelYen=25;
-  else if(pxPerStep>=5)  labelYen=50;
+  else if(pxPerStep>=12) labelYen=20;
+  else if(pxPerStep>=8)  labelYen=50;
   else                   labelYen=100;
   var drawSubGrid=(pxPerStep>=50);  /* 5円サブ目盛 */
   /* 5円サブ目盛を先に描く (10円グリッドの下レイヤー) */
