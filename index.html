@@ -1519,8 +1519,11 @@ function DataChart(props){
     /* 2026-04-20: iPad カクつき対策 — 連続する state 変更 (pan/pinch 中) を
        RAF にまとめて1フレームに1回だけ描画 */
     var rafId=requestAnimationFrame(function(){
-      /* 2026-04-20: pricePx を dim に渡す (drawDataChart は priceH 常に画面フィット、pricePx は priceRange 側で処理済み) */
-      var dimWithPx=Object.assign({},dim,{pricePx:pricePx});
+      /* 2026-04-20: pricePx を dim に渡す (drawDataChart は priceH 常に画面フィット、pricePx は priceRange 側で処理済み)
+         2026-04-21: Google Maps的ズーム — dim.zoom を drawDataChart に同梱
+           - 描画内部で barPx = 12*zoom, pricePx = base*zoom を適用
+           - 書き込みオブジェクトは ctx._strokeZoom = zoom で連動 */
+      var dimWithPx=Object.assign({},dim,{pricePx:pricePx,zoom:zoom});
       var canvas=canvasRef.current; if(!canvas)return;
       /* 2026-04-20: iPad カクつき対策 — iPad のみ DPR=1 に固定して描画負荷を 1/4 に軽減 */
       var origDPR=window.devicePixelRatio||1;
@@ -1541,7 +1544,7 @@ function DataChart(props){
       drawCrosshair();
     });
     return function(){cancelAnimationFrame(rafId);};
-  },[data,bars,dim,tf,view,pShift,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes,moveHint,pricePx,chartBg]);
+  },[data,bars,dim,tf,view,pShift,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes,moveHint,pricePx,chartBg,zoom]);
 
   // showCrosshair 切替時: OFFなら消す、ONなら再描画
   useEffect(function(){
@@ -2727,6 +2730,19 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   var uE=(view&&view.uE!=null)?view.uE:uTotal;
   // クランプ
   if(uS<0)uS=0; if(uE>uTotal)uE=uTotal; if(uE<=uS)uE=uS+1;
+  /* 2026-04-21: Google Maps的ズーム — zoom>1 で uSpan を縮めて (=拡大表示)
+                                     zoom<1 で uSpan を広げて (=縮小表示)
+     view state は変更せず、描画時のみ zoom 反映。uS 中心固定で uE を伸縮 */
+  var drawZoom=(dim&&typeof dim.zoom==='number'&&dim.zoom>0)?dim.zoom:1;
+  if(drawZoom!==1){
+    var baseUSpan=uE-uS;
+    var newUSpan=baseUSpan/drawZoom;
+    if(newUSpan>uTotal)newUSpan=uTotal;
+    if(newUSpan<1)newUSpan=1;
+    /* uE (右端)を固定して uS を左右に伸縮 (最新データ見る運用、右端重視) */
+    uS=uE-newUSpan;
+    if(uS<0){uS=0; uE=uS+newUSpan; if(uE>uTotal)uE=uTotal;}
+  }
   var uSpan=uE-uS;
 
   function tToMin(t){var p=t.split(':');return parseInt(p[0],10)*60+parseInt(p[1],10);}
@@ -3018,7 +3034,9 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
 function drawAnalysisStroke(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH){
   if(!s||!s.anchors||!s.anchors.length)return;
   var col=s.color||'#ff3b30';
-  var w=s.width||2;
+  /* 2026-04-21: 書き込みオブジェクト zoom連動 (drawDataChart 側で ctx._strokeZoom 設定) */
+  var zm=ctx._strokeZoom||1;
+  var w=(s.width||2)*zm;
   var op=s.opacity!=null?s.opacity:1;
   ctx.globalAlpha=op;
   ctx.strokeStyle=col;
@@ -3094,7 +3112,9 @@ function drawAnalysisStroke(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,priceTo
 function drawAnalysisStrokeExt(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH){
   if(!s||!s.anchors||!s.anchors.length)return;
   var col=s.color||'#ff3b30';
-  var w=s.width||2;
+  /* 2026-04-21: 書き込みオブジェクト zoom連動 */
+  var zm=ctx._strokeZoom||1;
+  var w=(s.width||2)*zm;
   var op=s.opacity!=null?s.opacity:1;
   var tp=s.type||s.tool;
   ctx.globalAlpha=op;
@@ -3118,20 +3138,22 @@ function drawAnalysisStrokeExt(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,pric
   } else if(tp==='text'){
     var a=s.anchors[0];
     var x=minToX(a.tm), y=pToY(a.p);
-    var fs=s.fontSize||15;
+    var fs=(s.fontSize||15)*zm;  /* 2026-04-21: zoom連動 */
     var fb=s.fontBold?'bold ':'';
     ctx.font=fb+fs+"px -apple-system,'Helvetica Neue',sans-serif";
     ctx.textBaseline='top'; ctx.textAlign='left';
     /* 2026-04-20: boxW指定時は wordBreak wrap (幅を超える行を折返し)
-       テキストエディット時のtextarea wrap表示と一致させるため */
+       テキストエディット時のtextarea wrap表示と一致させるため
+       2026-04-21: boxW も zoom 倍 */
+    var boxWZ=(s.boxW||0)*zm;
     var rawLines=(s.text||'').split('\n');
     var displayLines=[];
-    if(s.boxW&&s.boxW>0){
+    if(boxWZ>0){
       rawLines.forEach(function(para){
         var cur='';
         for(var ci=0;ci<para.length;ci++){
           var test=cur+para[ci];
-          if(ctx.measureText(test).width>s.boxW&&cur.length>0){
+          if(ctx.measureText(test).width>boxWZ&&cur.length>0){
             displayLines.push(cur);
             cur=para[ci];
           }else{
@@ -3146,7 +3168,7 @@ function drawAnalysisStrokeExt(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,pric
     // 背景半透明ボックス (視認性向上) — 折返し後のmaxWで算出
     var maxW=0;
     displayLines.forEach(function(l){var m=ctx.measureText(l).width; if(m>maxW)maxW=m;});
-    if(s.boxW&&s.boxW>maxW)maxW=s.boxW;
+    if(boxWZ>maxW)maxW=boxWZ;
     var boxH=displayLines.length*fs*1.3;
     /* 2026-04-21: テキスト背景 透明化 (旧: rgba(0,0,0,0.6) fillRect) */
     ctx.fillStyle=col;
