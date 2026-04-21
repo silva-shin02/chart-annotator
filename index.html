@@ -140,9 +140,10 @@ function getCandleGap(tf){ return tf==='1m'?1:5; }
    フィット倍率 = chartW/縦priceH に応じて自動算出 (初期表示) */
 var Z_BASE_BAR_PX=12;
 var Z_BASE_PRICE_PX=35;
-var Z_MIN=0.25;
+var Z_MIN=0.01;
 var Z_MAX=3.0;
-var Z_FACTOR=1.176;  /* ホイール 1段で約 17.6%、5段で約 2倍 */
+var Z_FACTOR=1.176;  /* ホイール/ピンチ 1段で約 17.6% */
+var Z_STEP_FINE=1.05;  /* ＋/− ボタン 1回で 5% 刻み */
 
 /* ─── IndexedDB キャッシュ（localStorage 5MB制限回避）──────── */
 var _idb=null, _idbReady=false, _idbQueue=[];
@@ -2875,22 +2876,80 @@ function DataChart(props){
       style:{display:"block",width:"100%",height:"100%",pointerEvents:"none"}}),
     ce("canvas",{ref:overlayRef,
       style:{position:"absolute",top:0,left:0,width:"100%",height:"100%",pointerEvents:"none"}}),
-    /* 2026-04-21: 倍率表示 (地図モデル) — クリックでフィット倍率に復帰 */
-    ce("button",{
-      onClick:function(){
-        var fz=getFitZoom();
-        setZoom(fz);
-        setView({uS:0,uE:getUTotal(hasRef)});
-        setPShift(0);
-      },
-      title:"クリックでフィット倍率に戻す",
-      style:{position:"absolute",right:18,bottom:18,
-        fontSize:11,fontWeight:700,color:"#a5b4fc",
+    /* 2026-04-21: ズームコントロール (右下) — [−] [スライダー] [＋] [倍率]
+       スライダー step=0.01 で自由に細かく、＋/− は 5% 刻み (Z_STEP_FINE)
+       リセット機能はツールバー側 (「⟳ 全体表示」ボタン) に移譲、ここは純粋にズーム操作のみ */
+    ce("div",{
+      onMouseDown:function(e){e.stopPropagation();},
+      onTouchStart:function(e){e.stopPropagation();},
+      onWheel:function(e){e.stopPropagation();},
+      style:{position:"absolute",right:12,bottom:10,
+        display:"flex",alignItems:"center",gap:4,
         background:"rgba(26,26,26,0.85)",
         border:"1px solid #2a2a2a",borderRadius:6,
-        padding:"3px 8px",cursor:"pointer",fontFamily:"inherit",
-        userSelect:"none",pointerEvents:"auto",zIndex:3}
-    },(zoom||1).toFixed(2)+'× ⟳'),
+        padding:"3px 6px",
+        pointerEvents:"auto",zIndex:3,
+        fontFamily:"inherit",userSelect:"none"}
+    },
+      ce("button",{
+        onClick:function(){
+          var L=layoutRef.current;
+          setZoom(function(z){
+            var newZ=z/Z_STEP_FINE;
+            if(newZ<Z_MIN)newZ=Z_MIN;
+            /* pShift は現範囲に clamp (縮小時の範囲変動対応) */
+            if(L){
+              setPShift(function(ps){return clampPShiftForZoom(ps,newZ,L.priceH,L.dataPmin,L.dataPmax);});
+            }
+            return newZ;
+          });
+        },
+        title:"縮小 (−5%)",
+        style:{width:22,height:22,fontSize:14,fontWeight:700,
+          background:"#2a2a2a",color:"#aaa",
+          border:"1px solid #3a3a3a",borderRadius:4,
+          cursor:"pointer",fontFamily:"inherit",userSelect:"none",
+          display:"flex",alignItems:"center",justifyContent:"center",
+          padding:0,lineHeight:1}
+      },"−"),
+      ce("input",{type:"range",
+        min:Z_MIN,max:Z_MAX,step:0.01,value:zoom||1,
+        onChange:function(e){
+          var v=parseFloat(e.target.value);
+          if(isNaN(v))return;
+          if(v<Z_MIN)v=Z_MIN; if(v>Z_MAX)v=Z_MAX;
+          var L=layoutRef.current;
+          if(L){
+            setPShift(function(ps){return clampPShiftForZoom(ps,v,L.priceH,L.dataPmin,L.dataPmax);});
+          }
+          setZoom(v);
+        },
+        style:{width:120,accentColor:"#a5b4fc",cursor:"pointer"}
+      }),
+      ce("button",{
+        onClick:function(){
+          var L=layoutRef.current;
+          setZoom(function(z){
+            var newZ=z*Z_STEP_FINE;
+            if(newZ>Z_MAX)newZ=Z_MAX;
+            if(L){
+              setPShift(function(ps){return clampPShiftForZoom(ps,newZ,L.priceH,L.dataPmin,L.dataPmax);});
+            }
+            return newZ;
+          });
+        },
+        title:"拡大 (+5%)",
+        style:{width:22,height:22,fontSize:14,fontWeight:700,
+          background:"#2a2a2a",color:"#aaa",
+          border:"1px solid #3a3a3a",borderRadius:4,
+          cursor:"pointer",fontFamily:"inherit",userSelect:"none",
+          display:"flex",alignItems:"center",justifyContent:"center",
+          padding:0,lineHeight:1}
+      },"＋"),
+      ce("span",{style:{fontSize:11,fontWeight:700,color:"#a5b4fc",
+        minWidth:42,textAlign:"right",pointerEvents:"none"}},
+        (zoom||1).toFixed(2)+'×')
+    ),
     /* 2026-04-21: 横スクロールバー (出来高エリア境目) */
     renderHorizScrollbar(),
     /* 2026-04-21: 縦スクロールバー (価格軸右側) */
@@ -4344,6 +4403,16 @@ function ImageAnnotator(props){
           onClick:function(){window.caConfirm('別のJSONを読み込む? 現在のデータは破棄されます',function(){var empty={'1m':[],'5m':[]};setAnalysisData(null);setAnalysisStrokes(empty);analysisHistRef.current={'1m':[{cur:[],ref:[]}],'5m':[{cur:[],ref:[]}]};analysisFutRef.current={'1m':[],'5m':[]};setCanUndo(false);setCanRedo(false);});},
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#2a2a2a",color:"#aaa"})
         },"🔄 別のJSON"),
+        /* 2026-04-21: ⟳ 全体表示 — zoom=null でフィット倍率再算出、uS=0、pShift=0 */
+        analysisData && ce("button",{
+          onClick:function(){
+            setAnalysisZoom(null);
+            setAnalysisView({uS:0,uE:getUTotalIA(analysisTf,!!refAnalysis)});
+            setAnalysisPShift(0);
+          },
+          title:"1日分の全データを画面に収めるフィット倍率に戻す",
+          style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#2a2a2a",color:"#aaa"})
+        },"⟳ 全体表示"),
         /* spacer */
         ce("div",{style:{flex:1}}),
         /* 手動保存 status badge */
