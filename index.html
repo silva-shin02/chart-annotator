@@ -1468,15 +1468,15 @@ function DataChart(props){
     if(props.pShift===undefined)setPShift(0);
   },[tf,data]);
 
-  /* 2026-04-21: X軸スケール — 論理空間で 12 px/u 固定 (画面上は 12*zoom px/u)
-     論理chartW = dim.w/zoom - 80、uSpan = 論理chartW/12
-     zoom変化時: 中心維持、dim.w変化時: 左端維持 */
+  /* 2026-04-21: X軸スケール — バー幅 = 12 × zoom px/u
+     ctx.scale 撤去済なので物理=論理。chartW = dim.w - 80 */
   var prevZoomRef=useRef(1);
   useEffect(function(){
     if(!dim||!dim.w||dim.w<200)return;
-    var logChartW=dim.w/zoom - 80;  /* 論理空間 chartW */
-    var BAR_PX=12;
-    var targetUSpan=logChartW/BAR_PX;
+    var chartW=dim.w-80;
+    var BAR_PX=12*zoom;
+    if(BAR_PX<=0||chartW<=0)return;
+    var targetUSpan=chartW/BAR_PX;
     var uT=getUTotal(hasRef);
     var zoomChanged=Math.abs(zoom-prevZoomRef.current)>0.001;
     prevZoomRef.current=zoom;
