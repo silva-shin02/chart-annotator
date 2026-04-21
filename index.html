@@ -583,15 +583,11 @@ var FB_CFG_KEY='chart_annotator_fb_v1';
 
 /* 2026-04-20: 価格軸ラベル間固定ピクセル設定
    0 = 自動 (priceH から自動算出)
-   N>0 = 固定 (10円 = N px、必要に応じてチャート縦拡張しスクロール)
-   2026-04-21: 初期値 0 → 35 (チャートズーム時の相対位置を安定させる) */
+   N>0 = 固定 (10円 = N px、必要に応じてチャート縦拡張しスクロール) */
 var CA_PRICE_PX_KEY='ca_price_gap_px_v1';
-var CA_PRICE_PX_DEFAULT=35;
 function caLoadPricePx(){
-  try{var v=localStorage.getItem(CA_PRICE_PX_KEY);
-    if(v===null)return CA_PRICE_PX_DEFAULT;
-    var n=parseInt(v,10);return (n>=0&&n<=100)?n:CA_PRICE_PX_DEFAULT;}
-  catch(e){return CA_PRICE_PX_DEFAULT;}
+  try{var v=localStorage.getItem(CA_PRICE_PX_KEY);var n=v?parseInt(v,10):0;return (n>=0&&n<=100)?n:0;}
+  catch(e){return 0;}
 }
 function caSavePricePx(v){
   var n=(v|0); if(n<0)n=0; if(n>100)n=100;
@@ -1309,10 +1305,6 @@ function DataChart(props){
     window.addEventListener('ca_price_px_changed',handler);
     return function(){window.removeEventListener('ca_price_px_changed',handler);};
   },[]);
-  /* 2026-04-21: C案 全体スケールzoom (描画内部で ctx.scale 適用、canvas CSSサイズ不変) */
-  var stZm=useState(1); var zoom=stZm[0],setZoom=stZm[1];
-  var zoomRef=useRef(1);
-  useEffect(function(){zoomRef.current=zoom;},[zoom]);
   /* 2026-04-20: ca_chart_bg_changed listener — 背景色変更時に再描画トリガ */
   var stBg=useState(caLoadChartBg()); var chartBg=stBg[0],setChartBg=stBg[1];
   useEffect(function(){
@@ -1443,16 +1435,14 @@ function DataChart(props){
     /* 2026-04-20: pricePx>0 の時は priceRange を常に pricePx 基準で決定 (超過時も画面フィット維持しない)
        実効priceH は dim.h から volH 按分で推定 (drawDataChart と同じ式)
        rangeByPx = priceH / pricePx × 10 (円) — データ中心に切り出し
-       → データ範囲がレンジを超える場合ははみ出し、縦方向パン (pShift) で残り領域を見る
-       2026-04-21: Google Maps的ズーム — effective pricePx = base × zoom で Y軸も連動 */
-    var effPricePx=pricePx>0?pricePx*zoom:0;
-    if(effPricePx>0 && dim.h>0){
+       → データ範囲がレンジを超える場合ははみ出し、縦方向パン (pShift) で残り領域を見る */
+    if(pricePx>0 && dim.h>0){
       var padT=10, padB=22;
       var estVolH=Math.max(44,Math.round((dim.h-padT-padB)*0.13));
       var estPriceH=dim.h-padT-padB-estVolH-6;
       if(estPriceH>44){
-        var rangeByPx=estPriceH/effPricePx*10;  /* 円単位 */
-        /* データ中心に rangeByPx 幅で切り出し (中心固定、ホイール=Y中央) */
+        var rangeByPx=estPriceH/pricePx*10;  /* 円単位 */
+        /* データ中心に rangeByPx 幅で切り出し */
         var mid=(mn+mx)/2;
         var half=rangeByPx/2;
         mn=Math.floor((mid-half)/10)*10;
@@ -1461,32 +1451,13 @@ function DataChart(props){
     }
     var pr={min:mn, max:mx};
     setPriceRange(pr);
-  },[data,tf,refData,hasRef,pricePx,dim.h,zoom]);
+  },[data,tf,refData,hasRef,pricePx,dim.h]);
 
   // tf 変更時にビューリセット (controlled 時は親が制御するのでスキップ) — C8a: tf依存uTotal
   useEffect(function(){
     if(props.view===undefined)setView({uS:0,uE:getUTotal(hasRef)});
     if(props.pShift===undefined)setPShift(0);
   },[tf,data]);
-
-  /* 2026-04-21: X軸スケール固定 (12 px/u)
-     dim.w 変化時に uSpan = (dim.w - 80) / 12 に再調整。左端維持、uE>uTotal は右寄せ */
-  useEffect(function(){
-    if(!dim||!dim.w||dim.w<200)return;
-    var chartW=dim.w-40-40;
-    var BAR_PX=12;
-    var targetUSpan=chartW/BAR_PX;
-    var uT=getUTotal(hasRef);
-    setView(function(v){
-      var uS=v.uS||0;
-      var uE=uS+targetUSpan;
-      if(targetUSpan>=uT){uS=0; uE=uT;}
-      else if(uE>uT){uE=uT; uS=uT-targetUSpan;}
-      if(uS<0)uS=0;
-      if(Math.abs((v.uE-v.uS)-targetUSpan)<0.5)return v;
-      return {uS:uS, uE:uE};
-    });
-  },[dim.w,tf,hasRef]);
 
   // コンテナサイズ追従 (ResizeObserver で display:none → 表示切替も捉える)
   useEffect(function(){
@@ -1520,9 +1491,8 @@ function DataChart(props){
     /* 2026-04-20: iPad カクつき対策 — 連続する state 変更 (pan/pinch 中) を
        RAF にまとめて1フレームに1回だけ描画 */
     var rafId=requestAnimationFrame(function(){
-      /* 2026-04-20: pricePx を dim に渡す (drawDataChart は priceH 常に画面フィット、pricePx は priceRange 側で処理済み)
-         2026-04-21: X軸ズーム廃止。zoom は Y軸 (pricePx連動) と書き込みオブジェクト太さにのみ作用 */
-      var dimWithPx=Object.assign({},dim,{pricePx:pricePx,zoom:zoom});
+      /* 2026-04-20: pricePx を dim に渡す (drawDataChart は priceH 常に画面フィット、pricePx は priceRange 側で処理済み) */
+      var dimWithPx=Object.assign({},dim,{pricePx:pricePx});
       var canvas=canvasRef.current; if(!canvas)return;
       /* 2026-04-20: iPad カクつき対策 — iPad のみ DPR=1 に固定して描画負荷を 1/4 に軽減 */
       var origDPR=window.devicePixelRatio||1;
@@ -1543,7 +1513,7 @@ function DataChart(props){
       drawCrosshair();
     });
     return function(){cancelAnimationFrame(rafId);};
-  },[data,bars,dim,tf,view,pShift,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes,moveHint,pricePx,chartBg,zoom]);
+  },[data,bars,dim,tf,view,pShift,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes,moveHint,pricePx,chartBg]);
 
   // showCrosshair 切替時: OFFなら消す、ONなら再描画
   useEffect(function(){
@@ -1565,9 +1535,6 @@ function DataChart(props){
     overlay.height=Math.round(H*dpr);
     var ctx=overlay.getContext('2d');
     ctx.setTransform(dpr,0,0,dpr,0,0);
-    /* 2026-04-21: 書き込みオブジェクト(drawAnalysisStroke系)の width/fontSize を zoom倍
-       (軸・バー・ラベルは zoom 無関係、Google Maps的密度変化) */
-    ctx._strokeZoom=zoomRef.current||1;
     ctx.clearRect(0,0,W,H);
 
     var L=layoutRef.current;
@@ -1866,52 +1833,42 @@ function DataChart(props){
     drawCrosshair();
   }
 
-  // ホイール: X軸+Y軸 同倍率ズーム (実効factor同期、Google Maps的挙動)
-  // カーソル位置中心で拡大縮小、X軸が uTotal到達時はY軸も停止
+  // ホイール: ズーム (カーソル位置中心) — C-uaxis: u軸直接
   useEffect(function(){
     var el=containerRef.current; if(!el)return;
     function handler(e){
       e.preventDefault();
-      if(e.ctrlKey||e.metaKey){
-        setPShift(function(p){return p + (e.deltaY>0?-0.02:0.02);});
-        return;
-      }
       var rect=el.getBoundingClientRect();
-      if(rect.width<100)return;
       var padL=40, padR=40;
       var chartW=rect.width-padL-padR;
-      var cx=e.clientX-rect.left-padL;
+      var cxAbs=e.clientX-rect.left;
+      var cx=cxAbs-padL;
       if(cx<0||cx>chartW)return;
-      var frac=cx/chartW;
-      var factor=e.deltaY<0?1.1:1/1.1;
-      var uT=getUTotal(hasRef);
-      var effectiveFactor=factor;
+      var L=layoutRef.current;
       setView(function(v){
-        var vUS=v.uS||0, vUE=v.uE||uT;
-        var vSpan=vUE-vUS;
-        var uCenter=vUS+frac*vSpan;
-        var newSpan=vSpan/factor;
-        if(newSpan<1)newSpan=1;
-        if(newSpan>uT)newSpan=uT;  /* X軸 uTotal で頭打ち */
-        /* 実効factor: X軸が頭打ちなら 1 に近づく → Y軸も停止 */
-        effectiveFactor = (newSpan>0) ? (vSpan/newSpan) : factor;
-        var newUS=uCenter-frac*newSpan;
-        var newUE=newUS+newSpan;
-        if(newUS<0){newUS=0; newUE=newSpan;}
-        if(newUE>uT){newUE=uT; newUS=uT-newSpan;}
+        var uS=v.uS||0, uE=v.uE!=null?v.uE:(L?L.uTotal:getTmVisSpan());
+        var uSpan=uE-uS;
+        var frac=cx/chartW;
+        var uCenter=uS+frac*uSpan;
+        // Ctrl+ホイール = 価格軸シフト
+        if(e.ctrlKey||e.metaKey){
+          setPShift(function(p){return p + (e.deltaY>0?-0.02:0.02);});
+          return v;
+        }
+        var uTotalNow=(L&&L.uTotal)||getUTotal(hasRef);
+        var factor=e.deltaY<0?0.85:1/0.85;
+        var newUSpan=Math.max(2,Math.min(uTotalNow,uSpan*factor));
+        var newUS=uCenter-frac*newUSpan;
+        var newUE=newUS+newUSpan;
+        if(newUS<0){newUS=0;newUE=newUS+newUSpan;}
+        if(newUE>uTotalNow){newUE=uTotalNow;newUS=newUE-newUSpan;}
         if(newUS<0)newUS=0;
-        return {uS:newUS, uE:newUE};
-      });
-      /* Y軸 zoom も実効factorで更新 (X軸が頭打ちなら Y軸も停止) */
-      setZoom(function(z){
-        var nz=z*effectiveFactor;
-        if(nz<0.05)nz=0.05; if(nz>2.5)nz=2.5;
-        return nz;
+        return {uS:newUS,uE:newUE};
       });
     }
     el.addEventListener('wheel',handler,{passive:false});
     return function(){el.removeEventListener('wheel',handler);};
-  },[hasRef]);
+  },[]);
 
   /* Pointer → 時刻+価格に変換 */
   function pxToTimePrice(clientX,clientY){
@@ -2381,9 +2338,7 @@ function DataChart(props){
     if(drawTool!=='pan'&&!ctrlPanRef.current){panStartRef.current=null;return;}
     var rect2=getCanvasRect();
     var padL=40, padR=40;
-    /* 2026-04-21: zoom対応 — padL/padR/priceH は論理空間。画面実寸 = 論理×zoom */
-    var zmNow=zoomRef.current||1;
-    var chartW=rect2.width-(padL+padR)*zmNow;
+    var chartW=rect2.width-padL-padR;
     /* C-uaxis: u軸上でpan — 画面1chartW幅のswipeで 1uSpan分のpan */
     var uSpan0=p.uE-p.uS;
     var dU=-(e.clientX-p.x)/chartW*uSpan0;
@@ -2397,8 +2352,7 @@ function DataChart(props){
     if(priceRange){
       var L=layoutRef.current;
       var priceH=L?L.priceH:(rect2.height-34-22-Math.max(44,Math.round((rect2.height-56)*0.13))-6);
-      /* 画面実寸priceH = 論理priceH×zoom、client dy を画面実寸で割って yen化 */
-      var yenPerPx=(priceRange.max-priceRange.min)/(priceH*zmNow);
+      var yenPerPx=(priceRange.max-priceRange.min)/priceH;
       setPShift(p.ps + (e.clientY-p.y)*yenPerPx);
     }
   }
@@ -2498,8 +2452,7 @@ function DataChart(props){
         uSpan0:view.uE-view.uS,
         uCenter:tpC.u,           // ピンチ開始時の指位置のu値 (ズーム中この u が cxRatio位置に固定)
         pCenter:tpC.p,           // ピンチ中心の価格
-        side:tpC.side,             // 参考 (cur/ref)
-        zoom0:zoom              // 2026-04-21: C案 ピンチ開始時zoom (全体スケール基準値)
+        side:tpC.side             // 参考 (cur/ref)
       };
       // 既存の描画/パン/移動をキャンセル
       drawRef.current={on:false};
@@ -2523,33 +2476,28 @@ function DataChart(props){
       var pr=pinchRef.current;
       if(!d||!pr.d0)return;
       var r=d/pr.d0;
+      if(r<0.1)r=0.1; if(r>20)r=20;
       var L=layoutRef.current;
-      if(L){
-        var uT=L.uTotal||getUTotal(hasRef);
-        var padL=L.padL||40;
-        var chartW=L.chartW;
-        var cxLocal=pr.cx0-(containerRef.current?containerRef.current.getBoundingClientRect().left:0)-padL;
-        var frac=cxLocal/chartW;
-        if(frac<0)frac=0; if(frac>1)frac=1;
-        var newSpan=pr.uSpan0/r;
-        if(newSpan<1)newSpan=1;
-        if(newSpan>uT)newSpan=uT;  /* X軸 uTotal で頭打ち */
-        var effectiveR = (newSpan>0) ? (pr.uSpan0/newSpan) : r;
-        var newUS=pr.uCenter-frac*newSpan;
-        var newUE=newUS+newSpan;
-        if(newUS<0){newUS=0;newUE=newSpan;}
-        if(newUE>uT){newUE=uT;newUS=uT-newSpan;}
-        if(newUS<0)newUS=0;
-        setView({uS:newUS,uE:newUE});
-        /* Y軸zoom も 実効r で更新 (X軸頭打ちなら Y軸も停止) */
-        var nz=(pr.zoom0||1)*effectiveR;
-        if(nz<0.05)nz=0.05; if(nz>2.5)nz=2.5;
-        setZoom(nz);
-        /* 価格軸縦シフト: 中心のy移動量で pShift 変化 */
-        var priceH=L.priceH;
-        var yenPerPx=(L.pmax-L.pmin)/priceH;
-        setPShift(pr.ps0 + (cy-pr.cy0)*yenPerPx);
-      }
+      if(!L||!containerRef.current){return;}
+      /* C-uaxis: u軸ズーム — uCenter を cxRatio 位置に固定 */
+      var uTotalNow=L.uTotal||getUTotal(hasRef);
+      var newUSpan=pr.uSpan0/r;
+      if(newUSpan<2)newUSpan=2;
+      if(newUSpan>uTotalNow)newUSpan=uTotalNow;
+      var rect=getCanvasRect();
+      var cxLocal=pr.cx0-rect.left;
+      var cxRatio=(cxLocal-L.padL)/L.chartW;
+      if(cxRatio<0)cxRatio=0; if(cxRatio>1)cxRatio=1;
+      var newUS=pr.uCenter-cxRatio*newUSpan;
+      var newUE=newUS+newUSpan;
+      if(newUS<0){newUS=0;newUE=newUS+newUSpan;}
+      if(newUE>uTotalNow){newUE=uTotalNow;newUS=newUE-newUSpan;}
+      if(newUS<0)newUS=0;
+      setView({uS:newUS,uE:newUE});
+      // 価格軸縦シフト: 中心のy移動量で pShift 変化
+      var priceH=L.priceH;
+      var yenPerPx=(L.pmax-L.pmin)/priceH;
+      setPShift(pr.ps0 + (cy-pr.cy0)*yenPerPx);
       return;
     }
     if(!e.touches.length)return;
@@ -2650,26 +2598,8 @@ function DataChart(props){
       style:{display:"block",width:"100%",height:"100%",pointerEvents:"none"}}),
     ce("canvas",{ref:overlayRef,
       style:{position:"absolute",top:0,left:0,width:"100%",height:"100%",pointerEvents:"none"}}),
-    /* 2026-04-21: 倍率表示 + タップで zoom=1 + view + pShift を初期化 */
-    ce("div",{
-      onClick:function(){
-        setZoom(1);
-        setPShift(0);
-        /* view も初期位置 (最新データ右端、12 px/u) に戻す */
-        var dimW=(dim&&dim.w)||((containerRef.current&&containerRef.current.getBoundingClientRect().width)||800);
-        var chartWLoc=dimW-80;
-        var uT=getUTotal(hasRef);
-        var targetUSpan=chartWLoc/12;
-        if(targetUSpan>=uT){setView({uS:0,uE:uT});}
-        else {setView({uS:uT-targetUSpan, uE:uT});}
-      },
-      title:"タップで初期状態 (倍率1.0× / 最新データ表示) に戻す",
-      style:{position:"absolute",right:8,bottom:6,fontSize:11,color:zoom===1?"#555":"#a5b4fc",
-             background:"rgba(0,0,0,0.4)",padding:"2px 7px",borderRadius:4,
-             cursor:"pointer",userSelect:"none",
-             border:zoom===1?"1px solid #333":"1px solid #6366f1",
-             fontWeight:zoom===1?400:600}
-    }, zoom.toFixed(2)+'× '+(zoom!==1?'⟳':''))
+    ce("div",{style:{position:"absolute",right:8,bottom:6,fontSize:10,color:"#555",pointerEvents:"none"}},
+      ((getUTotal(hasRef)/((view.uE||0)-(view.uS||0)||1))).toFixed(1)+'×')
   );
 }
 
@@ -2722,12 +2652,8 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   var padL=40, padR=40, padT=10, padB=22;
   /* 2026-04-20: priceH は常に画面フィット (dim.h 基準按分)。
      pricePx の効果は priceRange 側で「レンジ幅を縮減」する形で反映される (空白ゼロ)。
-     分離モード (pricePx>0) でも canvas 縦拡張は行わず、従来通り画面内で完結
-     2026-04-21: Google Maps的ズーム — pricePx effective = base × zoom (呼び出し側で計算済) */
+     分離モード (pricePx>0) でも canvas 縦拡張は行わず、従来通り画面内で完結 */
   var pricePx=(dim&&typeof dim.pricePx==='number'&&dim.pricePx>0)?dim.pricePx:0;
-  /* 2026-04-21: 書き込みオブジェクト (drawAnalysisStroke系) の width/fontSize を zoom倍
-     (バー・軸・ラベルは元サイズ、書き込みだけ倍率連動。Google Maps 的挙動) */
-  var strokeZoom=(dim&&typeof dim.zoom==='number'&&dim.zoom>0)?dim.zoom:1;
   var volH=Math.max(44,Math.round((H-padT-padB)*0.13));
   var priceH=H-padT-padB-volH-6;
   canvas.width=Math.round(W*dpr);
@@ -2735,7 +2661,6 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   try{canvas.style.height='';}catch(e){}  /* リセット */
   var ctx=canvas.getContext('2d');
   ctx.setTransform(dpr,0,0,dpr,0,0);
-  ctx._strokeZoom=strokeZoom;  /* drawAnalysisStroke* が読む */
 
   // 背景 (HSBI2 と同じ漆黒 / 2026-04-20: ca_chart_bg_v1 設定で変更可能)
   ctx.fillStyle=caLoadChartBg();
@@ -2826,53 +2751,29 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     halfBarPx:_halfBarPx,innerW:_innerW,
     hasRef:hasRef};
 
-  // 10円固定グリッド + ラベル密度段階切替 (HSBI2準拠、実線の薄い横線)
-  // 2026-04-21: Google Maps的ズーム対応
-  //   画面空間 pxPerStep (= 論理空間 × zoom) に応じてラベル表示する円単位を切替:
-  //     >=50px → 10円ラベル + 5円サブ目盛追加
-  //     20-50px → 10円ラベル (現状)
-  //     10-20px → 25円ラベル
-  //     5-10px  → 50円ラベル
-  //     <5px    → 100円ラベル
-  //   グリッドは常に10円単位で描画、ラベルだけ間引き
+  // 10円固定グリッド + 全10円ラベル (HSBI2準拠、実線の薄い横線)
   ctx.font='10px -apple-system,Helvetica,sans-serif';
   ctx.textBaseline='middle'; ctx.textAlign='right';
   var pStep=10;
   var pStart=Math.ceil(pmin/pStep)*pStep;
   var pEnd=Math.floor(pmax/pStep)*pStep;
   var pxPerStep=(priceH/(pmax-pmin))*pStep;
-  /* labelYen: ラベル描画する円単位 (10/20/50)
-     2026-04-21: 最大50円刻みまで (100円は無し、ユーザー要望) */
-  var labelYen;
-  if(pxPerStep>=20)      labelYen=10;
-  else if(pxPerStep>=12) labelYen=20;
-  else                   labelYen=50;
-  var drawSubGrid=(pxPerStep>=50);  /* 5円サブ目盛 */
-  /* 5円サブ目盛を先に描く (10円グリッドの下レイヤー) */
-  if(drawSubGrid){
-    ctx.strokeStyle='#1e1e1e';  /* 10円グリッド (#262626) より薄い */
-    ctx.lineWidth=0.5;
-    var sStart=Math.ceil(pmin/5)*5;
-    var sEnd=Math.floor(pmax/5)*5;
-    for(var sp=sStart;sp<=sEnd;sp+=5){
-      if(sp%10===0)continue;  /* 10円の位置は 10円グリッドで描かれるのでスキップ */
-      var sy=pToY(sp);
-      ctx.beginPath(); ctx.moveTo(padL,Math.round(sy)+0.5); ctx.lineTo(padL+chartW,Math.round(sy)+0.5); ctx.stroke();
-    }
-  }
+  /* 2026-04-20: 必ず10円刻みでラベル表示 (ユーザー要望、pxPerStep依存の間引き廃止)
+     スマホ等で密度が高すぎて文字が重なる可能性あり、その場合はズーム操作で回避 */
+  var labelEvery=1;
   for(var p=pStart;p<=pEnd;p+=pStep){
     var y=pToY(p);
-    /* 2026-04-21: 横線は labelYen に該当する価格のみ描画 (ラベルある所にだけ線)
-       ラウンドナンバー (1000/100) は labelYen 関係なく強調線 */
-    var isLabel=(p%labelYen===0);
-    var drawLine=false;
-    if(p%1000===0){ ctx.strokeStyle='#3c3c3c'; ctx.lineWidth=1.5; drawLine=true; }
-    else if(p%100===0){ ctx.strokeStyle='#323232'; ctx.lineWidth=1.2; drawLine=true; }
-    else if(isLabel){ ctx.strokeStyle='#262626'; ctx.lineWidth=1; drawLine=true; }
-    if(drawLine){
-      ctx.beginPath(); ctx.moveTo(padL,Math.round(y)+0.5); ctx.lineTo(padL+chartW,Math.round(y)+0.5); ctx.stroke();
-    }
-    if(isLabel){
+    /* 2026-04-20: ラウンドナンバーは段階的に太線化
+       1000円刻み: 最太 (1.5px, #3c3c3c)
+       100円刻み: 中太 (1.2px, #323232)
+       50円刻み:  100円と同じ (1.2px, #323232) — 2026-04-20 ユーザー要望で100に合わせる
+       10円刻み:  従来 (1px,   #262626) */
+    if(p%1000===0){ ctx.strokeStyle='#3c3c3c'; ctx.lineWidth=1.5; }
+    else if(p%100===0){ ctx.strokeStyle='#323232'; ctx.lineWidth=1.2; }
+    else if(p%50===0){ ctx.strokeStyle='#323232'; ctx.lineWidth=1.2; }
+    else { ctx.strokeStyle='#262626'; ctx.lineWidth=1; }
+    ctx.beginPath(); ctx.moveTo(padL,Math.round(y)+0.5); ctx.lineTo(padL+chartW,Math.round(y)+0.5); ctx.stroke();
+    if((p/pStep)%labelEvery===0){
       ctx.fillStyle='#888';
       // 右側ラベル (textAlign='right' 前提、末端より4px内側)
       ctx.fillText(p.toFixed(0),padL+chartW+padR-4,y);
@@ -3063,9 +2964,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
 function drawAnalysisStroke(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH){
   if(!s||!s.anchors||!s.anchors.length)return;
   var col=s.color||'#ff3b30';
-  /* 2026-04-21: 書き込みオブジェクト zoom連動 (drawDataChart 側で ctx._strokeZoom 設定) */
-  var zm=ctx._strokeZoom||1;
-  var w=(s.width||2)*zm;
+  var w=s.width||2;
   var op=s.opacity!=null?s.opacity:1;
   ctx.globalAlpha=op;
   ctx.strokeStyle=col;
@@ -3141,9 +3040,7 @@ function drawAnalysisStroke(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,priceTo
 function drawAnalysisStrokeExt(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH){
   if(!s||!s.anchors||!s.anchors.length)return;
   var col=s.color||'#ff3b30';
-  /* 2026-04-21: 書き込みオブジェクト zoom連動 */
-  var zm=ctx._strokeZoom||1;
-  var w=(s.width||2)*zm;
+  var w=s.width||2;
   var op=s.opacity!=null?s.opacity:1;
   var tp=s.type||s.tool;
   ctx.globalAlpha=op;
@@ -3167,22 +3064,20 @@ function drawAnalysisStrokeExt(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,pric
   } else if(tp==='text'){
     var a=s.anchors[0];
     var x=minToX(a.tm), y=pToY(a.p);
-    var fs=(s.fontSize||15)*zm;  /* 2026-04-21: zoom連動 */
+    var fs=s.fontSize||15;
     var fb=s.fontBold?'bold ':'';
     ctx.font=fb+fs+"px -apple-system,'Helvetica Neue',sans-serif";
     ctx.textBaseline='top'; ctx.textAlign='left';
     /* 2026-04-20: boxW指定時は wordBreak wrap (幅を超える行を折返し)
-       テキストエディット時のtextarea wrap表示と一致させるため
-       2026-04-21: boxW も zoom 倍 */
-    var boxWZ=(s.boxW||0)*zm;
+       テキストエディット時のtextarea wrap表示と一致させるため */
     var rawLines=(s.text||'').split('\n');
     var displayLines=[];
-    if(boxWZ>0){
+    if(s.boxW&&s.boxW>0){
       rawLines.forEach(function(para){
         var cur='';
         for(var ci=0;ci<para.length;ci++){
           var test=cur+para[ci];
-          if(ctx.measureText(test).width>boxWZ&&cur.length>0){
+          if(ctx.measureText(test).width>s.boxW&&cur.length>0){
             displayLines.push(cur);
             cur=para[ci];
           }else{
@@ -3197,7 +3092,7 @@ function drawAnalysisStrokeExt(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,pric
     // 背景半透明ボックス (視認性向上) — 折返し後のmaxWで算出
     var maxW=0;
     displayLines.forEach(function(l){var m=ctx.measureText(l).width; if(m>maxW)maxW=m;});
-    if(boxWZ>maxW)maxW=boxWZ;
+    if(s.boxW&&s.boxW>maxW)maxW=s.boxW;
     var boxH=displayLines.length*fs*1.3;
     /* 2026-04-21: テキスト背景 透明化 (旧: rgba(0,0,0,0.6) fillRect) */
     ctx.fillStyle=col;
@@ -3505,24 +3400,12 @@ function ImageAnnotator(props){
   }
   var stAV=useState({uS:0,uE:getUTotalIA('1m',false)});  var analysisView=stAV[0],setAnalysisView=stAV[1];         // 時間軸ビュー u軸 (両chart共通)
   var stAPS=useState(0);             var analysisPShift=stAPS[0],setAnalysisPShift=stAPS[1];   // 現在チャートの pShift
-  /* 2026-04-21: 初期表示スケール (px/u) — 12 で最新データを右端に配置
-     chartWは mount時の window幅 - padL(40) - padR(40) - 左右マージン余裕(20) で推定
-     (正確なchartWはDataChart側の dim 確定後に決まるが、初期表示用の近似で十分) */
-  function computeInitialView(tfLocal, hasR){
-    var uT=getUTotalIA(tfLocal,hasR);
-    var pxPerU=12;
-    var chartWApprox=Math.max(400,(typeof window!=='undefined'?window.innerWidth:1200)-100);
-    var uSpan=chartWApprox/pxPerU;
-    if(uSpan>=uT)return {uS:0,uE:uT};  /* 全体収まる → フィット */
-    return {uS:uT-uSpan, uE:uT};       /* 最新データを右端に */
-  }
   /* C-uaxis: analysisData/analysisTf/refAnalysis(id) 変更時に view/pShift をリセット (u軸、uTotal変化に追従)
      C8a-bugfix: deps を refAnalysis.id に絞る — refAnalysis全体だと setRefAnalysis(...analysisStrokes...) のたびに発火して
-                 ref側書込直後に view が全体表示にreset され、書いた線が画面外にスクロール (=消えたように見える) する
-     2026-04-21: リセット先を「最新データ右端 + 12 px/u」に変更 */
+                 ref側書込直後に view が全体表示にreset され、書いた線が画面外にスクロール (=消えたように見える) する */
   useEffect(function(){
     if(analysisData){
-      setAnalysisView(computeInitialView(analysisTf,!!refAnalysis));
+      setAnalysisView({uS:0,uE:getUTotalIA(analysisTf,!!refAnalysis)});
       setAnalysisPShift(0);
     }
   },[analysisData,analysisTf,refAnalysis?refAnalysis.id:null]);
