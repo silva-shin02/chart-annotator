@@ -1519,13 +1519,8 @@ function DataChart(props){
     /* 2026-04-20: iPad カクつき対策 — 連続する state 変更 (pan/pinch 中) を
        RAF にまとめて1フレームに1回だけ描画 */
     var rafId=requestAnimationFrame(function(){
-      /* 2026-04-20: pricePx を dim に渡す (drawDataChart は priceH 常に画面フィット、pricePx は priceRange 側で処理済み)
-         2026-04-21: Google Maps的ズーム:
-           - effective pricePx = basePricePx × zoom (priceRange側で反映済)
-           - dim.zoom は書き込みオブジェクト(drawAnalysisStroke系)の width/fontSize 倍率用 */
-      var basePricePx=pricePx||0;
-      var effPricePx=basePricePx>0?basePricePx*zoom:0;
-      var dimWithPx=Object.assign({},dim,{pricePx:effPricePx,zoom:zoom});
+      /* 2026-04-20: pricePx を dim に渡す (drawDataChart は priceH 常に画面フィット、pricePx は priceRange 側で処理済み) */
+      var dimWithPx=Object.assign({},dim,{pricePx:pricePx});
       var canvas=canvasRef.current; if(!canvas)return;
       /* 2026-04-20: iPad カクつき対策 — iPad のみ DPR=1 に固定して描画負荷を 1/4 に軽減 */
       var origDPR=window.devicePixelRatio||1;
@@ -1546,7 +1541,7 @@ function DataChart(props){
       drawCrosshair();
     });
     return function(){cancelAnimationFrame(rafId);};
-  },[data,bars,dim,tf,view,pShift,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes,moveHint,pricePx,chartBg,zoom]);
+  },[data,bars,dim,tf,view,pShift,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes,moveHint,pricePx,chartBg]);
 
   // showCrosshair 切替時: OFFなら消す、ONなら再描画
   useEffect(function(){
