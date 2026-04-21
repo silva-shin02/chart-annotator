@@ -1868,8 +1868,7 @@ function DataChart(props){
     drawCrosshair();
   }
 
-  // ホイール: Google Maps的ズーム + Ctrl+ホイール: pShift
-  // 2026-04-21: 最小zoom = 全体(uTotal)が画面に収まる値、上限 2.5
+  // ホイール: Google Maps的ズーム (カーソル位置中心) + Ctrl+ホイール: pShift
   useEffect(function(){
     var el=containerRef.current; if(!el)return;
     function handler(e){
@@ -1878,17 +1877,45 @@ function DataChart(props){
         setPShift(function(p){return p + (e.deltaY>0?-0.02:0.02);});
         return;
       }
+      /* 2026-04-21 Google Maps風 zoom 中心ベース:
+         1. カーソル x位置 (rect内座標) から u値 = uCenter を算出
+         2. factor = 1.1 (in) or 1/1.1 (out) で uSpan を縮小/拡大
+         3. uCenter を画面上同じ x位置に保つように新 uS/uE を再配置
+         4. zoom state も連動で更新 (書き込みオブジェクトの太さ計算用) */
+      var rect=el.getBoundingClientRect();
+      if(rect.width<100)return;
+      var padL=40, padR=40;
+      var chartW=rect.width-padL-padR;
+      var cx=e.clientX-rect.left-padL;
+      if(cx<0||cx>chartW)return;
+      var frac=cx/chartW;  /* 0〜1, マウスの画面内相対位置 */
       var factor=e.deltaY<0?1.1:1/1.1;
+      var uT=getUTotal(hasRef);
+      /* zoom = 初期uSpan / 現uSpan (zoom=1 → 初期と同じ uSpan、zoom=2 → 半分) */
+      setView(function(v){
+        var vUS=v.uS||0, vUE=v.uE||uT;
+        var vSpan=vUE-vUS;
+        var uCenter=vUS+frac*vSpan;
+        var newSpan=vSpan/factor;  /* factor>1 = ズームイン = uSpan縮小 */
+        if(newSpan<1)newSpan=1;
+        if(newSpan>uT)newSpan=uT;
+        var newUS=uCenter-frac*newSpan;
+        var newUE=newUS+newSpan;
+        if(newUS<0){newUS=0; newUE=newSpan;}
+        if(newUE>uT){newUE=uT; newUS=uT-newSpan;}
+        if(newUS<0)newUS=0;
+        return {uS:newUS, uE:newUE};
+      });
+      /* zoom state (書き込み太さ連動用) */
       setZoom(function(z){
         var nz=z*factor;
-        /* 2026-04-21: 絶対下限 0.1 (バー幅1.2 px/u) — 全体より更にズームアウト可能 */
         if(nz<0.1)nz=0.1; if(nz>2.5)nz=2.5;
         return nz;
       });
     }
     el.addEventListener('wheel',handler,{passive:false});
     return function(){el.removeEventListener('wheel',handler);};
-  },[]);
+  },[hasRef]);
 
   /* Pointer → 時刻+価格に変換 */
   function pxToTimePrice(clientX,clientY){
@@ -2494,7 +2521,7 @@ function DataChart(props){
   }
   function onTouchMove(e){
     if(props.textInputActive)return;
-    // ピンチ中 — 2026-04-21: C案 全体スケール zoom 変更 + pShift (縦パン)
+    // ピンチ中 — 2026-04-21: Google Maps風 ピンチ中心ベース
     if(pinchRef.current&&e.touches.length>=2){
       if(e.preventDefault)e.preventDefault();
       var t1=e.touches[0], t2=e.touches[1];
@@ -2504,13 +2531,31 @@ function DataChart(props){
       var pr=pinchRef.current;
       if(!d||!pr.d0)return;
       var r=d/pr.d0;
-      /* zoom 更新 (開始zoom × 距離比、clamp 0.1〜2.5) */
+      /* zoom state (書き込み太さ用) */
       var nz=(pr.zoom0||1)*r;
       if(nz<0.1)nz=0.1; if(nz>2.5)nz=2.5;
       setZoom(nz);
-      /* 価格軸縦シフト: 中心のy移動量で pShift 変化 */
+      /* view state (X軸範囲) — ピンチ中心を固定して uSpan 伸縮
+         ピンチ開始時 uCenter は pr.uCenter、cx0 画面位置 に固定 */
       var L=layoutRef.current;
       if(L){
+        var uT=L.uTotal||getUTotal(hasRef);
+        var padL=L.padL||40;
+        var chartW=L.chartW;
+        /* ピンチ開始時のcxから算出した frac を固定 (指の移動は pShift 用) */
+        var cxLocal=pr.cx0-(containerRef.current?containerRef.current.getBoundingClientRect().left:0)-padL;
+        var frac=cxLocal/chartW;
+        if(frac<0)frac=0; if(frac>1)frac=1;
+        var newSpan=pr.uSpan0/r;
+        if(newSpan<1)newSpan=1;
+        if(newSpan>uT)newSpan=uT;
+        var newUS=pr.uCenter-frac*newSpan;
+        var newUE=newUS+newSpan;
+        if(newUS<0){newUS=0;newUE=newSpan;}
+        if(newUE>uT){newUE=uT;newUS=uT-newSpan;}
+        if(newUS<0)newUS=0;
+        setView({uS:newUS,uE:newUE});
+        /* 価格軸縦シフト: 中心のy移動量で pShift 変化 */
         var priceH=L.priceH;
         var yenPerPx=(L.pmax-L.pmin)/priceH;
         setPShift(pr.ps0 + (cy-pr.cy0)*yenPerPx);
@@ -2616,10 +2661,19 @@ function DataChart(props){
       style:{display:"block",width:"100%",height:"100%",pointerEvents:"none"}}),
     ce("canvas",{ref:overlayRef,
       style:{position:"absolute",top:0,left:0,width:"100%",height:"100%",pointerEvents:"none"}}),
-    /* 2026-04-21: 倍率表示 + タップで zoom=1 にリセット */
+    /* 2026-04-21: 倍率表示 + タップで zoom=1 + view を初期表示にリセット */
     ce("div",{
-      onClick:function(){setZoom(1);},
-      title:"タップで初期倍率(1.0×)に戻す",
+      onClick:function(){
+        setZoom(1);
+        /* view も初期位置 (最新データ右端、12 px/u) に戻す */
+        var dimW=(dim&&dim.w)||((containerRef.current&&containerRef.current.getBoundingClientRect().width)||800);
+        var chartWLoc=dimW-80;
+        var uT=getUTotal(hasRef);
+        var targetUSpan=chartWLoc/12;
+        if(targetUSpan>=uT){setView({uS:0,uE:uT});}
+        else {setView({uS:uT-targetUSpan, uE:uT});}
+      },
+      title:"タップで初期倍率(1.0×)+初期表示に戻す",
       style:{position:"absolute",right:8,bottom:6,fontSize:11,color:zoom===1?"#555":"#a5b4fc",
              background:"rgba(0,0,0,0.4)",padding:"2px 7px",borderRadius:4,
              cursor:"pointer",userSelect:"none",
@@ -2730,19 +2784,6 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   var uE=(view&&view.uE!=null)?view.uE:uTotal;
   // クランプ
   if(uS<0)uS=0; if(uE>uTotal)uE=uTotal; if(uE<=uS)uE=uS+1;
-  /* 2026-04-21: Google Maps的ズーム — zoom>1 で uSpan を縮めて (=拡大表示)
-                                     zoom<1 で uSpan を広げて (=縮小表示)
-     view state は変更せず、描画時のみ zoom 反映。uS 中心固定で uE を伸縮 */
-  var drawZoom=(dim&&typeof dim.zoom==='number'&&dim.zoom>0)?dim.zoom:1;
-  if(drawZoom!==1){
-    var baseUSpan=uE-uS;
-    var newUSpan=baseUSpan/drawZoom;
-    if(newUSpan>uTotal)newUSpan=uTotal;
-    if(newUSpan<1)newUSpan=1;
-    /* uE (右端)を固定して uS を左右に伸縮 (最新データ見る運用、右端重視) */
-    uS=uE-newUSpan;
-    if(uS<0){uS=0; uE=uS+newUSpan; if(uE>uTotal)uE=uTotal;}
-  }
   var uSpan=uE-uS;
 
   function tToMin(t){var p=t.split(':');return parseInt(p[0],10)*60+parseInt(p[1],10);}
@@ -3658,22 +3699,30 @@ function ImageAnnotator(props){
       function doActualWrite(){
         var draftBase=cfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts';
         var draftDataBase=cfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
-        /* 2026-04-20: 画像mode撤去後、thumbは img._thumb のみ
-           (analysis thumbは generateAnalysisThumb で別生成済み) */
-        var thumb=img._thumb||'';
-        /* 2026-04-20: thumb upload 30秒制限 (既存URL再利用で帯域削減) */
+        /* 2026-04-21: 画像mode撤去後のサムネ取得 (img._thumb が空でも、
+           analysisDataから generateAnalysisThumb で生成、localStorage キャッシュ優先) */
+        var cachedThumb=caLoadThumb(draftId);
+        var needGen=!cachedThumb && !!analysisDataRef.current;
         var _nowThumb=Date.now();
         var _needUp=!lastThumbUrlRef.current||(_nowThumb-lastThumbUploadAtRef.current>30000);
-        var _thumbP=(_needUp&&thumb)?uploadThumbToStorage(cfg2,draftId,thumb):Promise.resolve(lastThumbUrlRef.current);
-        // meta
-        _thumbP.then(function(thumbUrl){
-          if(_needUp&&thumbUrl){lastThumbUploadAtRef.current=_nowThumb;lastThumbUrlRef.current=thumbUrl;}
-          var metaDb={ticker:img._ticker||'',name:img._name||img.name||'chart',savedAt:savedAt};
-          if(thumbUrl)metaDb.thumbUrl=thumbUrl;
-          var metaBody=JSON.stringify(metaDb);fetch(draftBase+'/'+draftId+'.json'+auth,{method:'PUT',
-            headers:{'Content-Type':'application/json'},body:metaBody})
-            .catch(function(e){console.error('draft meta sync:',e);});
-        });
+        function proceedWithThumb(thumb){
+          if(thumb && !cachedThumb)caSaveThumb(draftId,thumb);  /* localStorageキャッシュ */
+          var _thumbP=(_needUp&&thumb)?uploadThumbToStorage(cfg2,draftId,thumb):Promise.resolve(lastThumbUrlRef.current);
+          // meta
+          _thumbP.then(function(thumbUrl){
+            if(_needUp&&thumbUrl){lastThumbUploadAtRef.current=_nowThumb;lastThumbUrlRef.current=thumbUrl;}
+            var metaDb={ticker:img._ticker||'',name:img._name||img.name||'chart',savedAt:savedAt};
+            if(thumbUrl)metaDb.thumbUrl=thumbUrl;
+            var metaBody=JSON.stringify(metaDb);fetch(draftBase+'/'+draftId+'.json'+auth,{method:'PUT',
+              headers:{'Content-Type':'application/json'},body:metaBody})
+              .catch(function(e){console.error('draft meta sync:',e);});
+          });
+        }
+        if(needGen){
+          generateAnalysisThumb(analysisDataRef.current,function(thumb){proceedWithThumb(thumb||'');});
+        } else {
+          proceedWithThumb(cachedThumb||img._thumb||'');
+        }
         // data — 2026-04-20 C8: _v を同梱 (polling側で競合検出に利用)
         var draftData={name:img._name||img.name||'chart',_v:savedAt};
         /* B2+: 分析データ同梱 */
