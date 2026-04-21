@@ -1309,8 +1309,10 @@ function DataChart(props){
     window.addEventListener('ca_price_px_changed',handler);
     return function(){window.removeEventListener('ca_price_px_changed',handler);};
   },[]);
-  /* 2026-04-21: C案 全体スケールzoom (CSS的に canvas を拡大/縮小、データ空間12 px/u 維持) */
+  /* 2026-04-21: C案 全体スケールzoom (描画内部で ctx.scale 適用、canvas CSSサイズ不変) */
   var stZm=useState(1); var zoom=stZm[0],setZoom=stZm[1];
+  var zoomRef=useRef(1);
+  useEffect(function(){zoomRef.current=zoom;},[zoom]);
   /* 2026-04-20: ca_chart_bg_changed listener — 背景色変更時に再描画トリガ */
   var stBg=useState(caLoadChartBg()); var chartBg=stBg[0],setChartBg=stBg[1];
   useEffect(function(){
@@ -1371,8 +1373,7 @@ function DataChart(props){
 
   /* 2026-04-20: 座標計算用の rect 取得 — container rect を返す (分離モード廃止で単純化) */
   function getCanvasRect(){
-    /* 2026-04-21: canvasRef 優先 (CSS zoom 時にbounding rect が scaled sizeを返すため hit test が自動対応) */
-    if(canvasRef.current)return canvasRef.current.getBoundingClientRect();
+    /* 2026-04-21: containerRef 基準 (canvas CSS size = 100% = containerサイズ、zoom は描画内で処理) */
     if(containerRef.current)return containerRef.current.getBoundingClientRect();
     return {left:0,top:0,width:0,height:0};
   }
@@ -1519,8 +1520,9 @@ function DataChart(props){
     /* 2026-04-20: iPad カクつき対策 — 連続する state 変更 (pan/pinch 中) を
        RAF にまとめて1フレームに1回だけ描画 */
     var rafId=requestAnimationFrame(function(){
-      /* 2026-04-20: pricePx を dim に渡す (drawDataChart は priceH 常に画面フィット、pricePx は priceRange 側で処理済み) */
-      var dimWithPx=Object.assign({},dim,{pricePx:pricePx});
+      /* 2026-04-20: pricePx を dim に渡す (drawDataChart は priceH 常に画面フィット、pricePx は priceRange 側で処理済み)
+         2026-04-21: C案 zoom も dim に同梱 (drawDataChart/drawCrosshair で ctx.scale(zoom) 適用) */
+      var dimWithPx=Object.assign({},dim,{pricePx:pricePx,zoom:zoom});
       var canvas=canvasRef.current; if(!canvas)return;
       /* 2026-04-20: iPad カクつき対策 — iPad のみ DPR=1 に固定して描画負荷を 1/4 に軽減 */
       var origDPR=window.devicePixelRatio||1;
@@ -1538,15 +1540,6 @@ function DataChart(props){
           try{Object.defineProperty(window,'devicePixelRatio',{value:origDPR,configurable:true});}catch(e){}
         }
       }
-      /* 2026-04-21: C案 CSS zoom — canvas style width/height を zoom倍に設定
-         (canvas内部buffer: dim.w*dpr 固定 → 拡大時 pixel upscaling でやや blur、
-          データ空間は 12 px/u 維持) */
-      try{
-        canvas.style.width=(dim.w*zoom)+'px';
-        canvas.style.height=(dim.h*zoom)+'px';
-        var ov=overlayRef.current;
-        if(ov){ov.style.width=(dim.w*zoom)+'px';ov.style.height=(dim.h*zoom)+'px';}
-      }catch(e){}
       drawCrosshair();
     });
     return function(){cancelAnimationFrame(rafId);};
@@ -1567,11 +1560,13 @@ function DataChart(props){
   function drawCrosshair(){
     var overlay=overlayRef.current; if(!overlay)return;
     var dpr=window.devicePixelRatio||1;
-    var W=dim.w, H=dim.h;
-    overlay.width=Math.round(W*dpr);
-    overlay.height=Math.round(H*dpr);
+    /* 2026-04-21: C案 zoom 対応 — drawDataChart と同じ論理空間 (dim÷zoom) */
+    var zm=zoomRef.current||1;
+    var W=dim.w/zm, H=dim.h/zm;
+    overlay.width=Math.round(dim.w*dpr);   /* 物理 buffer (zoom 不含) */
+    overlay.height=Math.round(dim.h*dpr);
     var ctx=overlay.getContext('2d');
-    ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.setTransform(dpr*zm,0,0,dpr*zm,0,0);
     ctx.clearRect(0,0,W,H);
 
     var L=layoutRef.current;
@@ -1855,7 +1850,8 @@ function DataChart(props){
   // マウスムーブハンドラ (十字カーソル座標更新専用)
   function onChartMouseMove(e){
     var rect=getCanvasRect();
-    cursorRef.current={x:e.clientX-rect.left,y:e.clientY-rect.top};
+    var zm=zoomRef.current||1;
+    cursorRef.current={x:(e.clientX-rect.left)/zm,y:(e.clientY-rect.top)/zm};
     notifyExternalCursorFromLocal();
     if(!rafRef.current){
       rafRef.current=requestAnimationFrame(function(){
@@ -1897,7 +1893,8 @@ function DataChart(props){
   function pxToTimePrice(clientX,clientY){
     var L=layoutRef.current; if(!L)return null;
     var rect=getCanvasRect();
-    var cx=clientX-rect.left, cy=clientY-rect.top;
+    var zm=zoomRef.current||1;
+    var cx=(clientX-rect.left)/zm, cy=(clientY-rect.top)/zm;
     /* C-uaxis: u軸対応で side/tm/u 算出 */
     var xst=xToSideTm(cx);
     var tm=xst.tm, side=xst.side, u=xst.u;
@@ -1954,7 +1951,8 @@ function DataChart(props){
   function hitTestStroke(clientX,clientY){
     var L=layoutRef.current; if(!L)return null;
     var rect=getCanvasRect();
-    var cx=clientX-rect.left, cy=clientY-rect.top;
+    var zm=zoomRef.current||1;
+    var cx=(clientX-rect.left)/zm, cy=(clientY-rect.top)/zm;
     /* C6+C8a: クリック側を判定。xToSideTmがgap帯も近い側に境界clampするので 'gap'返しは無し */
     var clickSide='cur';
     if(L.hasRef){
@@ -2078,7 +2076,8 @@ function DataChart(props){
     if(!selectedIdx)return null;
     var L=layoutRef.current; if(!L)return null;
     var rect=getCanvasRect();
-    var cx=clientX-rect.left, cy=clientY-rect.top;
+    var zm=zoomRef.current||1;
+    var cx=(clientX-rect.left)/zm, cy=(clientY-rect.top)/zm;
     var selSide=selectedIdx.side||'cur';
     var srcArr=(selSide==='ref')?(refStrokes||[]):(strokes||[]);
     var s=srcArr[selectedIdx.idx]; if(!s)return null;
@@ -2265,7 +2264,8 @@ function DataChart(props){
     // 十字カーソル座標更新 (hoverでも描画中でも)
     if(containerRef.current){
       var rect=getCanvasRect();
-      cursorRef.current={x:e.clientX-rect.left,y:e.clientY-rect.top};
+      var zm=zoomRef.current||1;
+      cursorRef.current={x:(e.clientX-rect.left)/zm,y:(e.clientY-rect.top)/zm};
       notifyExternalCursorFromLocal();
     }
     // lasso 移動中
@@ -2361,7 +2361,9 @@ function DataChart(props){
     if(drawTool!=='pan'&&!ctrlPanRef.current){panStartRef.current=null;return;}
     var rect2=getCanvasRect();
     var padL=40, padR=40;
-    var chartW=rect2.width-padL-padR;
+    /* 2026-04-21: zoom 対応 — padL/padR/priceH は論理空間。画面実寸 = 論理×zoom */
+    var zmNow=zoomRef.current||1;
+    var chartW=rect2.width-(padL+padR)*zmNow;
     /* C-uaxis: u軸上でpan — 画面1chartW幅のswipeで 1uSpan分のpan */
     var uSpan0=p.uE-p.uS;
     var dU=-(e.clientX-p.x)/chartW*uSpan0;
@@ -2375,7 +2377,8 @@ function DataChart(props){
     if(priceRange){
       var L=layoutRef.current;
       var priceH=L?L.priceH:(rect2.height-34-22-Math.max(44,Math.round((rect2.height-56)*0.13))-6);
-      var yenPerPx=(priceRange.max-priceRange.min)/priceH;
+      /* 画面実寸priceH = 論理priceH×zoom、client dy を画面実寸で割って yen化 */
+      var yenPerPx=(priceRange.max-priceRange.min)/(priceH*zmNow);
       setPShift(p.ps + (e.clientY-p.y)*yenPerPx);
     }
   }
@@ -2504,12 +2507,14 @@ function DataChart(props){
       var nz=(pr.zoom0||1)*r;
       if(nz<0.5)nz=0.5; if(nz>5)nz=5;
       setZoom(nz);
-      /* 価格軸縦シフト: 中心のy移動量で pShift 変化 */
+      /* 価格軸縦シフト: 中心のy移動量で pShift 変化
+         — 2026-04-21: client dy を zoom で割り論理空間に換算してから yenPerPx 乗算 */
       var L=layoutRef.current;
       if(L){
         var priceH=L.priceH;
         var yenPerPx=(L.pmax-L.pmin)/priceH;
-        setPShift(pr.ps0 + (cy-pr.cy0)*yenPerPx);
+        var zmNow=zoomRef.current||1;
+        setPShift(pr.ps0 + (cy-pr.cy0)/zmNow*yenPerPx);
       }
       return;
     }
@@ -2551,7 +2556,8 @@ function DataChart(props){
     if(e.pointerType!=='pen'||e.buttons!==0)return;
     if(!containerRef.current)return;
     var rect=getCanvasRect();
-    cursorRef.current={x:e.clientX-rect.left,y:e.clientY-rect.top};
+    var zm=zoomRef.current||1;
+    cursorRef.current={x:(e.clientX-rect.left)/zm,y:(e.clientY-rect.top)/zm};
     notifyExternalCursorFromLocal();
     if(!rafRef.current){
       rafRef.current=requestAnimationFrame(function(){drawCrosshair();rafRef.current=null;});
@@ -2602,7 +2608,7 @@ function DataChart(props){
         drawCrosshair();
       }
     },
-    style:{flex:1,position:"relative",background:chartBg,overflow:"auto",
+    style:{flex:1,position:"relative",background:chartBg,overflow:"hidden",overflowX:"hidden",
        cursor:drawTool==='pan'?"grab":"default",touchAction:"none",userSelect:"none",
        /* 2026-04-20: iPad Safari の長押しメニュー (コピー/選択部分を検索等) を抑止 */
        WebkitTouchCallout:"none",WebkitUserSelect:"none"}
@@ -2659,7 +2665,14 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   // B完全版: EMA 前日連続化 (refData ありなら bars の EMA を上書き)
   bars=computeEnhancedBars(bars, refBars);
   var dpr=window.devicePixelRatio||1;
-  var W=dim.w, H=dim.h;
+  /* 2026-04-21: C案 全体スケール
+     - dim.w/dim.h: 物理containerサイズ (canvas CSS表示サイズと同等)
+     - zoom: 描画倍率 (>1=バーや文字が大きく見える/見える範囲は減る、<1=逆)
+     - W/H: 論理空間 (描画coord) = 物理 ÷ zoom
+     - canvas buffer: 物理 × dpr (不変、overflowや振動発生なし)
+     - ctx setTransform(dpr*zoom): 1論理 = zoom CSS px = dpr*zoom buffer px */
+  var zoom=(dim&&typeof dim.zoom==='number'&&dim.zoom>0)?dim.zoom:1;
+  var W=dim.w/zoom, H=dim.h/zoom;
 
   // レイアウト
   var padL=40, padR=40, padT=10, padB=22;
@@ -2669,11 +2682,11 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   var pricePx=(dim&&typeof dim.pricePx==='number'&&dim.pricePx>0)?dim.pricePx:0;
   var volH=Math.max(44,Math.round((H-padT-padB)*0.13));
   var priceH=H-padT-padB-volH-6;
-  canvas.width=Math.round(W*dpr);
-  canvas.height=Math.round(H*dpr);
+  canvas.width=Math.round(dim.w*dpr);   /* 物理 buffer (zoom 不含) */
+  canvas.height=Math.round(dim.h*dpr);
   try{canvas.style.height='';}catch(e){}  /* リセット */
   var ctx=canvas.getContext('2d');
-  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.setTransform(dpr*zoom,0,0,dpr*zoom,0,0);
 
   // 背景 (HSBI2 と同じ漆黒 / 2026-04-20: ca_chart_bg_v1 設定で変更可能)
   ctx.fillStyle=caLoadChartBg();
