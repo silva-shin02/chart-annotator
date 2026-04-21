@@ -1878,28 +1878,27 @@ function DataChart(props){
         setPShift(function(p){return p + (e.deltaY>0?-0.02:0.02);});
         return;
       }
-      /* 2026-04-21 Google Maps風 zoom 中心ベース:
-         1. カーソル x位置 (rect内座標) から u値 = uCenter を算出
-         2. factor = 1.1 (in) or 1/1.1 (out) で uSpan を縮小/拡大
-         3. uCenter を画面上同じ x位置に保つように新 uS/uE を再配置
-         4. zoom state も連動で更新 (書き込みオブジェクトの太さ計算用) */
+      /* 2026-04-21 Google Maps風 zoom 中心ベース
+         X軸がuTotalに達したらY軸も同期停止 (zoomアウト不可) */
       var rect=el.getBoundingClientRect();
       if(rect.width<100)return;
       var padL=40, padR=40;
       var chartW=rect.width-padL-padR;
       var cx=e.clientX-rect.left-padL;
       if(cx<0||cx>chartW)return;
-      var frac=cx/chartW;  /* 0〜1, マウスの画面内相対位置 */
+      var frac=cx/chartW;
       var factor=e.deltaY<0?1.1:1/1.1;
       var uT=getUTotal(hasRef);
-      /* zoom = 初期uSpan / 現uSpan (zoom=1 → 初期と同じ uSpan、zoom=2 → 半分) */
+      var effectiveFactor=factor;  /* 実際に適用された factor */
       setView(function(v){
         var vUS=v.uS||0, vUE=v.uE||uT;
         var vSpan=vUE-vUS;
         var uCenter=vUS+frac*vSpan;
-        var newSpan=vSpan/factor;  /* factor>1 = ズームイン = uSpan縮小 */
+        var newSpan=vSpan/factor;
         if(newSpan<1)newSpan=1;
-        if(newSpan>uT)newSpan=uT;
+        if(newSpan>uT)newSpan=uT;  /* 上限クランプ (uSpan がuTotal超えない) */
+        /* 実効 factor 更新: 実際のuSpan変化比から逆算 */
+        effectiveFactor = (newSpan>0) ? (vSpan/newSpan) : factor;
         var newUS=uCenter-frac*newSpan;
         var newUE=newUS+newSpan;
         if(newUS<0){newUS=0; newUE=newSpan;}
@@ -1907,10 +1906,10 @@ function DataChart(props){
         if(newUS<0)newUS=0;
         return {uS:newUS, uE:newUE};
       });
-      /* zoom state (書き込み太さ連動用) */
+      /* Y軸 zoom も実効factorで更新 (X軸が頭打ちなら Y軸も停止) */
       setZoom(function(z){
-        var nz=z*factor;
-        if(nz<0.1)nz=0.1; if(nz>2.5)nz=2.5;
+        var nz=z*effectiveFactor;
+        if(nz<0.05)nz=0.05; if(nz>2.5)nz=2.5;
         return nz;
       });
     }
@@ -2533,29 +2532,30 @@ function DataChart(props){
       if(!d||!pr.d0)return;
       var r=d/pr.d0;
       /* zoom state (書き込み太さ用) */
-      var nz=(pr.zoom0||1)*r;
-      if(nz<0.1)nz=0.1; if(nz>2.5)nz=2.5;
-      setZoom(nz);
-      /* view state (X軸範囲) — ピンチ中心を固定して uSpan 伸縮
-         ピンチ開始時 uCenter は pr.uCenter、cx0 画面位置 に固定 */
+      /* 2026-04-21 ピンチ中心ベース (X軸uTotalに達したらY軸も同期停止)
+         - 実効 r を X軸uSpanの実変化比から算出 (頭打ち時 r が固定値に) */
       var L=layoutRef.current;
       if(L){
         var uT=L.uTotal||getUTotal(hasRef);
         var padL=L.padL||40;
         var chartW=L.chartW;
-        /* ピンチ開始時のcxから算出した frac を固定 (指の移動は pShift 用) */
         var cxLocal=pr.cx0-(containerRef.current?containerRef.current.getBoundingClientRect().left:0)-padL;
         var frac=cxLocal/chartW;
         if(frac<0)frac=0; if(frac>1)frac=1;
         var newSpan=pr.uSpan0/r;
         if(newSpan<1)newSpan=1;
-        if(newSpan>uT)newSpan=uT;
+        if(newSpan>uT)newSpan=uT;  /* X軸上限クランプ */
+        var effectiveR = (newSpan>0) ? (pr.uSpan0/newSpan) : r;  /* 実効r */
         var newUS=pr.uCenter-frac*newSpan;
         var newUE=newUS+newSpan;
         if(newUS<0){newUS=0;newUE=newSpan;}
         if(newUE>uT){newUE=uT;newUS=uT-newSpan;}
         if(newUS<0)newUS=0;
         setView({uS:newUS,uE:newUE});
+        /* Y軸zoom も 実効r で更新 (X軸が頭打ちなら同期停止) */
+        var nz=(pr.zoom0||1)*effectiveR;
+        if(nz<0.05)nz=0.05; if(nz>2.5)nz=2.5;
+        setZoom(nz);
         /* 価格軸縦シフト: 中心のy移動量で pShift 変化 */
         var priceH=L.priceH;
         var yenPerPx=(L.pmax-L.pmin)/priceH;
