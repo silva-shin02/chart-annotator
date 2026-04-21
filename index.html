@@ -2852,14 +2852,12 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   var pStart=Math.ceil(pmin/pStep)*pStep;
   var pEnd=Math.floor(pmax/pStep)*pStep;
   var pxPerStep=(priceH/(pmax-pmin))*pStep;
-  /* labelYen: ラベル描画する円単位 (10/20/25/50/100)
-     2026-04-21: ctx.scale撤去に伴い pxPerStep (実画面px) で判定
-     2026-04-21: 20円刻みを追加 (10円→20円→50円→100円の自然な段階、25円も残す) */
+  /* labelYen: ラベル描画する円単位 (10/20/50)
+     2026-04-21: 最大50円刻みまで (100円は無し、ユーザー要望) */
   var labelYen;
   if(pxPerStep>=20)      labelYen=10;
   else if(pxPerStep>=12) labelYen=20;
-  else if(pxPerStep>=8)  labelYen=50;
-  else                   labelYen=100;
+  else                   labelYen=50;
   var drawSubGrid=(pxPerStep>=50);  /* 5円サブ目盛 */
   /* 5円サブ目盛を先に描く (10円グリッドの下レイヤー) */
   if(drawSubGrid){
