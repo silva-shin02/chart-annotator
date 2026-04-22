@@ -5229,15 +5229,35 @@ function ImageAnnotator(props){
               analysisTextareaRef.current=el;
               /* 2026-04-20: マウント直後に高さを内容に合わせて初期化 (boxW wrap時の2行目以降見切れ対策)
                  + 確実にフォーカス (autoFocus失敗保険、タブレットのタッチ合成対策)
-                 2026-04-22: boxW未指定の既存編集は scrollWidth で実幅を測って width 設定 (勝手な折返し防止) */
+                 2026-04-22: boxW未指定の既存編集は canvas measureText で実描画幅を測って width 設定
+                 (width:"auto" 状態の scrollWidth は既に折返し後の幅を返すので使えない) */
               if(el){
                 requestAnimationFrame(function(){
                   if(!el)return;
-                  /* boxW未指定の既存編集: テキスト実幅 (scrollWidth) で width を確定 (折返し回避) */
+                  /* boxW未指定の既存編集: canvas measureText で描画と同じ幅を算出して width 設定 */
                   if(!ctrlBoxW&&isEditing){
-                    el.style.width="auto";
-                    var need=el.scrollWidth;
-                    el.style.width=Math.max(50,Math.min(maxW,need+8))+"px";
+                    try{
+                      var cnv=document.createElement('canvas');
+                      var mctx=cnv.getContext('2d');
+                      var fsBase=ati.fontSize||15;
+                      var fbStr=ati.fontBold?'bold ':'';
+                      /* 画面描画と同じ fontSize*atiZoom で measure (textarea の style.fontSize と一致) */
+                      mctx.font=fbStr+(fsBase*atiZoom)+"px "+fontFamily;
+                      var rawLines=(ati.text||'').split('\n');
+                      var maxLineW=0;
+                      rawLines.forEach(function(line){
+                        var w=mctx.measureText(line||' ').width;
+                        if(w>maxLineW)maxLineW=w;
+                      });
+                      /* +8 は カーソル + 安全マージン */
+                      var targetW=Math.max(50, Math.min(maxW, maxLineW+8));
+                      el.style.width=targetW+"px";
+                    }catch(er){
+                      /* measureText失敗時は scrollWidth フォールバック (width:autoで測る) */
+                      el.style.width="auto";
+                      var need=el.scrollWidth;
+                      el.style.width=Math.max(50,Math.min(maxW,need+8))+"px";
+                    }
                   }
                   el.style.height="auto";
                   el.style.height=el.scrollHeight+"px";
@@ -5252,6 +5272,8 @@ function ImageAnnotator(props){
             },
             autoFocus:true,
             defaultValue:ati.text||"",
+            /* 2026-04-22: boxW未指定時は wrap="off" で soft wrap を完全無効化 */
+            wrap:ctrlBoxW?"soft":"off",
             rows:1,
             onKeyDown:function(e){
               if(e.key==="Escape"){e.preventDefault();cancelAnalysisText();}
@@ -5275,7 +5297,9 @@ function ImageAnnotator(props){
               /* 2026-04-22: width/fontSize/minHeight を atiZoom 倍 (canvas描画と一致) */
               width:ctrlBoxW?((ctrlBoxW*atiZoom)+"px"):"auto",
               minWidth:"50px",
-              maxWidth:maxW+"px",
+              /* 2026-04-22: boxW未指定時は maxWidth を撤廃 (勝手な折返しを完全防止)
+                 画面外にはみ出す場合は overflow:hidden で切れるがそれは許容 */
+              maxWidth:ctrlBoxW?(maxW+"px"):"none",
               minHeight:(ati.fontSize||15)*atiZoom*1.6+"px",
               background:"transparent",
               border:"none",
@@ -5290,8 +5314,11 @@ function ImageAnnotator(props){
               padding:0,margin:0,
               zIndex:11000,pointerEvents:"auto",
               outline:"none",boxShadow:"none",
+              /* 2026-04-22: boxW未指定時は nowrap で物理的に折返し防止 (改行文字の \n はそのまま改行として扱われる
+                 — textareaは whiteSpace:nowrap でも 明示的な \n は改行されるのでOK) */
               whiteSpace:ctrlBoxW?"pre-wrap":"pre",
-              wordBreak:ctrlBoxW?"break-word":"normal"
+              wordBreak:ctrlBoxW?"break-word":"normal",
+              overflowWrap:ctrlBoxW?"break-word":"normal"
             }
           }),
           /* C9後-fix: 既存編集時のみ 点線枠 + 左右ハンドル を overlay 表示 (幅変更用) */
