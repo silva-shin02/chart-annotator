@@ -1301,6 +1301,9 @@ function DataChart(props){
   var ctrlPanRef=useRef(false);    // Ctrl+drag パン状態
   /* 2026-04-20: トリプルタップ検出用 — [{t:timestamp, x, y}, ...] */
   var tripleTapRef=useRef([]);
+  /* 2026-04-22: 3本指ダブルタップ検出用 — [timestamp, ...]
+     (3本指touchstart が 600ms以内に2回 → 移動(pan)ツール切替) */
+  var threeTapHistRef=useRef([]);
   /* 2026-04-20: 出来高下端固定モード用 refs (pricePx>0 時のみ使用)
      - hiddenCanvasRef: 従来通りの単一canvas描画先 (display:none)
      - priceCanvasRef: 上段 (scrollable 内)、hidden の price 部分を drawImage 転写
@@ -2272,9 +2275,10 @@ function DataChart(props){
       ctrlPanRef.current=true;
       return;
     }
-    /* 2026-04-20: どのツールでも既存textをhitしたらeditor overlay扱い (eraser除外)
+    /* 2026-04-22: text/lasso ツール時のみ既存textをhitしたらeditor overlay扱い
+       line/dotted/arrow/rect/circle/marker/freehand/pan/eraser では通常描画/pan動作を優先
        tap (dragなし) → editor open / drag>=3px → text stroke 移動 */
-    if(drawTool!=='eraser'){
+    if(drawTool==='text'||drawTool==='lasso'){
       var gHit=hitTestStroke(e.clientX,e.clientY);
       if(gHit!=null){
         var gArr=(gHit.side==='ref')?(refStrokes||[]):(strokes||[]);
@@ -2609,6 +2613,29 @@ function DataChart(props){
   // タッチ (iPad/スマホ) - 1本指: 描画、2本指: ピンチズーム＋パン
   function onTouchStart(e){
     if(props.textInputActive)return;
+    /* 2026-04-22: 3本指ダブルタップで移動(pan)ツール切替
+       - 3本指タッチstart が 600ms以内に2回発生したら発火
+       - 同一シーケンス内の連続触りは50ms以内フィルタで除外 */
+    if(e.touches.length===3){
+      var _now=Date.now();
+      var _hist=threeTapHistRef.current;
+      _hist=_hist.filter(function(h){return _now-h<600;});
+      if(!(_hist.length>0&&_now-_hist[_hist.length-1]<50)){
+        _hist.push(_now);
+        threeTapHistRef.current=_hist;
+        if(_hist.length>=2){
+          threeTapHistRef.current=[];
+          if(e.preventDefault)e.preventDefault();
+          if(props.onThreeFingerDoubleTap)props.onThreeFingerDoubleTap();
+          // ピンチ/描画/移動状態を全てキャンセルして即時return
+          drawRef.current={on:false};
+          panStartRef.current=null;
+          moveRef.current=null;
+          pinchRef.current=null;
+          return;
+        }
+      }
+    }
     if(e.touches.length===2){
       // ピンチ開始
       if(e.preventDefault)e.preventDefault();
@@ -3607,15 +3634,18 @@ function drawSelectionHighlight(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,pri
     var PAD=4;
     ctx.strokeRect(x-PAD, y-PAD, mW+PAD*2, tH+PAD*2);
   } else if(s.anchors.length>=2){
-    // bounding box
-    var minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
-    s.anchors.forEach(function(a){
-      var xx=minToX(a.tm), yy=pToY(a.p);
-      if(xx<minX)minX=xx; if(xx>maxX)maxX=xx;
-      if(yy<minY)minY=yy; if(yy>maxY)maxY=yy;
-    });
-    var pad=(tp==='marker'?(s.width||2)*3:4);
-    ctx.strokeRect(minX-pad,minY-pad,(maxX-minX)+pad*2,(maxY-minY)+pad*2);
+    /* 2026-04-22: line/dotted/arrow は枠線不要 (形状が明瞭で冗長) — ハンドル(○)のみ表示 */
+    if(tp!=='line'&&tp!=='dotted'&&tp!=='arrow'){
+      // bounding box
+      var minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+      s.anchors.forEach(function(a){
+        var xx=minToX(a.tm), yy=pToY(a.p);
+        if(xx<minX)minX=xx; if(xx>maxX)maxX=xx;
+        if(yy<minY)minY=yy; if(yy>maxY)maxY=yy;
+      });
+      var pad=(tp==='marker'?(s.width||2)*3:4);
+      ctx.strokeRect(minX-pad,minY-pad,(maxX-minX)+pad*2,(maxY-minY)+pad*2);
+    }
   }
   ctx.setLineDash([]);
 
@@ -4698,6 +4728,10 @@ function ImageAnnotator(props){
                   prevToolBeforeEraserRef.current=tool;
                   switchTool('eraser');
                 }
+              },
+              /* 2026-04-22: 3本指ダブルタップで移動(pan)ツールへ切替 */
+              onThreeFingerDoubleTap:function(){
+                switchTool('pan');
               },
               /* C6: editingTextInfo={side,idx} or null を渡す */
               editingTextIdx:(analysisTextInput&&analysisTextInput.editIdx>=0)
