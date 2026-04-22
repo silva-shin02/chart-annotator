@@ -140,7 +140,7 @@ function getCandleGap(tf){ return tf==='1m'?1:5; }
    フィット倍率 = chartW/縦priceH に応じて自動算出 (初期表示) */
 var Z_BASE_BAR_PX=12;
 var Z_BASE_PRICE_PX=35;
-var Z_MIN=0.50;
+var Z_MIN=0.10;
 var Z_MAX=3.0;
 var Z_FACTOR=1.176;  /* ホイール/ピンチ 1段で約 17.6% */
 var Z_STEP_FINE=1.05;  /* ＋/− ボタン 1回で 5% 刻み */
@@ -2876,80 +2876,8 @@ function DataChart(props){
       style:{display:"block",width:"100%",height:"100%",pointerEvents:"none"}}),
     ce("canvas",{ref:overlayRef,
       style:{position:"absolute",top:0,left:0,width:"100%",height:"100%",pointerEvents:"none"}}),
-    /* 2026-04-21: ズームコントロール (右下) — [−] [スライダー] [＋] [倍率]
-       スライダー step=0.01 で自由に細かく、＋/− は 5% 刻み (Z_STEP_FINE)
-       リセット機能はツールバー側 (「⟳ 全体表示」ボタン) に移譲、ここは純粋にズーム操作のみ */
-    ce("div",{
-      onMouseDown:function(e){e.stopPropagation();},
-      onTouchStart:function(e){e.stopPropagation();},
-      onWheel:function(e){e.stopPropagation();},
-      style:{position:"absolute",right:12,bottom:10,
-        display:"flex",alignItems:"center",gap:4,
-        background:"rgba(26,26,26,0.85)",
-        border:"1px solid #2a2a2a",borderRadius:6,
-        padding:"3px 6px",
-        pointerEvents:"auto",zIndex:3,
-        fontFamily:"inherit",userSelect:"none"}
-    },
-      ce("button",{
-        onClick:function(){
-          var L=layoutRef.current;
-          setZoom(function(z){
-            var newZ=z/Z_STEP_FINE;
-            if(newZ<Z_MIN)newZ=Z_MIN;
-            /* pShift は現範囲に clamp (縮小時の範囲変動対応) */
-            if(L){
-              setPShift(function(ps){return clampPShiftForZoom(ps,newZ,L.priceH,L.dataPmin,L.dataPmax);});
-            }
-            return newZ;
-          });
-        },
-        title:"縮小 (−5%)",
-        style:{width:22,height:22,fontSize:14,fontWeight:700,
-          background:"#2a2a2a",color:"#aaa",
-          border:"1px solid #3a3a3a",borderRadius:4,
-          cursor:"pointer",fontFamily:"inherit",userSelect:"none",
-          display:"flex",alignItems:"center",justifyContent:"center",
-          padding:0,lineHeight:1}
-      },"−"),
-      ce("input",{type:"range",
-        min:Z_MIN,max:Z_MAX,step:0.01,value:zoom||1,
-        onChange:function(e){
-          var v=parseFloat(e.target.value);
-          if(isNaN(v))return;
-          if(v<Z_MIN)v=Z_MIN; if(v>Z_MAX)v=Z_MAX;
-          var L=layoutRef.current;
-          if(L){
-            setPShift(function(ps){return clampPShiftForZoom(ps,v,L.priceH,L.dataPmin,L.dataPmax);});
-          }
-          setZoom(v);
-        },
-        style:{width:120,accentColor:"#a5b4fc",cursor:"pointer"}
-      }),
-      ce("button",{
-        onClick:function(){
-          var L=layoutRef.current;
-          setZoom(function(z){
-            var newZ=z*Z_STEP_FINE;
-            if(newZ>Z_MAX)newZ=Z_MAX;
-            if(L){
-              setPShift(function(ps){return clampPShiftForZoom(ps,newZ,L.priceH,L.dataPmin,L.dataPmax);});
-            }
-            return newZ;
-          });
-        },
-        title:"拡大 (+5%)",
-        style:{width:22,height:22,fontSize:14,fontWeight:700,
-          background:"#2a2a2a",color:"#aaa",
-          border:"1px solid #3a3a3a",borderRadius:4,
-          cursor:"pointer",fontFamily:"inherit",userSelect:"none",
-          display:"flex",alignItems:"center",justifyContent:"center",
-          padding:0,lineHeight:1}
-      },"＋"),
-      ce("span",{style:{fontSize:11,fontWeight:700,color:"#a5b4fc",
-        minWidth:42,textAlign:"right",pointerEvents:"none"}},
-        (zoom||1).toFixed(2)+'×')
-    ),
+    /* 2026-04-22: ズームコントロールはツールバー Row2 (濃さの右) に移植済
+       (IndexedDataChart は zoom を props 経由で受け取り、親側でUIレンダリング) */
     /* 2026-04-21: 横スクロールバー (出来高エリア境目) */
     renderHorizScrollbar(),
     /* 2026-04-21: 縦スクロールバー (価格軸右側) */
@@ -3009,7 +2937,10 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   var padL=40, padR=40, padT=10, padB=22;
   /* 2026-04-21: pricePx の意味変更 — 価格軸ラベル最小間隔px (旧 priceRange 縮減は廃止) */
   var minLabelGapPx=(dim&&typeof dim.pricePx==='number'&&dim.pricePx>0)?dim.pricePx:0;
-  var zoom=(dim&&typeof dim.zoom==='number'&&dim.zoom>0)?dim.zoom:1.0;
+  /* 2026-04-21: サムネイル等 zoom 未指定呼び出し時は自動フィット (Z_MIN clamp 無し)
+     下記 uTotal/priceRange 確定後に実際の算出を行う。この時点では仮の zoom=null を保持 */
+  var zoomSpecified=(dim&&typeof dim.zoom==='number'&&dim.zoom>0);
+  var zoom=zoomSpecified?dim.zoom:1.0;  /* 後段で uTotal 確定後にフィット値へ上書きする可能性あり */
   var volH=Math.max(44,Math.round((H-padT-padB)*0.13));
   var priceH=H-padT-padB-volH-6;
   canvas.width=Math.round(W*dpr);
@@ -3049,6 +2980,20 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   var tmVisStart=540;         // 09:00 の tmVis値
   var tmVisSpan=390-(60-lunchVis);  // 5m=335, 1m=331
   var uTotal=hasRef?(tmVisSpan*2+gapVis):tmVisSpan;
+
+  /* 2026-04-21: zoom 未指定呼び出し時のフィット自動算出 (サムネ等)
+     Z_MIN clamp 無しで、X/Y 両方に収まる最小の zoom を採用 */
+  if(!zoomSpecified && priceRange && priceRange.max>priceRange.min){
+    var _baseStepF=(tf==='5m'?5:1);
+    var chartWF=W-padL-padR;
+    var zX=chartWF*_baseStepF*0.8/(Z_BASE_BAR_PX*uTotal);
+    var pSpanF=priceRange.max-priceRange.min;
+    var zY=priceH*10/(Z_BASE_PRICE_PX*pSpanF);
+    var zAuto=Math.min(zX,zY);
+    if(zAuto<=0)zAuto=1.0;
+    if(zAuto>Z_MAX)zAuto=Z_MAX;
+    zoom=zAuto;
+  }
 
   /* 2026-04-21: 地図モデルズーム — uSpan は zoom から派生
      uSpan = chartW * baseStep * 0.8 / (Z_BASE_BAR_PX * zoom)
@@ -4473,6 +4418,35 @@ function ImageAnnotator(props){
             style:{padding:"2px 7px",borderRadius:5,cursor:"pointer",fontSize:12,fontWeight:700,background:"#2a2a2a",color:"#fff",userSelect:"none"}},"+"),
           ce("span",{style:{fontSize:10,color:"#666",minWidth:28,flexShrink:0}},Math.round(opacity*100)+"%")
         ),
+        /* 2026-04-22: 倍率 (地図モデルズーム) — 濃さの右に配置、スタイル統一 */
+        ce("div",{style:{display:"flex",gap:5,alignItems:"center"}},
+          ce("span",{style:{fontSize:10,color:"#666",flexShrink:0}},"倍率"),
+          ce("span",{onClick:function(){
+            var cur=(analysisZoom!=null)?analysisZoom:1.0;
+            var nz=cur/Z_STEP_FINE;
+            if(nz<Z_MIN)nz=Z_MIN;
+            setAnalysisZoom(Math.round(nz*100)/100);
+          },
+            style:{padding:"2px 7px",borderRadius:5,cursor:"pointer",fontSize:12,fontWeight:700,background:"#2a2a2a",color:"#fff",userSelect:"none"}},"−"),
+          ce("input",{type:"range",min:Z_MIN,max:Z_MAX,step:0.01,
+            value:(analysisZoom!=null)?analysisZoom:1.0,
+            onChange:function(e){
+              var v=parseFloat(e.target.value);
+              if(isNaN(v))return;
+              if(v<Z_MIN)v=Z_MIN; if(v>Z_MAX)v=Z_MAX;
+              setAnalysisZoom(v);
+            },
+            style:{width:IS_TOUCH?60:80,accentColor:"#a5b4fc"}}),
+          ce("span",{onClick:function(){
+            var cur=(analysisZoom!=null)?analysisZoom:1.0;
+            var nz=cur*Z_STEP_FINE;
+            if(nz>Z_MAX)nz=Z_MAX;
+            setAnalysisZoom(Math.round(nz*100)/100);
+          },
+            style:{padding:"2px 7px",borderRadius:5,cursor:"pointer",fontSize:12,fontWeight:700,background:"#2a2a2a",color:"#fff",userSelect:"none"}},"+"),
+          ce("span",{style:{fontSize:10,color:"#a5b4fc",minWidth:36,flexShrink:0,fontWeight:700}},
+            ((analysisZoom!=null)?analysisZoom:1.0).toFixed(2)+"×")
+        ),
         /* text options (tool==='text'時のみ) */
         tool==="text"&&ce(Fragment,null,
           ce("div",{style:{display:"flex",gap:5,alignItems:"center"}},
@@ -4827,11 +4801,12 @@ function ImageAnnotator(props){
           }
         }),
         /* floating undo/redo (分析モード用)
-           2026-04-20: position:fixed化 + zIndex引き上げ (toolbar潜り込み防止) + タッチdrag対応 */
+           2026-04-20: position:fixed化 + zIndex引き上げ (toolbar潜り込み防止) + タッチdrag対応
+           2026-04-22: 横並び + 左にドラッグハンドル、角ばらせる (radius 3px)、PC版40×24に小型化 */
         ce("div",{
           style:Object.assign(
             floatPosAnalysis?{position:"fixed",left:floatPosAnalysis.x,top:floatPosAnalysis.y}:{position:"fixed",top:IS_TOUCH?80:70,right:16},
-            {display:"flex",flexDirection:"column",gap:0,zIndex:10010,pointerEvents:"auto",userSelect:"none",touchAction:"none"}
+            {display:"flex",flexDirection:"row",gap:0,zIndex:10010,pointerEvents:"auto",userSelect:"none",touchAction:"none"}
           )
         },
           ce("div",{
@@ -4876,26 +4851,28 @@ function ImageAnnotator(props){
               document.addEventListener("touchend",up);
               document.addEventListener("touchcancel",up);
             },
-            style:{height:IS_TOUCH?18:14,display:"flex",alignItems:"center",justifyContent:"center",cursor:"grab",
-              background:"rgba(255,255,255,0.7)",borderRadius:"10px 10px 0 0",border:"1px solid rgba(0,0,0,0.1)",
-              borderBottom:"none",letterSpacing:2,fontSize:IS_TOUCH?11:9,color:"rgba(0,0,0,0.35)",backdropFilter:"blur(16px)"}
+            style:{width:IS_TOUCH?18:14,height:IS_TOUCH?36:24,
+              display:"flex",alignItems:"center",justifyContent:"center",cursor:"grab",
+              background:"rgba(255,255,255,0.7)",borderRadius:"3px 0 0 3px",border:"1px solid rgba(0,0,0,0.1)",
+              borderRight:"none",letterSpacing:2,fontSize:IS_TOUCH?11:9,color:"rgba(0,0,0,0.35)",backdropFilter:"blur(16px)",
+              writingMode:"vertical-rl",textOrientation:"upright"}
           },"⋯"),
-          ce("div",{style:{display:"flex",borderRadius:"0 0 10px 10px",overflow:"hidden",
-            border:"1px solid rgba(0,0,0,0.12)",borderTop:"none",
+          ce("div",{style:{display:"flex",borderRadius:"0 3px 3px 0",overflow:"hidden",
+            border:"1px solid rgba(0,0,0,0.12)",borderLeft:"none",
             boxShadow:"0 4px 20px rgba(0,0,0,0.25),0 0 0 0.5px rgba(255,255,255,0.15),inset 0 1px 0 rgba(255,255,255,0.35)",
             backdropFilter:"blur(16px)",background:"rgba(255,255,255,0.82)"}},
             ce("button",{onClick:undo,disabled:!canUndo,
               onMouseDown:function(e){e.stopPropagation();},onTouchStart:function(e){e.stopPropagation();},
-              style:{width:IS_TOUCH?62:52,height:IS_TOUCH?36:30,border:"none",borderRight:"1px solid rgba(0,0,0,0.12)",
+              style:{width:IS_TOUCH?62:40,height:IS_TOUCH?36:24,border:"none",borderRight:"1px solid rgba(0,0,0,0.12)",
                 background:canUndo?"rgba(0,0,0,0.06)":"transparent",color:canUndo?"rgba(0,0,0,0.85)":"rgba(0,0,0,0.2)",
-                fontSize:IS_TOUCH?20:16,cursor:canUndo?"pointer":"default",display:"flex",alignItems:"center",justifyContent:"center",
+                fontSize:IS_TOUCH?20:14,cursor:canUndo?"pointer":"default",display:"flex",alignItems:"center",justifyContent:"center",
                 transition:"background .15s,color .15s"}},
               "↩"),
             ce("button",{onClick:redo,disabled:!canRedo,
               onMouseDown:function(e){e.stopPropagation();},onTouchStart:function(e){e.stopPropagation();},
-              style:{width:IS_TOUCH?62:52,height:IS_TOUCH?36:30,border:"none",
+              style:{width:IS_TOUCH?62:40,height:IS_TOUCH?36:24,border:"none",
                 background:canRedo?"rgba(0,0,0,0.06)":"transparent",color:canRedo?"rgba(0,0,0,0.85)":"rgba(0,0,0,0.2)",
-                fontSize:IS_TOUCH?20:16,cursor:canRedo?"pointer":"default",display:"flex",alignItems:"center",justifyContent:"center",
+                fontSize:IS_TOUCH?20:14,cursor:canRedo?"pointer":"default",display:"flex",alignItems:"center",justifyContent:"center",
                 transition:"background .15s,color .15s"}},
               "↪")
           )
