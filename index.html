@@ -1480,7 +1480,8 @@ function DataChart(props){
     var H=rect?rect.height:(dim.h||720);
     var padL=40, padR=40, padT=10, padB=22;
     var chartW=W-padL-padR;
-    var volH=Math.max(44,Math.round((H-padT-padB)*0.13));
+    /* 2026-04-22: 出来高エリア高さを 13%→18% に拡大 (ローソク足エリアと同期、3018行と同値) */
+    var volH=Math.max(44,Math.round((H-padT-padB)*0.18));
     var priceH=H-padT-padB-volH-6;
     if(chartW<50||priceH<50)return 1.0;
     var baseStep=(tf==='5m'?5:1);
@@ -3015,7 +3016,8 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   var isThumbnail=!!(dim&&dim.thumbnail);
   /* 地図モデル zoom (通常モード用、サムネモードでは未使用) */
   var zoom=(dim&&typeof dim.zoom==='number'&&dim.zoom>0)?dim.zoom:1.0;
-  var volH=Math.max(44,Math.round((H-padT-padB)*0.13));
+  /* 2026-04-22: 出来高エリア高さを 13%→18% に拡大 (getFitZoom側1484行と同値) */
+  var volH=Math.max(44,Math.round((H-padT-padB)*0.18));
   var priceH=H-padT-padB-volH-6;
   canvas.width=Math.round(W*dpr);
   canvas.height=Math.round(H*dpr);
@@ -3254,7 +3256,9 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
       var col=up?COL_UP:COL_DN;
       ctx.fillStyle=col;
       var vy=vToY(b.v);
-      ctx.fillRect(cx-barW/2,vy,barW,volBot-vy);
+      /* 2026-04-22: ローソク本体と左右端ピクセルを揃えるため整数丸め */
+      var _lxV=Math.round(cx-barW/2), _rxV=Math.round(cx+barW/2);
+      ctx.fillRect(_lxV, vy, _rxV-_lxV, volBot-vy);
     });
     /* ローソク本体+ヒゲ (price エリア内のみに制限 — clip) */
     ctx.save();
@@ -3275,7 +3279,9 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
         var dojiExt=1;
         ctx.fillRect(cx-barW/2-dojiExt, y1-1, barW+dojiExt*2, 2);
       }else{
-        ctx.fillRect(cx-barW/2,yTop,barW,bh);
+        /* 2026-04-22: 出来高バーと左右端ピクセルを揃えるため整数丸め */
+        var _lxB=Math.round(cx-barW/2), _rxB=Math.round(cx+barW/2);
+        ctx.fillRect(_lxB, yTop, _rxB-_lxB, bh);
       }
     });
     ctx.restore();
@@ -3895,6 +3901,8 @@ function ImageAnnotator(props){
   var analysisFloatDragRef=useRef(null);              // 分析モード floating undo/redo のドラッグ
   /* 2026-04-20: トリプルタップで消しゴム⇄前ツール切替用 */
   var prevToolBeforeEraserRef=useRef(null);
+  /* 2026-04-22: 三本指ダブルタップで pan ⇄ 前ツール切替用 */
+  var prevToolBeforePanRef=useRef(null);
   var analysisTextareaRef=useRef(null);               // 分析モード text 入力 textarea
   /* 2026-04-22: onInput/改行時に overlay/両ハンドル/「…」ボタンを textarea に追従させるための refs */
   var atiOverlayRef=useRef(null);
@@ -4429,7 +4437,7 @@ function ImageAnnotator(props){
         analysisData && ce("button",{
           onClick:function(){setHoriz(function(h2){return !h2;});},
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:horiz?"#D4AC0D":"#2a2a2a",color:horiz?"#1a1a1a":"#aaa"})
-        },"⇺水平"),
+        },"⇺水平・垂直"),
         /* 分析モード固有: 十字 / 1m・5m / 別JSON (analysisData 読込済みの時のみ) */
         analysisData && ce("button",{
           onClick:function(){setShowCrosshair(!showCrosshair);},
@@ -4437,7 +4445,7 @@ function ImageAnnotator(props){
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",
             background:showCrosshair?"#4a9de3":"#2a2a2a",
             color:showCrosshair?"#fff":"#aaa"})
-        },"✛ 十字"),
+        },"✛ 十字線"),
         analysisData && ce("div",{style:{display:"flex",gap:2,flexShrink:0}},
           ['1m','5m'].map(function(t){
             return ce("button",{key:t,onClick:function(){setAnalysisTf(t);},
@@ -4729,9 +4737,17 @@ function ImageAnnotator(props){
                   switchTool('eraser');
                 }
               },
-              /* 2026-04-22: 3本指ダブルタップで移動(pan)ツールへ切替 */
+              /* 2026-04-22: 3本指ダブルタップで pan ⇄ 前ツール切替
+                 - pan以外 → pan (現ツールを記憶)
+                 - pan中 → 前ツールに戻す (未記録なら変化なし) */
               onThreeFingerDoubleTap:function(){
-                switchTool('pan');
+                if(tool==='pan'){
+                  var prev=prevToolBeforePanRef.current;
+                  if(prev)switchTool(prev);
+                } else {
+                  prevToolBeforePanRef.current=tool;
+                  switchTool('pan');
+                }
               },
               /* C6: editingTextInfo={side,idx} or null を渡す */
               editingTextIdx:(analysisTextInput&&analysisTextInput.editIdx>=0)
