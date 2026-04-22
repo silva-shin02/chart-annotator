@@ -3866,8 +3866,39 @@ function ImageAnnotator(props){
   /* 2026-04-20: トリプルタップで消しゴム⇄前ツール切替用 */
   var prevToolBeforeEraserRef=useRef(null);
   var analysisTextareaRef=useRef(null);               // 分析モード text 入力 textarea
+  /* 2026-04-22: onInput/改行時に overlay/両ハンドル/「…」ボタンを textarea に追従させるための refs */
+  var atiOverlayRef=useRef(null);
+  var atiHandleMlRef=useRef(null);
+  var atiHandleMrRef=useRef(null);
+  var atiMoveHandleRef=useRef(null);
   /* 2026-04-20: DataChart内のpxToTimePrice/anchorToScreenを親から呼ぶためのAPI ref */
   var chartAPIRefAnalysis=useRef(null);
+  /* 2026-04-22: textarea のサイズ/位置変更時に overlay/両ハンドル/「…」ボタンを追従させる。
+     各要素の ref callback は初回マウント時しか発火しないので、onInput 等で明示的に呼ぶ必要がある。 */
+  function syncAtiOverlays(){
+    var ta=analysisTextareaRef.current; if(!ta)return;
+    var tr=ta.getBoundingClientRect();
+    var ov=atiOverlayRef.current;
+    if(ov){
+      ov.style.left=tr.left+"px"; ov.style.top=tr.top+"px";
+      ov.style.width=tr.width+"px"; ov.style.height=tr.height+"px";
+    }
+    var hl=atiHandleMlRef.current;
+    if(hl){
+      hl.style.left=(tr.left-7)+"px";
+      hl.style.top=(tr.top+tr.height/2-7)+"px";
+    }
+    var hr=atiHandleMrRef.current;
+    if(hr){
+      hr.style.left=(tr.right-7)+"px";
+      hr.style.top=(tr.top+tr.height/2-7)+"px";
+    }
+    var mv=atiMoveHandleRef.current;
+    if(mv){
+      mv.style.left=(tr.left+tr.width/2-16)+"px";
+      mv.style.top=(tr.bottom+6)+"px";
+    }
+  }
   useEffect(function(){toolRef.current=tool;},[tool]);
   useEffect(function(){analysisTextInputRef.current=analysisTextInput;},[analysisTextInput]);
   useEffect(function(){analysisTfRef.current=analysisTf;},[analysisTf]);
@@ -5290,6 +5321,8 @@ function ImageAnnotator(props){
                 var need=el.scrollWidth;
                 el.style.width=Math.max(50,Math.min(maxW,need+8))+"px";
               }
+              /* 2026-04-22: textareaサイズ変更後に overlay/両ハンドル/「…」ボタンを追従 */
+              syncAtiOverlays();
             },
             style:{
               position:"fixed",
@@ -5324,6 +5357,7 @@ function ImageAnnotator(props){
           /* C9後-fix: 既存編集時のみ 点線枠 + 左右ハンドル を overlay 表示 (幅変更用) */
           isEditing&&ce("div",{
             ref:function(el){
+              atiOverlayRef.current=el;
               if(!el)return;
               /* textareaの現在サイズに追従 (rAF で次tickに) */
               requestAnimationFrame(function(){
@@ -5346,6 +5380,7 @@ function ImageAnnotator(props){
             onMouseDown:function(e){startAtiBoxResize("ml",e);},
             onTouchStart:function(e){startAtiBoxResize("ml",e);},
             ref:function(el){
+              atiHandleMlRef.current=el;
               if(!el)return;
               requestAnimationFrame(function(){
                 var ta=analysisTextareaRef.current;
@@ -5364,6 +5399,7 @@ function ImageAnnotator(props){
             onMouseDown:function(e){startAtiBoxResize("mr",e);},
             onTouchStart:function(e){startAtiBoxResize("mr",e);},
             ref:function(el){
+              atiHandleMrRef.current=el;
               if(!el)return;
               requestAnimationFrame(function(){
                 var ta=analysisTextareaRef.current;
@@ -5378,18 +5414,20 @@ function ImageAnnotator(props){
               zIndex:11001,pointerEvents:"auto",boxShadow:"0 1px 3px rgba(0,0,0,.5)"}
           }),
           /* 2026-04-20: 上部中央の「…」移動ハンドル (既存編集時のみ)
-             タップ後ドラッグで textarea 全体 (stroke位置含む) を自由移動 */
+             タップ後ドラッグで textarea 全体 (stroke位置含む) を自由移動
+             2026-04-22: 画面上部の書き込み編集バーと重なって隠れるので textarea の下に移動 */
           isEditing&&ce("div",{
             onMouseDown:function(e){startAtiMove(e);},
             onTouchStart:function(e){startAtiMove(e);},
             ref:function(el){
+              atiMoveHandleRef.current=el;
               if(!el)return;
               requestAnimationFrame(function(){
                 var ta=analysisTextareaRef.current;
                 if(!ta)return;
                 var tr=ta.getBoundingClientRect();
                 el.style.left=(tr.left+tr.width/2-16)+"px";
-                el.style.top=(tr.top-26)+"px";
+                el.style.top=(tr.bottom+6)+"px";
               });
             },
             style:{position:"fixed",width:32,height:20,borderRadius:10,
