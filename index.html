@@ -2067,7 +2067,9 @@ function DataChart(props){
          gap領域は null。hit無しも null。 */
 
   /* 2026-04-20: stroke anchor位置 → screen座標変換ヘルパー
-     テキスト編集モード起動時に、クリック位置ではなくテキスト実位置にtextareaを配置する用途 */
+     テキスト編集モード起動時に、クリック位置ではなくテキスト実位置にtextareaを配置する用途
+     2026-04-22: dprRef は撤去済 (3837行参照) → 削除。canvas CSS size = container size = 100% なので
+                 描画座標 (CSS px) がそのまま rect 内の相対px になる (sw=sh=1 相当) */
   function anchorToScreen(stk, stkSide){
     try{
       if(!stk||!stk.anchors||!stk.anchors[0])return null;
@@ -2075,9 +2077,6 @@ function DataChart(props){
       if(!lay||!cvs)return null;
       var rect=cvs.getBoundingClientRect();
       if(!rect||!rect.width)return null;
-      var dpr=dprRef.current||1;
-      var sw=rect.width/(cvs.width/dpr);
-      var sh=rect.height/(cvs.height/dpr);
       var a=stk.anchors[0];
       var cvsX=minToXWithSide(a.tm, stkSide||'cur');
       /* 2026-04-22: 地図モデル pToY 式 (dpmax/pxPerYen) を使用 — 旧式 (pmin/pmax線形) はサムネ以外では誤差が出る */
@@ -2090,8 +2089,8 @@ function DataChart(props){
         cvsY=lay.priceTop+(1-(a.p-lay.pmin)/den)*lay.priceH;
       }
       return {
-        screenX: rect.left+cvsX*sw,
-        screenY: rect.top+cvsY*sh,
+        screenX: rect.left+cvsX,
+        screenY: rect.top+cvsY,
         tm: a.tm, p: a.p
       };
     }catch(err){return null;}
