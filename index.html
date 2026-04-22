@@ -4365,20 +4365,6 @@ function ImageAnnotator(props){
           title:"他のチャートに変更",
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#2a2a2a",color:"#aaa"})
         },"↺変更"),
-        analysisData && ce("button",{
-          onClick:function(){window.caConfirm('別のJSONを読み込む? 現在のデータは破棄されます',function(){var empty={'1m':[],'5m':[]};setAnalysisData(null);setAnalysisStrokes(empty);analysisHistRef.current={'1m':[{cur:[],ref:[]}],'5m':[{cur:[],ref:[]}]};analysisFutRef.current={'1m':[],'5m':[]};setCanUndo(false);setCanRedo(false);});},
-          style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#2a2a2a",color:"#aaa"})
-        },"🔄 別のJSON"),
-        /* 2026-04-21: ⟳ 全体表示 — zoom=null でフィット倍率再算出、uS=0、pShift=0 */
-        analysisData && ce("button",{
-          onClick:function(){
-            setAnalysisZoom(null);
-            setAnalysisView({uS:0,uE:getUTotalIA(analysisTf,!!refAnalysis)});
-            setAnalysisPShift(0);
-          },
-          title:"1日分の全データを画面に収めるフィット倍率に戻す",
-          style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#2a2a2a",color:"#aaa"})
-        },"⟳ 全体表示"),
         /* spacer */
         ce("div",{style:{flex:1}}),
         /* 手動保存 status badge */
@@ -4466,7 +4452,17 @@ function ImageAnnotator(props){
           },
             style:{padding:"2px 7px",borderRadius:5,cursor:"pointer",fontSize:12,fontWeight:700,background:"#2a2a2a",color:"#fff",userSelect:"none"}},"+"),
           ce("span",{style:{fontSize:10,color:"#a5b4fc",minWidth:36,flexShrink:0,fontWeight:700}},
-            ((analysisZoom!=null)?analysisZoom:1.0).toFixed(2)+"×")
+            ((analysisZoom!=null)?analysisZoom:1.0).toFixed(2)+"×"),
+          /* 2026-04-22: ⟳ 全体表示 — 倍率コントロールの右側に配置 (Row1 から移動) */
+          ce("button",{
+            onClick:function(){
+              setAnalysisZoom(null);
+              setAnalysisView({uS:0,uE:getUTotalIA(analysisTf,!!refAnalysis)});
+              setAnalysisPShift(0);
+            },
+            title:"1日分の全データを画面に収めるフィット倍率に戻す",
+            style:Object.assign({},TS,{fontSize:11,padding:"4px 8px",background:"#2a2a2a",color:"#aaa",flexShrink:0,marginLeft:4})
+          },"⟳ 全体表示")
         ),
         /* text options (tool==='text'時のみ) */
         tool==="text"&&ce(Fragment,null,
@@ -4872,7 +4868,7 @@ function ImageAnnotator(props){
               document.addEventListener("touchend",up);
               document.addEventListener("touchcancel",up);
             },
-            style:{width:IS_TOUCH?18:14,height:IS_TOUCH?36:24,
+            style:{width:IS_TOUCH?18:14,height:IS_TOUCH?36:20,
               display:"flex",alignItems:"center",justifyContent:"center",cursor:"grab",
               background:"rgba(255,255,255,0.7)",borderRadius:"3px 0 0 3px",border:"1px solid rgba(0,0,0,0.1)",
               borderRight:"none",letterSpacing:2,fontSize:IS_TOUCH?11:9,color:"rgba(0,0,0,0.35)",backdropFilter:"blur(16px)",
@@ -4884,16 +4880,16 @@ function ImageAnnotator(props){
             backdropFilter:"blur(16px)",background:"rgba(255,255,255,0.82)"}},
             ce("button",{onClick:undo,disabled:!canUndo,
               onMouseDown:function(e){e.stopPropagation();},onTouchStart:function(e){e.stopPropagation();},
-              style:{width:IS_TOUCH?62:40,height:IS_TOUCH?36:24,border:"none",borderRight:"1px solid rgba(0,0,0,0.12)",
+              style:{width:IS_TOUCH?62:34,height:IS_TOUCH?36:20,border:"none",borderRight:"1px solid rgba(0,0,0,0.12)",
                 background:canUndo?"rgba(0,0,0,0.06)":"transparent",color:canUndo?"rgba(0,0,0,0.85)":"rgba(0,0,0,0.2)",
-                fontSize:IS_TOUCH?20:14,cursor:canUndo?"pointer":"default",display:"flex",alignItems:"center",justifyContent:"center",
+                fontSize:IS_TOUCH?20:13,cursor:canUndo?"pointer":"default",display:"flex",alignItems:"center",justifyContent:"center",
                 transition:"background .15s,color .15s"}},
               "↩"),
             ce("button",{onClick:redo,disabled:!canRedo,
               onMouseDown:function(e){e.stopPropagation();},onTouchStart:function(e){e.stopPropagation();},
-              style:{width:IS_TOUCH?62:40,height:IS_TOUCH?36:24,border:"none",
+              style:{width:IS_TOUCH?62:34,height:IS_TOUCH?36:20,border:"none",
                 background:canRedo?"rgba(0,0,0,0.06)":"transparent",color:canRedo?"rgba(0,0,0,0.85)":"rgba(0,0,0,0.2)",
-                fontSize:IS_TOUCH?20:14,cursor:canRedo?"pointer":"default",display:"flex",alignItems:"center",justifyContent:"center",
+                fontSize:IS_TOUCH?20:13,cursor:canRedo?"pointer":"default",display:"flex",alignItems:"center",justifyContent:"center",
                 transition:"background .15s,color .15s"}},
               "↪")
           )
