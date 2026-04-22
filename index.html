@@ -1610,6 +1610,9 @@ function DataChart(props){
     ctx.clearRect(0,0,W,H);
 
     var L=layoutRef.current;
+    /* 2026-04-22: プレビュー描画でも書込みオブジェクトの zoom 連動を適用
+       (drawDataChart は本体canvasに _strokeZoom を設定しているが、overlayは別canvasなので明示設定が必要) */
+    ctx._strokeZoom=(L&&typeof L.zoom==='number'&&L.zoom>0)?L.zoom:1.0;
 
     /* 描画中プレビュー (最優先で描く — 背面) */
     if(L&&drawRef.current&&drawRef.current.on){
@@ -1617,7 +1620,13 @@ function DataChart(props){
       /* C5+: drawRef.side に応じた minToX を使う (side未指定は 'cur') */
       var dSide=d.side||'cur';
       function minToXloc(m){return minToXWithSide(m,dSide);}
-      function pToYloc(p){return L.priceTop+(1-(p-L.pmin)/(L.pmax-L.pmin))*L.priceH;}
+      /* 2026-04-22: 地図モデル pToY 式 (dpmax/pxPerYen) */
+      function pToYloc(p){
+        if(typeof L.dpmax==='number'&&typeof L.pxPerYen==='number'&&L.pxPerYen>0){
+          return L.priceTop+(L.dpmax-p)*L.pxPerYen;
+        }
+        return L.priceTop+(1-(p-L.pmin)/(L.pmax-L.pmin))*L.priceH;
+      }
       if(d.freehand&&d.pts&&d.pts.length){
         // freehand: 多点プレビュー
         var preview={type:'freehand',anchors:d.pts,
@@ -1640,7 +1649,13 @@ function DataChart(props){
       if(s){
         var mSide=m.side||s.side||'cur';
         function minToXloc2(mm){return minToXWithSide(mm,mSide);}
-        function pToYloc2(pp){return L.priceTop+(1-(pp-L.pmin)/(L.pmax-L.pmin))*L.priceH;}
+        /* 2026-04-22: 地図モデル pToY 式 */
+        function pToYloc2(pp){
+          if(typeof L.dpmax==='number'&&typeof L.pxPerYen==='number'&&L.pxPerYen>0){
+            return L.priceTop+(L.dpmax-pp)*L.pxPerYen;
+          }
+          return L.priceTop+(1-(pp-L.pmin)/(L.pmax-L.pmin))*L.priceH;
+        }
         var shifted;
         if(m.handleId){
           shifted=applyHandleTransform(s,m.handleId,m.dtm,m.dp);
@@ -1758,6 +1773,8 @@ function DataChart(props){
     var vctx=vov?vov.getContext('2d'):null;
     if(pctx){pctx.setTransform(dpr,0,0,dpr,0,0);pctx.clearRect(0,0,W,boundary);}
     if(vctx){vctx.setTransform(dpr,0,0,dpr,0,0);vctx.clearRect(0,0,W,volAreaH);}
+    /* 2026-04-22: pctx にも _strokeZoom を適用 (書込オブジェクト zoom 連動) */
+    if(pctx)pctx._strokeZoom=(L&&typeof L.zoom==='number'&&L.zoom>0)?L.zoom:1.0;
 
     /* ── preview / 移動プレビュー: priceOverlay にのみ描画 (Y は price 座標系そのまま) ── */
     if(pctx){
@@ -1766,7 +1783,13 @@ function DataChart(props){
         var dSide=d.side||'cur';
         (function(){
           function minToXloc(m){return minToXWithSide(m,dSide);}
-          function pToYloc(p){return L.priceTop+(1-(p-L.pmin)/(L.pmax-L.pmin))*L.priceH;}
+          /* 2026-04-22: 地図モデル pToY 式 */
+          function pToYloc(p){
+            if(typeof L.dpmax==='number'&&typeof L.pxPerYen==='number'&&L.pxPerYen>0){
+              return L.priceTop+(L.dpmax-p)*L.pxPerYen;
+            }
+            return L.priceTop+(1-(p-L.pmin)/(L.pmax-L.pmin))*L.priceH;
+          }
           if(d.freehand&&d.pts&&d.pts.length){
             var preview={type:'freehand',anchors:d.pts,
               color:drawColor,width:drawWidth,opacity:drawOpacity};
@@ -1787,7 +1810,13 @@ function DataChart(props){
           (function(){
             var mSide=m.side||sm.side||'cur';
             function minToXloc2(mm){return minToXWithSide(mm,mSide);}
-            function pToYloc2(pp){return L.priceTop+(1-(pp-L.pmin)/(L.pmax-L.pmin))*L.priceH;}
+            /* 2026-04-22: 地図モデル pToY 式 */
+            function pToYloc2(pp){
+              if(typeof L.dpmax==='number'&&typeof L.pxPerYen==='number'&&L.pxPerYen>0){
+                return L.priceTop+(L.dpmax-pp)*L.pxPerYen;
+              }
+              return L.priceTop+(1-(pp-L.pmin)/(L.pmax-L.pmin))*L.priceH;
+            }
             var shifted=Object.assign({},sm,{
               anchors:sm.anchors.map(function(a){return {tm:a.tm+m.dtm, p:a.p+m.dp};})
             });
