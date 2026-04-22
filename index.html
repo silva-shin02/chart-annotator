@@ -2170,12 +2170,18 @@ function DataChart(props){
         }
         if(minD<=TOL)return {side:clickSide,idx:i};
       } else if(tp==='text'){
+        /* 2026-04-22: 地図モデルズーム連動 — 描画時の fontSize/boxW は zoom 倍されるので、
+           hitTest bbox も zoom 倍にして画面上の実描画サイズと一致させる */
+        var hitZoom=(L&&typeof L.zoom==='number'&&L.zoom>0)?L.zoom:1.0;
         var a=s.anchors[0];
         var tx=minToXloc(a.tm), ty=pToYloc(a.p);
-        var fs=s.fontSize||15;
+        var fsRaw=s.fontSize||15;
+        var fs=fsRaw*hitZoom;  /* 画面上の実フォントサイズ */
         var fb=s.fontBold?'bold ':'';
         var rawLines=(s.text||'').split('\n');
-        /* 2026-04-20: boxW指定時は wordBreak wrap (描画と一致させる) */
+        /* 2026-04-20: boxW指定時は wordBreak wrap (描画と一致させる)
+           2026-04-22: boxW も zoom 倍 (描画側と同じ) */
+        var hitBoxW=(s.boxW&&s.boxW>0)?s.boxW*hitZoom:0;
         var displayLines=[];
         var cnv=canvasRef.current;
         var mctx=null;
@@ -2184,12 +2190,12 @@ function DataChart(props){
           mctx.save();
           mctx.font=fb+fs+"px -apple-system,'Helvetica Neue',sans-serif";
         }
-        if(s.boxW&&s.boxW>0&&mctx){
+        if(hitBoxW>0&&mctx){
           rawLines.forEach(function(para){
             var cur='';
             for(var ci=0;ci<para.length;ci++){
               var test=cur+para[ci];
-              if(mctx.measureText(test).width>s.boxW&&cur.length>0){displayLines.push(cur);cur=para[ci];}
+              if(mctx.measureText(test).width>hitBoxW&&cur.length>0){displayLines.push(cur);cur=para[ci];}
               else{cur=test;}
             }
             displayLines.push(cur);
@@ -2209,7 +2215,7 @@ function DataChart(props){
           displayLines.forEach(function(l){if(l.length*fs*0.6>mW)mW=l.length*fs*0.6;});
         }
         /* boxWが設定されていればそれを優先 (折返し後の実描画幅) */
-        if(s.boxW&&s.boxW>mW)mW=s.boxW;
+        if(hitBoxW>0&&hitBoxW>mW)mW=hitBoxW;
         var tH=displayLines.length*fs*1.3;
         var PAD=6;  // 当たり判定パディング (元は4、タッチ操作にも余裕を持たせる)
         if(cx>=tx-PAD&&cx<=tx+mW+PAD&&cy>=ty-PAD&&cy<=ty+tH+PAD)return {side:clickSide,idx:i};
