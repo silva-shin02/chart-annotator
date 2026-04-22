@@ -5507,6 +5507,11 @@ function caDeleteData(id){
 })();
 function caLoadTrash(){try{var s=localStorage.getItem(CA_TRASH_KEY);return s?JSON.parse(s):[];}catch(e){return[];}}
 function caSaveTrash(t){try{localStorage.setItem(CA_TRASH_KEY,JSON.stringify(t));}catch(e){}}
+/* 2026-04-22: 削除銘柄 (deleted tickers) 管理 — ゴミ箱内の「削除した銘柄」欄用
+   形式: [{name, deletedAt}, ...] — 同名の重複は無し (addTicker直前で復元される) */
+var CA_DEL_TICKERS_KEY='ca_deleted_tickers_v1';
+function caLoadDelTickers(){try{var s=localStorage.getItem(CA_DEL_TICKERS_KEY);return s?JSON.parse(s):[];}catch(e){return[];}}
+function caSaveDelTickers(t){try{localStorage.setItem(CA_DEL_TICKERS_KEY,JSON.stringify(t));}catch(e){}}
 function caGenId(){return Date.now().toString(36)+Math.random().toString(36).slice(2,6);}
 function caGenThumb(canvasEl){
   var W=Math.min(canvasEl.width,800),ratio=W/canvasEl.width,H=Math.round(canvasEl.height*ratio);
@@ -5669,6 +5674,9 @@ function DraftLibrary(props){
   var s6=useState(null);            var dragOver=s6[0],setDragOver=s6[1];
   var s7=useState(false);           var showTrash=s7[0],setShowTrash=s7[1];
   var s8=useState(caLoadTrash);     var trash=s8[0],setTrash=s8[1];
+  /* 2026-04-22: 削除銘柄 state + ゴミ箱内タブ state (charts=チャート別 / tickers=削除した銘柄) */
+  var sDT=useState(caLoadDelTickers); var delTickers=sDT[0],setDelTickers=sDT[1];
+  var sTT=useState('charts');       var trashTab=sTT[0],setTrashTab=sTT[1];
   var CA_SORT_KEY='ca_sort_mode_v1';
   var SORT_MODES=[
     {id:'name_desc', label:'名前 ↓'},
@@ -6029,14 +6037,19 @@ function DraftLibrary(props){
   function addTicker(){
     var n=newName.trim(); if(!n||tickers.includes(n))return;
     var nt=tickers.concat([n]);setTickers(nt);caSaveTickers(nt);fbSyncTickers(nt);
+    /* 2026-04-22: 同名が削除銘柄に存在すれば除去 (復元と同等) */
+    var dt=caLoadDelTickers().filter(function(x){return x.name!==n;});
+    caSaveDelTickers(dt);setDelTickers(dt);
     setNewName('');setAdding(false);setSelTicker(n);
   }
   function deleteTicker(t){
     window.caConfirm('"'+t+'"を削除しますか？（チャートはゴミ箱に移動されます）',function(){
       var toDelete=meta.filter(function(m){return m.ticker===t;});
+      /* 2026-04-22: trashMeta に data も同梱 (ローカルゴミ箱からの復元で復活させるため)
+         ※ caLoadData は同期版 (mem only)。IDB からは別途 caLoadDataAsync で取得して後追い同梱も検討 */
       toDelete.forEach(function(m){
         var data=caLoadData(m.id);
-        var trashMeta={id:m.id,ticker:m.ticker,name:m.name,savedAt:m.savedAt,thumb:m.thumb,deletedAt:Date.now()};
+        var trashMeta={id:m.id,ticker:m.ticker,name:m.name,savedAt:m.savedAt,thumb:m.thumb,deletedAt:Date.now(),data:data||null};
         var nt2=caLoadTrash().filter(function(x){return x.id!==m.id;});
         nt2.push(trashMeta);caSaveTrash(nt2);setTrash(nt2);
         caDeleteData(m.id);fbDeleteDraft(m.id);fbMoveToTrash(m.id,trashMeta,data);
@@ -6045,6 +6058,10 @@ function DraftLibrary(props){
       setMeta(nm);caSaveMeta(nm);
       var nt=tickers.filter(function(x){return x!==t;});
       setTickers(nt);caSaveTickers(nt);fbSyncTickers(nt);
+      /* 2026-04-22: 削除銘柄リストに追加 (既存同名は更新) */
+      var dt=caLoadDelTickers().filter(function(x){return x.name!==t;});
+      dt.push({name:t,deletedAt:Date.now()});
+      caSaveDelTickers(dt);setDelTickers(dt);
       if(selTicker===t)setSelTicker(null);
     });
   }
@@ -6054,7 +6071,8 @@ function DraftLibrary(props){
     var mi=meta.find(function(m){return m.id===id;});
     if(!mi)return;
     var data=caLoadData(id);
-    var trashMeta={id:id,ticker:mi.ticker,name:mi.name,savedAt:mi.savedAt,thumb:mi.thumb,deletedAt:Date.now()};
+    /* 2026-04-22: trashMeta に data も同梱 */
+    var trashMeta={id:id,ticker:mi.ticker,name:mi.name,savedAt:mi.savedAt,thumb:mi.thumb,deletedAt:Date.now(),data:data||null};
     var nt=caLoadTrash().filter(function(x){return x.id!==id;});
     nt.push(trashMeta);caSaveTrash(nt);setTrash(nt);
     caDeleteData(id);fbDeleteDraft(id);fbMoveToTrash(id,trashMeta,data);
@@ -6071,6 +6089,12 @@ function DraftLibrary(props){
     fbDeleteFromTrash(id);
     var nt=caLoadTrash().filter(function(m){return m.id!==id;});
     caSaveTrash(nt);setTrash(nt);
+    /* 2026-04-22: ticker が現在 tickers に無ければ自動追加 (削除銘柄リストからも除去) */
+    if(ti.ticker&&!tickers.includes(ti.ticker)){
+      var nt2=tickers.concat([ti.ticker]);setTickers(nt2);caSaveTickers(nt2);fbSyncTickers(nt2);
+      var dt=caLoadDelTickers().filter(function(x){return x.name!==ti.ticker;});
+      caSaveDelTickers(dt);setDelTickers(dt);
+    }
   }
   function permanentDelete(id){
     window.caConfirm('完全に削除しますか？この操作は元に戻せません',function(){
@@ -6081,12 +6105,63 @@ function DraftLibrary(props){
     });
   }
   function emptyTrash(){
-    window.caConfirm('ゴミ箱を空にしますか？この操作は元に戻せません',function(){
+    window.caConfirm('ゴミ箱の中の全データを完全に削除しますか？\n(削除銘柄リストも全て削除されます)\nこの操作は元に戻せません',function(){
       trash.forEach(function(m){
         caDeleteData(m.id);
         fbDeleteFromTrash(m.id);
       });
       caSaveTrash([]);setTrash([]);
+      /* 2026-04-22: 削除銘柄リストも全削除 */
+      caSaveDelTickers([]);setDelTickers([]);
+    });
+  }
+  /* 2026-04-22: 銘柄別にゴミ箱を空にする */
+  function emptyTrashForTicker(t){
+    window.caConfirm('"'+t+'" のゴミ箱内チャートを全て完全削除しますか？\nこの操作は元に戻せません',function(){
+      var target=trash.filter(function(m){return m.ticker===t;});
+      target.forEach(function(m){
+        caDeleteData(m.id);
+        fbDeleteFromTrash(m.id);
+      });
+      var nt=trash.filter(function(m){return m.ticker!==t;});
+      caSaveTrash(nt);setTrash(nt);
+    });
+  }
+  /* 2026-04-22: 削除銘柄の復元 (銘柄を tickers に戻す + その銘柄のゴミ箱内チャート全復元) */
+  function restoreDeletedTicker(name){
+    /* ticker を tickers に戻す */
+    if(!tickers.includes(name)){
+      var nt=tickers.concat([name]);setTickers(nt);caSaveTickers(nt);fbSyncTickers(nt);
+    }
+    /* 削除銘柄リストから除去 */
+    var dt=caLoadDelTickers().filter(function(x){return x.name!==name;});
+    caSaveDelTickers(dt);setDelTickers(dt);
+    /* その銘柄のゴミ箱内チャートを一括復元 */
+    var target=trash.filter(function(m){return m.ticker===name;});
+    target.forEach(function(ti){
+      var mi={id:ti.id,ticker:ti.ticker,name:ti.name,savedAt:Date.now(),thumb:ti.thumb,analysisDate:ti.analysisDate||''};
+      if(ti.data)caSaveData(ti.id,ti.data);
+      fbSaveDraft(ti.id,mi,ti.data||null);
+      fbDeleteFromTrash(ti.id);
+    });
+    /* meta と trash を一括更新 (forEach 中の setMeta 競合回避) */
+    if(target.length>0){
+      var newMeta=caLoadMeta().slice();
+      target.forEach(function(ti){
+        newMeta=newMeta.filter(function(m){return m.id!==ti.id;});
+        newMeta.push({id:ti.id,ticker:ti.ticker,name:ti.name,savedAt:Date.now(),thumb:ti.thumb,analysisDate:ti.analysisDate||''});
+      });
+      caSaveMeta(newMeta);setMeta(newMeta);
+      var newTrash=trash.filter(function(m){return m.ticker!==name;});
+      caSaveTrash(newTrash);setTrash(newTrash);
+    }
+    window.caToast('"'+name+'" を復元しました ('+target.length+' 件のチャート復元)','success');
+  }
+  /* 2026-04-22: 削除銘柄の完全削除 (銘柄名のみ削除、ゴミ箱内チャートは残る) */
+  function permanentDeleteTicker(name){
+    window.caConfirm('削除銘柄 "'+name+'" を完全削除しますか？\n(ゴミ箱内の "'+name+'" チャートは「チャート別」タブに残ります)',function(){
+      var dt=caLoadDelTickers().filter(function(x){return x.name!==name;});
+      caSaveDelTickers(dt);setDelTickers(dt);
     });
   }
   function openChart(id){
@@ -6305,43 +6380,137 @@ function DraftLibrary(props){
         style:Object.assign({},BT,{background:"#333",color:"#aaa",padding:"9px 12px",borderRadius:8,fontSize:13})},"✕")
     ),
 
-    /* ── ゴミ箱ビュー ── */
-    showTrash&&ce("div",{style:{flex:1,overflowY:"auto",padding:12}},
-      trash.length===0
-        ?ce("div",{style:{textAlign:"center",color:"#555",fontSize:14,paddingTop:60}},"ゴミ箱は空です")
-        :ce(Fragment,null,
-            ce("div",{style:{display:"flex",justifyContent:"flex-end",marginBottom:10}},
-              ce("button",{onClick:emptyTrash,style:Object.assign({},BT,{
-                fontSize:12,fontWeight:700,padding:"6px 14px",background:"#7f1d1d",
-                color:"#fca5a5",borderRadius:8})
-              },"ゴミ箱を空にする")
-            ),
-            ce("div",{style:{display:"flex",flexWrap:"wrap",gap:10,alignContent:"flex-start"}},
-              trash.map(function(m){
-                var dateStr=new Date(m.deletedAt||m.savedAt).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
-                return ce("div",{key:m.id,
-                  style:{width:IS_TOUCH?450:510,background:"#1a1a1a",borderRadius:10,
-                    border:"1px solid #3a1a1a",overflow:"hidden",flexShrink:0}},
-                  (m.thumbUrl||_thumbMemCache[m.id]||m.thumb)?ce("img",{src:_thumbMemCache[m.id]||m.thumbUrl||m.thumb,style:{width:"100%",display:"block",height:"auto"},draggable:false,onError:function(e){e.target.style.display="none";}}):null,
-                  ce("div",{style:{padding:"8px 10px"}},
-                    ce("div",{style:{fontSize:12,fontWeight:700,color:"#ddd",
-                      overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},m.name),
-                    ce("div",{style:{fontSize:10,color:"#666",marginTop:2}},m.ticker+' · '+dateStr),
-                    ce("div",{style:{display:"flex",gap:8,marginTop:8}},
-                      ce("button",{onClick:function(){restoreChart(m.id);},
-                        style:Object.assign({},BT,{flex:1,padding:"7px 0",fontSize:12,fontWeight:700,
-                          background:"#14532d",color:"#86efac",borderRadius:8})
-                      },"↩ 復元"),
-                      ce("button",{onClick:function(){permanentDelete(m.id);},
-                        style:Object.assign({},BT,{flex:1,padding:"7px 0",fontSize:12,fontWeight:700,
-                          background:"#2a2a2a",color:"#ef4444",borderRadius:8})
-                      },"完全削除")
+    /* ── ゴミ箱ビュー (2026-04-22 刷新: チャート別/削除した銘柄 タブ構成) ── */
+    showTrash&&ce("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}},
+      /* タブバー */
+      ce("div",{style:{display:"flex",borderBottom:"1px solid #2a2a2a",flexShrink:0,background:"#1a1a1a"}},
+        ce("button",{onClick:function(){setTrashTab('charts');},
+          style:Object.assign({},BT,{flex:1,padding:"10px 0",fontSize:13,fontWeight:700,
+            background:trashTab==='charts'?"#431407":"transparent",
+            color:trashTab==='charts'?"#fb923c":"#888",
+            borderBottom:trashTab==='charts'?"2px solid #fb923c":"2px solid transparent",
+            borderRadius:0})
+        },"📊 チャート別 ("+trash.length+")"),
+        ce("button",{onClick:function(){setTrashTab('tickers');},
+          style:Object.assign({},BT,{flex:1,padding:"10px 0",fontSize:13,fontWeight:700,
+            background:trashTab==='tickers'?"#431407":"transparent",
+            color:trashTab==='tickers'?"#fb923c":"#888",
+            borderBottom:trashTab==='tickers'?"2px solid #fb923c":"2px solid transparent",
+            borderRadius:0})
+        },"🏷 削除した銘柄 ("+delTickers.length+")")
+      ),
+
+      /* ── タブ本体: チャート別 ── */
+      trashTab==='charts'&&ce("div",{style:{flex:1,overflowY:"auto",padding:12}},
+        trash.length===0
+          ?ce("div",{style:{textAlign:"center",color:"#555",fontSize:14,paddingTop:60}},"ゴミ箱は空です")
+          :(function(){
+              /* 銘柄ごとにグループ化 */
+              var groups={};
+              trash.forEach(function(m){
+                var k=m.ticker||'(未分類)';
+                if(!groups[k])groups[k]=[];
+                groups[k].push(m);
+              });
+              /* 各グループ内は deletedAt 降順 (新しい削除が先頭) */
+              Object.keys(groups).forEach(function(k){
+                groups[k].sort(function(a,b){return (b.deletedAt||0)-(a.deletedAt||0);});
+              });
+              /* 銘柄名ソート: 現役(tickers含む) を先、削除銘柄が後、それぞれ名前昇順 */
+              var groupKeys=Object.keys(groups).sort(function(a,b){
+                var aActive=tickers.includes(a)?0:1;
+                var bActive=tickers.includes(b)?0:1;
+                if(aActive!==bActive)return aActive-bActive;
+                return a.localeCompare(b);
+              });
+              return ce(Fragment,null,
+                /* 全体「ゴミ箱を空にする」ボタン (現状機能維持、文言変更) */
+                ce("div",{style:{display:"flex",justifyContent:"flex-end",marginBottom:12}},
+                  ce("button",{onClick:emptyTrash,style:Object.assign({},BT,{
+                    fontSize:12,fontWeight:700,padding:"6px 14px",background:"#7f1d1d",
+                    color:"#fca5a5",borderRadius:8})
+                  },"🔥 ゴミ箱の中の全データを完全に削除")
+                ),
+                /* 各 ticker セクションを縦に連結 */
+                groupKeys.map(function(tk){
+                  var items=groups[tk];
+                  var isDel=!tickers.includes(tk);  /* 削除銘柄か */
+                  return ce("div",{key:tk,
+                    style:{marginBottom:20,paddingBottom:12,borderBottom:"1px solid #2a2a2a"}},
+                    /* ticker ヘッダー */
+                    ce("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:10}},
+                      ce("span",{style:{fontSize:14,fontWeight:700,color:isDel?"#f87171":"#ddd"}},
+                        (isDel?"⚠ ":"")+tk+" ("+items.length+")"),
+                      isDel&&ce("span",{style:{fontSize:10,color:"#888"}},"削除された銘柄"),
+                      ce("div",{style:{flex:1}}),
+                      ce("button",{onClick:function(){emptyTrashForTicker(tk);},
+                        style:Object.assign({},BT,{fontSize:11,fontWeight:700,padding:"5px 10px",
+                          background:"#2a1a1a",color:"#fca5a5",borderRadius:6})
+                      },"🔥 この銘柄のゴミ箱を空に")
+                    ),
+                    /* チャート一覧 */
+                    ce("div",{style:{display:"flex",flexWrap:"wrap",gap:10}},
+                      items.map(function(m){
+                        var dateStr=new Date(m.deletedAt||m.savedAt).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+                        return ce("div",{key:m.id,
+                          style:{width:IS_TOUCH?450:510,background:"#1a1a1a",borderRadius:10,
+                            border:"1px solid #3a1a1a",overflow:"hidden",flexShrink:0}},
+                          (m.thumbUrl||_thumbMemCache[m.id]||m.thumb)?ce("img",{src:_thumbMemCache[m.id]||m.thumbUrl||m.thumb,style:{width:"100%",display:"block",height:"auto"},draggable:false,onError:function(e){e.target.style.display="none";}}):null,
+                          ce("div",{style:{padding:"8px 10px"}},
+                            ce("div",{style:{fontSize:12,fontWeight:700,color:"#ddd",
+                              overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},m.name),
+                            ce("div",{style:{fontSize:10,color:"#666",marginTop:2}},"削除日時: "+dateStr),
+                            ce("div",{style:{display:"flex",gap:8,marginTop:8}},
+                              ce("button",{onClick:function(){restoreChart(m.id);},
+                                style:Object.assign({},BT,{flex:1,padding:"7px 0",fontSize:12,fontWeight:700,
+                                  background:"#14532d",color:"#86efac",borderRadius:8})
+                              },"↩ 復元"),
+                              ce("button",{onClick:function(){permanentDelete(m.id);},
+                                style:Object.assign({},BT,{flex:1,padding:"7px 0",fontSize:12,fontWeight:700,
+                                  background:"#2a2a2a",color:"#ef4444",borderRadius:8})
+                              },"完全削除")
+                            )
+                          )
+                        );
+                      })
                     )
-                  )
+                  );
+                })
+              );
+            })()
+      ),
+
+      /* ── タブ本体: 削除した銘柄 ── */
+      trashTab==='tickers'&&ce("div",{style:{flex:1,overflowY:"auto",padding:12}},
+        delTickers.length===0
+          ?ce("div",{style:{textAlign:"center",color:"#555",fontSize:14,paddingTop:60}},"削除された銘柄はありません")
+          :ce(Fragment,null,
+              ce("div",{style:{fontSize:11,color:"#888",marginBottom:12,lineHeight:1.6}},
+                "・復元すると銘柄が一覧に戻り、ゴミ箱内のその銘柄のチャートも全て自動復元されます",ce("br",null),
+                "・完全削除しても銘柄内のチャートはゴミ箱の「チャート別」タブに残ります"),
+              delTickers.slice().sort(function(a,b){return (b.deletedAt||0)-(a.deletedAt||0);}).map(function(dt){
+                var dateStr=dt.deletedAt?new Date(dt.deletedAt).toLocaleString('ja-JP',{year:'numeric',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
+                var chartCount=trash.filter(function(m){return m.ticker===dt.name;}).length;
+                return ce("div",{key:dt.name,
+                  style:{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",
+                    background:"#1a1a1a",borderRadius:8,border:"1px solid #3a1a1a",marginBottom:8}},
+                  ce("div",{style:{flex:1}},
+                    ce("div",{style:{fontSize:14,fontWeight:700,color:"#f87171"}},"⚠ "+dt.name),
+                    ce("div",{style:{fontSize:10,color:"#888",marginTop:3}},
+                      "削除日時: "+dateStr+(chartCount?" · ゴミ箱内チャート "+chartCount+"件":""))
+                  ),
+                  ce("button",{onClick:function(){restoreDeletedTicker(dt.name);},
+                    style:Object.assign({},BT,{padding:"7px 14px",fontSize:12,fontWeight:700,
+                      background:"#14532d",color:"#86efac",borderRadius:8})
+                  },"↩ 復元"+(chartCount?" ("+chartCount+"件も復活)":"")),
+                  ce("button",{onClick:function(){permanentDeleteTicker(dt.name);},
+                    style:Object.assign({},BT,{padding:"7px 14px",fontSize:12,fontWeight:700,
+                      background:"#2a2a2a",color:"#ef4444",borderRadius:8})
+                  },"完全削除")
                 );
               })
             )
-          )
+      )
     ),
 
     /* ── 通常ビュー ── */
