@@ -2937,10 +2937,16 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   var padL=40, padR=40, padT=10, padB=22;
   /* 2026-04-21: pricePx の意味変更 — 価格軸ラベル最小間隔px (旧 priceRange 縮減は廃止) */
   var minLabelGapPx=(dim&&typeof dim.pricePx==='number'&&dim.pricePx>0)?dim.pricePx:0;
-  /* 2026-04-21: サムネイル等 zoom 未指定呼び出し時は自動フィット (Z_MIN clamp 無し)
-     下記 uTotal/priceRange 確定後に実際の算出を行う。この時点では仮の zoom=null を保持 */
-  var zoomSpecified=(dim&&typeof dim.zoom==='number'&&dim.zoom>0);
-  var zoom=zoomSpecified?dim.zoom:1.0;  /* 後段で uTotal 確定後にフィット値へ上書きする可能性あり */
+  /* 2026-04-22: サムネイル専用モード — 地図モデル無効化、X/Y独立フィット (地図モデル導入前と同じ挙動)
+     dim.thumbnail=true で有効
+       - barW は uSpan 派生 (従来式): (chartW/uSpan) * baseStep * 0.8
+       - pxPerYen は priceH/pSpan で X/Y 独立フィット
+       - ctx._strokeZoom = 1.0 (書込オブジェクト zoom 連動 OFF)
+       - pStep = 10 固定 (価格軸ラベル密度切替 OFF)
+       - pShift = 0 強制、uS=0, uE=uTotal */
+  var isThumbnail=!!(dim&&dim.thumbnail);
+  /* 地図モデル zoom (通常モード用、サムネモードでは未使用) */
+  var zoom=(dim&&typeof dim.zoom==='number'&&dim.zoom>0)?dim.zoom:1.0;
   var volH=Math.max(44,Math.round((H-padT-padB)*0.13));
   var priceH=H-padT-padB-volH-6;
   canvas.width=Math.round(W*dpr);
@@ -2981,36 +2987,29 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   var tmVisSpan=390-(60-lunchVis);  // 5m=335, 1m=331
   var uTotal=hasRef?(tmVisSpan*2+gapVis):tmVisSpan;
 
-  /* 2026-04-21: zoom 未指定呼び出し時のフィット自動算出 (サムネ等)
-     Z_MIN clamp 無しで、X/Y 両方に収まる最小の zoom を採用 */
-  if(!zoomSpecified && priceRange && priceRange.max>priceRange.min){
-    var _baseStepF=(tf==='5m'?5:1);
-    var chartWF=W-padL-padR;
-    var zX=chartWF*_baseStepF*0.8/(Z_BASE_BAR_PX*uTotal);
-    var pSpanF=priceRange.max-priceRange.min;
-    var zY=priceH*10/(Z_BASE_PRICE_PX*pSpanF);
-    var zAuto=Math.min(zX,zY);
-    if(zAuto<=0)zAuto=1.0;
-    if(zAuto>Z_MAX)zAuto=Z_MAX;
-    zoom=zAuto;
-  }
-
   /* 2026-04-21: 地図モデルズーム — uSpan は zoom から派生
      uSpan = chartW * baseStep * 0.8 / (Z_BASE_BAR_PX * zoom)
      barW  = Z_BASE_BAR_PX * zoom  (ローソク実幅)
-     1uあたり px = (Z_BASE_BAR_PX/0.8) * zoom / baseStep */
+     1uあたり px = (Z_BASE_BAR_PX/0.8) * zoom / baseStep
+     2026-04-22: サムネモード (isThumbnail) では uSpan=uTotal 固定 (X軸全体フィット) */
   var _baseStep=(tf==='5m'?5:1);
   var uPxUnit=(Z_BASE_BAR_PX/0.8)*zoom/_baseStep;  /* 1u = ??px */
   var uSpanFromZoom=chartW/uPxUnit;
 
   // view は u軸単位 {uS, uE}。fallback: 未設定なら全体表示
   // 2026-04-21: uSpan は zoom から算出、uE は uS+uSpan で上書き
-  var uS=(view&&view.uS!=null)?view.uS:0;
-  var uSpan=uSpanFromZoom;
-  if(uSpan>uTotal){uSpan=uTotal; uS=0;}
-  var uE=uS+uSpan;
-  if(uS<0){uS=0; uE=uSpan;}
-  if(uE>uTotal){uE=uTotal; uS=Math.max(0,uE-uSpan);}
+  var uS, uSpan, uE;
+  if(isThumbnail){
+    /* サムネ: X軸全データフィット (従来式) */
+    uS=0; uSpan=uTotal; uE=uTotal;
+  }else{
+    uS=(view&&view.uS!=null)?view.uS:0;
+    uSpan=uSpanFromZoom;
+    if(uSpan>uTotal){uSpan=uTotal; uS=0;}
+    uE=uS+uSpan;
+    if(uS<0){uS=0; uE=uSpan;}
+    if(uE>uTotal){uE=uTotal; uS=Math.max(0,uE-uSpan);}
+  }
 
   function tToMin(t){var p=t.split(':');return parseInt(p[0],10)*60+parseInt(p[1],10);}
   // tm+side → u
@@ -3022,8 +3021,14 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   }
   /* 2026-04-20: 1本目/最終本目の見切れ解消用マージン
      uToX で padL+halfBarPx から描画エリア innerW にマッピング
-     2026-04-21: halfBarPx = barW/2 (地図モデル、zoom連動) */
-  var _halfBarPx=Math.min((Z_BASE_BAR_PX*zoom)*0.5, chartW*0.04);
+     2026-04-21: halfBarPx = barW/2 (地図モデル、zoom連動)
+     2026-04-22: サムネモードは halfBarPx を uSpan 派生で算出 (従来式) */
+  var _halfBarPx;
+  if(isThumbnail){
+    _halfBarPx=Math.min((chartW/uSpan)*_baseStep*0.5, chartW*0.04);
+  }else{
+    _halfBarPx=Math.min((Z_BASE_BAR_PX*zoom)*0.5, chartW*0.04);
+  }
   var _innerW=chartW-_halfBarPx*2;
   // u → x (view範囲でスケール、左右に半本分マージン)
   function uToX(u){return padL+_halfBarPx+(u-uS)/uSpan*_innerW;}
@@ -3044,11 +3049,19 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
      dpmax = priceRange.max + pShift (上端価格、pShift>0 で上に余白拡大)
      dpmin = dpmax - priceH/pxPerYen (下端価格)
      pToY(p) = priceTop + (dpmax - p) * pxPerYen
-     layoutRef の pmin/pmax は「画面に映る範囲」(既存ロジック互換) */
-  var pxPerYen=(Z_BASE_PRICE_PX/10)*zoom;
-  var dpmax=priceRange.max + pShift;
-  var dpmin=dpmax - priceH/pxPerYen;
-  var pmin=dpmin, pmax=dpmax;
+     layoutRef の pmin/pmax は「画面に映る範囲」(既存ロジック互換)
+     2026-04-22: サムネモード — pmin/pmax = priceRange そのまま (X/Y独立フィット、従来式)、pShift 無視 */
+  var pxPerYen, dpmax, dpmin, pmin, pmax;
+  if(isThumbnail){
+    pmin=priceRange.min; pmax=priceRange.max;
+    pxPerYen=priceH/(pmax-pmin);
+    dpmax=pmax; dpmin=pmin;
+  }else{
+    pxPerYen=(Z_BASE_PRICE_PX/10)*zoom;
+    dpmax=priceRange.max + pShift;
+    dpmin=dpmax - priceH/pxPerYen;
+    pmin=dpmin; pmax=dpmax;
+  }
   function pToY(p){return priceTop+(dpmax-p)*pxPerYen;}
 
   // 出来高レンジ (表示範囲内) — hasRef時は refBars も含めて両chartで揃える
@@ -3074,10 +3087,11 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
 
   /* 2026-04-21: 価格軸ラベル密度自動切替 (minLabelGapPx 基準)
      10/20/50/100/500/1000円 から、pxPerStep >= minLabelGapPx を満たす最小pStepを採用
-     minLabelGapPx=0 のとき自動切替OFF (常に10円) */
+     minLabelGapPx=0 のとき自動切替OFF (常に10円)
+     2026-04-22: サムネモードは pStep=10 固定 */
   var pStepCandidates=[10,20,50,100,500,1000];
   var pStep=10;
-  if(minLabelGapPx>0){
+  if(!isThumbnail && minLabelGapPx>0){
     for(var ci=0;ci<pStepCandidates.length;ci++){
       if(pStepCandidates[ci]*pxPerYen>=minLabelGapPx){pStep=pStepCandidates[ci];break;}
       pStep=pStepCandidates[ci];
@@ -3157,7 +3171,13 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
 
   // bar描画ヘルパー (ローソク+ヒゲ+出来高を1本分)
   // 2026-04-21: barW = Z_BASE_BAR_PX * zoom (地図モデル、チャート幅uSpan非依存)
-  var barW=Math.max(1, Z_BASE_BAR_PX*zoom);
+  // 2026-04-22: サムネモードは従来式 (chartW/uSpan * baseStep * 0.8) で画面幅フィット
+  var barW;
+  if(isThumbnail){
+    barW=Math.max(1,(chartW/uSpan)*_baseStep*0.8);
+  }else{
+    barW=Math.max(1, Z_BASE_BAR_PX*zoom);
+  }
   function drawBarSet(barsArr,side){
     /* 出来高 (vol エリア、clip なしで描画) */
     barsArr.forEach(function(b){
@@ -3226,8 +3246,9 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   /* B-drawing: 時刻+価格座標ストローク描画 (ズーム・パンに追従)
      C3+: cur(現在chart側) と ref(過去chart側) を分けて描画。minToXをside別に渡す。
      2026-04-21: 地図モデルズーム化 — ctx._strokeZoom に zoom を設定、
-                 drawAnalysisStroke/Ext 内で width/fontSize/boxW/dash/矢尻/markerW を zoom 倍する */
-  ctx._strokeZoom=zoom;
+                 drawAnalysisStroke/Ext 内で width/fontSize/boxW/dash/矢尻/markerW を zoom 倍する
+     2026-04-22: サムネモードは _strokeZoom=1.0 固定 (書込オブジェクト zoom連動OFF) */
+  ctx._strokeZoom=isThumbnail?1.0:zoom;
   function minToXCur(m){return minToX(m,'cur');}
   function minToXRef(m){return minToX(m,'ref');}
   if(strokes&&strokes.length){
@@ -4197,7 +4218,7 @@ function ImageAnnotator(props){
       drawDataChart(
         chartCanvas,
         bars, ad,
-        {w:W, h:chartH},
+        {w:W, h:chartH, thumbnail:true},
         tf,
         fullView,
         0,  /* pShift=0 */
@@ -5497,7 +5518,7 @@ function generateAnalysisThumb(analysisData, cb){
     var origDPR=window.devicePixelRatio;
     try{Object.defineProperty(window,'devicePixelRatio',{value:1,configurable:true});}catch(e){}
     try{
-      drawDataChart(c, bars, analysisData, {w:W,h:H}, '1m',
+      drawDataChart(c, bars, analysisData, {w:W,h:H,thumbnail:true}, '1m',
         {uS:0,uE:uTotal}, 0, priceRange, {current:null},
         [], null, null, null, null, 1, null, null);
     }finally{
