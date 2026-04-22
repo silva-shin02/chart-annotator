@@ -5033,7 +5033,9 @@ function ImageAnnotator(props){
         }
         function cancelAnalysisText(){setAnalysisTextInput(null);}
         var sx=ati.screenX||0, sy=ati.screenY||0;
-        var maxW=Math.max(120,window.innerWidth-sx-20);
+        /* 2026-04-22: maxW を画面幅いっぱいに近い値に (boxW未指定の長いテキストが sx の位置次第で勝手に折返されるのを防止)
+           最低でも window.innerWidth-20 を使う */
+        var maxW=Math.max(120, window.innerWidth-20);
         /* C9後-fix: 既存編集時のみ枠線+ハンドル表示 (新規入力時は表示なし) */
         var isEditing=(ati.editIdx>=0);
         /* boxW: 既存なら優先、無ければautoで成り行き */
@@ -5219,15 +5221,24 @@ function ImageAnnotator(props){
               style:{padding:"4px 10px",fontSize:12,background:"#2a2a2a",color:"#aaa",
                 border:"none",borderRadius:6,cursor:"pointer",flexShrink:0}},"✕")
           ),
-          /* textarea — C9後: 入力中は枠線不要、テキスト幅に合わせて自動拡張。既存編集時は boxW controlled */
+          /* textarea — C9後: 入力中は枠線不要、テキスト幅に合わせて自動拡張。既存編集時は boxW controlled
+             2026-04-22: boxW未指定の既存テキストは 初期化時に measureText で実幅を測って設定
+             (maxWidth による勝手な折返しを防止) */
           ce("textarea",{
             ref:function(el){
               analysisTextareaRef.current=el;
               /* 2026-04-20: マウント直後に高さを内容に合わせて初期化 (boxW wrap時の2行目以降見切れ対策)
-                 + 確実にフォーカス (autoFocus失敗保険、タブレットのタッチ合成対策) */
+                 + 確実にフォーカス (autoFocus失敗保険、タブレットのタッチ合成対策)
+                 2026-04-22: boxW未指定の既存編集は scrollWidth で実幅を測って width 設定 (勝手な折返し防止) */
               if(el){
                 requestAnimationFrame(function(){
                   if(!el)return;
+                  /* boxW未指定の既存編集: テキスト実幅 (scrollWidth) で width を確定 (折返し回避) */
+                  if(!ctrlBoxW&&isEditing){
+                    el.style.width="auto";
+                    var need=el.scrollWidth;
+                    el.style.width=Math.max(50,Math.min(maxW,need+8))+"px";
+                  }
                   el.style.height="auto";
                   el.style.height=el.scrollHeight+"px";
                   try{
