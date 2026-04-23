@@ -5802,6 +5802,8 @@ function DraftLibrary(props){
   /* 2026-04-22: 削除銘柄 state + ゴミ箱内タブ state (charts=チャート別 / tickers=削除した銘柄) */
   var sDT=useState(caLoadDelTickers); var delTickers=sDT[0],setDelTickers=sDT[1];
   var sTT=useState('charts');       var trashTab=sTT[0],setTrashTab=sTT[1];
+  var sFDA=useState(false);         var fileDragActive=sFDA[0],setFileDragActive=sFDA[1];
+  var fileDragCountRef=useRef(0);
   var CA_SORT_KEY='ca_sort_mode_v1';
   var SORT_MODES=[
     {id:'name_desc', label:'名前 ↓'},
@@ -5833,6 +5835,24 @@ function DraftLibrary(props){
     window.addEventListener('ca_back',onBack);
     return function(){window.removeEventListener('ca_back',onBack);};
   },[showTrash,onClose]);
+
+  /* 2026-04-23: ペーストでJSONファイルを自動振り分けインポート */
+  useEffect(function(){
+    function onPaste(e){
+      var files=e.clipboardData&&e.clipboardData.files;
+      if(!files||files.length===0)return;
+      var hasJson=false;
+      for(var i=0;i<files.length;i++){
+        var fn=(files[i].name||'').toLowerCase();
+        if(/\.json$/.test(fn)||files[i].type==='application/json'){hasJson=true;break;}
+      }
+      if(!hasJson)return;
+      e.preventDefault();
+      addJsonAutoRoute(files);
+    }
+    window.addEventListener('paste',onPaste);
+    return function(){window.removeEventListener('paste',onPaste);};
+  },[]);
 
   // ── IndexedDBからサムネイルキャッシュを復元 ──
   useEffect(function(){
@@ -5986,6 +6006,93 @@ function DraftLibrary(props){
     };
     fr.onerror=function(){window.caToast('ファイル読込エラー','error');};
     fr.readAsText(file);
+  }
+
+  /* 2026-04-23: JSONファイル自動振り分けインポート (ドラッグ&ドロップ / ペースト対応)
+     j.ticker フィールド → ファイル名先頭 の順でマッチ、未登録銘柄は自動追加 */
+  function addJsonAutoRoute(files){
+    if(!files||files.length===0)return;
+    var fileArr=[];
+    for(var fi=0;fi<files.length;fi++){
+      var fn=(files[fi].name||'').toLowerCase();
+      if(/\.json$/.test(fn)||files[fi].type==='application/json') fileArr.push(files[fi]);
+    }
+    if(fileArr.length===0){window.caToast('JSONファイルが見つかりません','error');return;}
+    var processed=0, total=fileArr.length;
+    var firstTicker=null;
+    /* 現時点の tickers を参照 (処理中に追加される場合もあるので都度最新を取る) */
+    var _latestTickers=caLoadTickers();
+    function _findTicker(name){
+      for(var i=0;i<_latestTickers.length;i++){
+        if(_latestTickers[i]===name)return _latestTickers[i];
+      }
+      /* 部分一致 (JSON ticker が略称の場合) */
+      for(var i2=0;i2<_latestTickers.length;i2++){
+        if(_latestTickers[i2].indexOf(name)===0||name.indexOf(_latestTickers[i2])===0)return _latestTickers[i2];
+      }
+      return null;
+    }
+    function _addTickerIfNeeded(name){
+      if(!name)return '未分類';
+      var found=_findTicker(name);
+      if(found)return found;
+      /* 銘柄リストに追加 */
+      _latestTickers.push(name);
+      caSaveTickers(_latestTickers);
+      setTickers(_latestTickers.slice());
+      fbSyncTickers(_latestTickers.slice());
+      return name;
+    }
+    function _extractTickerFromFilename(fname){
+      /* {ticker}_{YYYYMMDD}.json or {ticker}_{YYYYMMDD}_{extra}.json */
+      var base=(fname||'').replace(/\.[^.]+$/,'');
+      var parts=base.split('_');
+      if(parts.length>=2){
+        /* 最後のパートが日付っぽければ手前を ticker として結合 */
+        var last=parts[parts.length-1];
+        if(/^\d{6,8}$/.test(last)){return parts.slice(0,-1).join('_');}
+      }
+      return base; /* fallback: ファイル名全体 */
+    }
+    fileArr.forEach(function(file){
+      var fr=new FileReader();
+      fr.onload=function(ev){
+        var j;
+        try{ j=JSON.parse(ev.target.result); }
+        catch(err){window.caToast('JSONパースエラー ('+file.name+'): '+err.message,'error'); processed++; return;}
+        if(!j||!Array.isArray(j.bars_1m)){
+          window.caToast('形式が不正 ('+file.name+'): bars_1m が配列ではありません','error'); processed++; return;
+        }
+        /* ticker 解決: j.ticker → ファイル名パース */
+        var rawTicker=j.ticker||_extractTickerFromFilename(file.name);
+        var ticker=_addTickerIfNeeded(rawTicker);
+        if(!firstTicker)firstTicker=ticker;
+        var id=caGenId();
+        var savedAt=Date.now();
+        var chartName=(file.name||'chart').replace(/\.[^.]+$/,'')||'chart';
+        var data={analysisData:j, analysisStrokes:{'1m':[],'5m':[]}, name:chartName, _v:savedAt};
+        caSaveData(id,data);
+        generateAnalysisThumb(j, function(thumb){
+          var metaItem={id:id, ticker:ticker, name:chartName, savedAt:savedAt,
+            thumb:thumb||'', analysisDate:j.date||''};
+          var stored=caLoadMeta().filter(function(m){return m.id!==id;});
+          stored.push(metaItem);
+          caSaveMeta(stored);
+          setMeta(function(prev){
+            var exists=prev.some(function(m){return m.id===id;});
+            return exists?prev.map(function(m){return m.id===id?metaItem:m;}):prev.concat([metaItem]);
+          });
+          if(thumb)caSaveThumb(id,thumb);
+          fbSaveDraft(id,metaItem,data);
+          processed++;
+          window.caToast(chartName+' → '+ticker,'success');
+          /* 全ファイル完了後、最初のファイルの銘柄を自動選択 */
+          if(processed===total&&firstTicker){setSelTicker(firstTicker);}
+        });
+      };
+      fr.onerror=function(){window.caToast('読込エラー: '+file.name,'error'); processed++;};
+      fr.readAsText(file);
+    });
   }
 
   var auth=fbCfg.secret?'?auth='+fbCfg.secret:'';
@@ -6713,12 +6820,22 @@ function DraftLibrary(props){
           },"ハイライト解除")
         ),
         ce("div",{
-          onDragOver:selTicker?function(e){e.preventDefault();}:null,
-          onDrop:selTicker?function(e){e.preventDefault();var files=e.dataTransfer.files;if(!files)return;for(var i=0;i<files.length;i++)addJsonDirect(files[i]);}:null,
+          onDragOver:function(e){e.preventDefault();e.dataTransfer.dropEffect='copy';},
+          onDragEnter:function(e){e.preventDefault();fileDragCountRef.current++;setFileDragActive(true);},
+          onDragLeave:function(e){e.preventDefault();fileDragCountRef.current--;if(fileDragCountRef.current<=0){fileDragCountRef.current=0;setFileDragActive(false);}},
+          onDrop:function(e){e.preventDefault();fileDragCountRef.current=0;setFileDragActive(false);var files=e.dataTransfer.files;if(!files||files.length===0)return;if(selTicker){for(var i=0;i<files.length;i++)addJsonDirect(files[i]);}else{addJsonAutoRoute(files);}},
           style:{flex:1,overflowY:"auto",padding:12,
-          display:"flex",flexWrap:"wrap",gap:10,alignContent:"flex-start"}},
+          display:"flex",flexWrap:"wrap",gap:10,alignContent:"flex-start",
+          border:fileDragActive?"2px dashed #6366F1":"2px dashed transparent",
+          borderRadius:fileDragActive?8:0,
+          background:fileDragActive?"rgba(99,102,241,0.06)":"transparent",
+          transition:"border .15s, background .15s"}},
         selTicker===null
-          ?ce("div",{style:{width:"100%",textAlign:"center",color:"#555",fontSize:14,paddingTop:60}},"← 銘柄を選択")
+          ?ce("div",{style:{width:"100%",textAlign:"center",color:fileDragActive?"#a5b4fc":"#555",fontSize:14,paddingTop:60,lineHeight:2.4,transition:"color .15s"}},
+            fileDragActive?"📥 ドロップしてJSONを自動振り分け":"← 銘柄を選択",
+            !fileDragActive&&ce("div",{style:{fontSize:11,color:"#444",marginTop:16,lineHeight:1.8}},
+              "JSONファイルをドラッグ＆ドロップまたは貼り付け(Ctrl+V)で",ce("br",null),
+              "銘柄を自動判別してインポートできます"))
           :charts.length===0
             ?ce("div",{style:{width:"100%",textAlign:"center",color:"#555",fontSize:13,paddingTop:60,lineHeight:2.2}},
               "チャートがありません",ce("br",null),
