@@ -1297,6 +1297,7 @@ function DataChart(props){
   var onStrokeUpdate=props.onStrokeUpdate;  // (idx, newStroke) → 選択ストローク更新用
   var onStrokeDeleteMany=props.onStrokeDeleteMany;  // ([{side,idx}]) → 一括削除
   var onStrokeUpdateMany=props.onStrokeUpdateMany;  // ([{side,idx,stroke}]) → 一括更新
+  var quickColors=props.quickColors||['#ff0054','#11ded9','#ffcc00','#ff6600','#00cc66','#6366F1','#ffffff'];
   var barsKey=tf==='5m'?'bars_5m':'bars_1m';
   var bars=(data&&data[barsKey])||[];
 
@@ -1764,10 +1765,7 @@ function DataChart(props){
       var lp=lassoPathRef.current;
       ctx.moveTo(lp[0].x-lRect.left,lp[0].y-lRect.top);
       for(var li=1;li<lp.length;li++)ctx.lineTo(lp[li].x-lRect.left,lp[li].y-lRect.top);
-      ctx.closePath();
       ctx.stroke();
-      ctx.fillStyle='rgba(99,102,241,0.08)';
-      ctx.fill();
       ctx.restore();
     }
     if(lassoMoveRef.current&&lassoSel&&L){
@@ -2679,14 +2677,14 @@ function DataChart(props){
       var lm=lassoMoveRef.current;
       lassoMoveRef.current=null;
       if(lm.dtm||lm.dp){
-        lm.origItems.forEach(function(it){
+        var moveItems=lm.origItems.map(function(it){
           var arr=(it.side==='ref')?(refStrokes||[]):(strokes||[]);
-          var s=arr[it.idx]; if(!s)return;
-          var newStroke=Object.assign({},s,{
+          var s=arr[it.idx]; if(!s)return null;
+          return {side:it.side,idx:it.idx,stroke:Object.assign({},s,{
             anchors:it.anchors.map(function(a){return {tm:a.tm+(lm.dtm||0), p:a.p+(lm.dp||0)};})
-          });
-          if(onStrokeUpdate)onStrokeUpdate(it.side,it.idx,newStroke);
-        });
+          })};
+        }).filter(Boolean);
+        if(onStrokeUpdateMany)onStrokeUpdateMany(moveItems);
       }
       drawCrosshair();
       return;
@@ -3116,13 +3114,15 @@ function DataChart(props){
     renderVertScrollbar(),
     /* 2026-04-23: 投げ縄マルチ選択時の色変更バー */
     lassoSel&&lassoSel.length>0&&ce("div",{
+      onMouseDown:function(ev){ev.stopPropagation();},
+      onTouchStart:function(ev){ev.stopPropagation();},
       style:{position:"absolute",top:8,left:"50%",transform:"translateX(-50%)",
         display:"flex",gap:4,padding:"6px 10px",background:"rgba(28,28,30,0.95)",
         borderRadius:10,border:"1px solid #6366F1",zIndex:100,alignItems:"center",
         boxShadow:"0 4px 16px rgba(0,0,0,.5)"}
     },
       ce("span",{style:{fontSize:11,color:"#a5b4fc",fontWeight:600,marginRight:4}},lassoSel.length+"件選択"),
-      ['#ff0054','#11ded9','#ffcc00','#ff6600','#00cc66','#6366F1','#ffffff','#aaaaaa'].map(function(c){
+      quickColors.map(function(c){
         return ce("div",{key:c,
           onClick:function(ev){
             ev.stopPropagation();
@@ -4937,6 +4937,7 @@ function ImageAnnotator(props){
               externalCursorRef:analysisCursorRef, externalCursorBump:cursorBump,
               onExternalCursorChange:notifyAnalysisCursor,
               strokes:(analysisStrokes&&analysisStrokes[analysisTf])||[],
+              quickColors:quickColors,
               /* 2026-04-23: 2本指ダブルタップで現ツール⇄消しゴム入れ替え */
               onTwoFingerDoubleTap:function(){
                 if(tool==='eraser'){
