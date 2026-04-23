@@ -6009,7 +6009,7 @@ function DraftLibrary(props){
   }
 
   /* 2026-04-23: JSONファイル自動振り分けインポート (ドラッグ&ドロップ / ペースト対応)
-     j.ticker フィールド → ファイル名先頭 の順でマッチ、未登録銘柄は自動追加 */
+     ファイル名先頭4桁の銘柄コード → tickerCodes 逆引きでマッチ、未登録銘柄は自動追加 */
   function addJsonAutoRoute(files){
     if(!files||files.length===0)return;
     var fileArr=[];
@@ -6020,39 +6020,33 @@ function DraftLibrary(props){
     if(fileArr.length===0){window.caToast('JSONファイルが見つかりません','error');return;}
     var processed=0, total=fileArr.length;
     var firstTicker=null;
-    /* 現時点の tickers を参照 (処理中に追加される場合もあるので都度最新を取る) */
     var _latestTickers=caLoadTickers();
-    function _findTicker(name){
+    /* 銘柄コード → 銘柄名 の逆引きマップを構築 */
+    var _codes=caLoadTickerCodes();
+    var _codeToTicker={};
+    for(var _tk in _codes){if(_codes.hasOwnProperty(_tk)&&_codes[_tk]){_codeToTicker[_codes[_tk]]=_tk;}}
+    function _resolveTickerByCode(fname){
+      /* ファイル名先頭4桁を銘柄コードとして逆引き */
+      var code=(fname||'').replace(/\.[^.]+$/,'').slice(0,4);
+      if(code&&_codeToTicker[code])return _codeToTicker[code];
+      return null;
+    }
+    function _resolveTickerByJson(j){
+      /* j.ticker でも銘柄リスト直接マッチを試みる (フォールバック) */
+      if(!j.ticker)return null;
       for(var i=0;i<_latestTickers.length;i++){
-        if(_latestTickers[i]===name)return _latestTickers[i];
-      }
-      /* 部分一致 (JSON ticker が略称の場合) */
-      for(var i2=0;i2<_latestTickers.length;i2++){
-        if(_latestTickers[i2].indexOf(name)===0||name.indexOf(_latestTickers[i2])===0)return _latestTickers[i2];
+        if(_latestTickers[i]===j.ticker)return _latestTickers[i];
       }
       return null;
     }
     function _addTickerIfNeeded(name){
       if(!name)return '未分類';
-      var found=_findTicker(name);
-      if(found)return found;
-      /* 銘柄リストに追加 */
+      for(var i=0;i<_latestTickers.length;i++){if(_latestTickers[i]===name)return name;}
       _latestTickers.push(name);
       caSaveTickers(_latestTickers);
       setTickers(_latestTickers.slice());
       fbSyncTickers(_latestTickers.slice());
       return name;
-    }
-    function _extractTickerFromFilename(fname){
-      /* {ticker}_{YYYYMMDD}.json or {ticker}_{YYYYMMDD}_{extra}.json */
-      var base=(fname||'').replace(/\.[^.]+$/,'');
-      var parts=base.split('_');
-      if(parts.length>=2){
-        /* 最後のパートが日付っぽければ手前を ticker として結合 */
-        var last=parts[parts.length-1];
-        if(/^\d{6,8}$/.test(last)){return parts.slice(0,-1).join('_');}
-      }
-      return base; /* fallback: ファイル名全体 */
     }
     fileArr.forEach(function(file){
       var fr=new FileReader();
@@ -6063,9 +6057,9 @@ function DraftLibrary(props){
         if(!j||!Array.isArray(j.bars_1m)){
           window.caToast('形式が不正 ('+file.name+'): bars_1m が配列ではありません','error'); processed++; return;
         }
-        /* ticker 解決: j.ticker → ファイル名パース */
-        var rawTicker=j.ticker||_extractTickerFromFilename(file.name);
-        var ticker=_addTickerIfNeeded(rawTicker);
+        /* ticker 解決: ファイル名先頭4桁コード → j.ticker → ファイル名そのまま */
+        var ticker=_resolveTickerByCode(file.name)||_resolveTickerByJson(j)||j.ticker||'未分類';
+        ticker=_addTickerIfNeeded(ticker);
         if(!firstTicker)firstTicker=ticker;
         var id=caGenId();
         var savedAt=Date.now();
