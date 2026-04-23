@@ -1294,6 +1294,7 @@ function DataChart(props){
   var onStrokeAdd=props.onStrokeAdd;
   var onStrokeDelete=props.onStrokeDelete;
   var onStrokeUpdate=props.onStrokeUpdate;  // (idx, newStroke) → 選択ストローク更新用
+  var onStrokeDeleteMany=props.onStrokeDeleteMany;  // ([{side,idx}]) → 一括削除
   var barsKey=tf==='5m'?'bars_5m':'bars_1m';
   var bars=(data&&data[barsKey])||[];
 
@@ -1304,8 +1305,9 @@ function DataChart(props){
   var rafRef=useRef(null);
   var drawRef=useRef({on:false});  // ドラッグ式描画状態 {on, sTM, sP, cTM, cP, pts(freehand用)}
   var ctrlPanRef=useRef(false);    // Ctrl+drag パン状態
-  /* 2026-04-20: トリプルタップ検出用 — [{t:timestamp, x, y}, ...] */
-  var tripleTapRef=useRef([]);
+  /* 2026-04-23: 2本指ダブルタップ検出用 — [timestamp, ...]
+     (2本指touchstart が 600ms以内に2回 → 消しゴムツール切替) */
+  var twoTapHistRef=useRef([]);
   /* 2026-04-22: 3本指ダブルタップ検出用 — [timestamp, ...]
      (3本指touchstart が 600ms以内に2回 → 移動(pan)ツール切替) */
   var threeTapHistRef=useRef([]);
@@ -1438,6 +1440,10 @@ function DataChart(props){
   var sPR=useState(null); var priceRange=sPR[0],setPriceRange=sPR[1];
   /* 選択ストロークの index (lasso用) */
   var sSI=useState(null); var selectedIdx=sSI[0],setSelectedIdx=sSI[1];
+  /* 2026-04-23: 投げ縄マルチ選択 */
+  var sLS=useState(null); var lassoSel=sLS[0],setLassoSel=sLS[1]; // [{side,idx}, ...]
+  var lassoPathRef=useRef(null);  // 描画中の投げ縄パス [{x,y}, ...]
+  var lassoMoveRef=useRef(null);  // マルチ移動 {startTM, startP, origItems:[{side,idx,anchors}]}
   /* 2026-04-20: 移動中のストローク非表示用ヒント — moveRefの{side,idx}と同期、
      drawDataChartに渡してforEachで該当stroke描画をskipする */
   var sMH=useState(null); var moveHint=sMH[0],setMoveHint=sMH[1];
@@ -1585,7 +1591,7 @@ function DataChart(props){
         }catch(e){}
       }
       try{
-        drawDataChart(canvas,bars,data,dimWithPx,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx,refBars,refData,getCandleGap(tf),refStrokes,moveHint);
+        drawDataChart(canvas,bars,data,dimWithPx,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx,refBars,refData,getCandleGap(tf),refStrokes,moveHint,lassoSel);
       } finally {
         if(dprOverridden){
           try{Object.defineProperty(window,'devicePixelRatio',{value:origDPR,configurable:true});}catch(e){}
@@ -1594,7 +1600,7 @@ function DataChart(props){
       drawCrosshair();
     });
     return function(){cancelAnimationFrame(rafId);};
-  },[data,bars,dim,tf,view,pShift,zoom,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes,moveHint,pricePx,chartBg]);
+  },[data,bars,dim,tf,view,pShift,zoom,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes,moveHint,pricePx,chartBg,lassoSel]);
 
   // showCrosshair 切替時: OFFなら消す、ONなら再描画
   useEffect(function(){
@@ -1742,6 +1748,46 @@ function DataChart(props){
       ctx.fillRect(L.padL+L.chartW+2,cy-8,pw,16);
       ctx.fillStyle='#000';
       ctx.fillText(pStr,L.padL+L.chartW+7,cy);
+    }
+    /* 2026-04-23: 投げ縄パス描画 (破線) */
+    if(lassoPathRef.current&&lassoPathRef.current.length>=2&&containerRef.current){
+      var lRect=getCanvasRect();
+      ctx.save();
+      ctx.setLineDash([6,4]);
+      ctx.strokeStyle='#6366F1';
+      ctx.lineWidth=1.5;
+      ctx.globalAlpha=0.8;
+      ctx.beginPath();
+      var lp=lassoPathRef.current;
+      ctx.moveTo(lp[0].x-lRect.left,lp[0].y-lRect.top);
+      for(var li=1;li<lp.length;li++)ctx.lineTo(lp[li].x-lRect.left,lp[li].y-lRect.top);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.fillStyle='rgba(99,102,241,0.08)';
+      ctx.fill();
+      ctx.restore();
+    }
+    /* 2026-04-23: マルチ移動プレビュー (選択ストロークを半透明で移動先に描画) */
+    if(lassoMoveRef.current&&lassoSel&&L){
+      var lmv=lassoMoveRef.current;
+      ctx.save();
+      ctx.globalAlpha=0.5;
+      lassoSel.forEach(function(sel){
+        var arr2=(sel.side==='ref')?(refStrokes||[]):(strokes||[]);
+        var s2=arr2[sel.idx]; if(!s2)return;
+        var moved=Object.assign({},s2,{
+          anchors:s2.anchors.map(function(a){return {tm:a.tm+(lmv.dtm||0),p:a.p+(lmv.dp||0)};})
+        });
+        var minFn=function(m){return minToXWithSide(m,sel.side);};
+        function pToYm(p){
+          if(typeof L.dpmax==='number'&&typeof L.pxPerYen==='number'&&L.pxPerYen>0)return L.priceTop+(L.dpmax-p)*L.pxPerYen;
+          return L.priceTop+(1-(p-L.pmin)/(L.pmax-L.pmin))*L.priceH;
+        }
+        var tp2=s2.type||s2.tool;
+        if(tp2==='freehand'||tp2==='text')drawAnalysisStrokeExt(ctx,moved,minFn,pToYm,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
+        else drawAnalysisStroke(ctx,moved,minFn,pToYm,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
+      });
+      ctx.restore();
     }
   }
 
@@ -2342,16 +2388,34 @@ function DataChart(props){
         setMoveHint({side:hHit.side, idx:hHit.idx});
         return;
       }
-      // クリック位置にストロークがあれば選択、無ければ選択解除
+      // クリック位置にストロークがあるか
       var hi=hitTestStroke(e.clientX,e.clientY);
       if(hi==null){
+        /* 2026-04-23: 空白部分からドラッグ → フリーハンド投げ縄パス開始 */
         setSelectedIdx(null);
+        setLassoSel(null);
+        lassoPathRef.current=[{x:e.clientX,y:e.clientY}];
+        drawCrosshair();
         return;
       }
+      /* 2026-04-23: hitしたストロークが既に lassoSel に含まれている場合 → マルチ移動開始 */
+      if(lassoSel&&lassoSel.length>1){
+        var inSel=lassoSel.some(function(s){return s.side===hi.side&&s.idx===hi.idx;});
+        if(inSel){
+          /* マルチ移動開始: 全選択ストロークの元 anchors を記録 */
+          var origItems=lassoSel.map(function(s){
+            var arr=(s.side==='ref')?(refStrokes||[]):(strokes||[]);
+            var stk=arr[s.idx];
+            return {side:s.side,idx:s.idx,anchors:stk?(stk.anchors||[]).map(function(a){return {tm:a.tm,p:a.p};}):[]};
+          });
+          lassoMoveRef.current={startTM:tp.tm,startP:tp.p,origItems:origItems};
+          return;
+        }
+      }
+      /* 単一ストロークを選択 (lassoSelクリア) */
+      setLassoSel(null);
       setSelectedIdx(hi);
-      /* 2026-04-20: 既存textをhitした場合はtext modeと同じ挙動 (moveRefに_isTextTool+_editReq)
-         — mouseUpで moving=false なら editor overlay open、movingなら通常移動
-         — screenX/screenY は stroke anchor位置から計算 (テキスト位置を保持) */
+      /* 既存textをhitした場合はtext modeと同じ挙動 */
       var hiArr=(hi.side==='ref')?(refStrokes||[]):(strokes||[]);
       var hiStk=hiArr[hi.idx];
       if(hiStk&&(hiStk.type||hiStk.tool)==='text'){
@@ -2428,6 +2492,26 @@ function DataChart(props){
       var rect=getCanvasRect();
       cursorRef.current={x:e.clientX-rect.left,y:e.clientY-rect.top};
       notifyExternalCursorFromLocal();
+    }
+    /* 2026-04-23: 投げ縄パス描画中 → ポイント追加 */
+    if(lassoPathRef.current){
+      lassoPathRef.current.push({x:e.clientX,y:e.clientY});
+      if(!rafRef.current){
+        rafRef.current=requestAnimationFrame(function(){drawCrosshair();rafRef.current=null;});
+      }
+      return;
+    }
+    /* 2026-04-23: 投げ縄マルチ移動中 */
+    if(lassoMoveRef.current){
+      var tpLm=pxToTimePrice(e.clientX,e.clientY);
+      if(tpLm&&tpLm.p!=null){
+        lassoMoveRef.current.dtm=tpLm.tm-lassoMoveRef.current.startTM;
+        lassoMoveRef.current.dp=tpLm.p-lassoMoveRef.current.startP;
+      }
+      if(!rafRef.current){
+        rafRef.current=requestAnimationFrame(function(){drawCrosshair();rafRef.current=null;});
+      }
+      return;
     }
     // lasso 移動中
     if(moveRef.current){
@@ -2540,6 +2624,63 @@ function DataChart(props){
     }
   }
   function onMouseUp(){
+    /* 2026-04-23: 投げ縄パス終了 → ポリゴン内ストローク一括選択 */
+    if(lassoPathRef.current&&lassoPathRef.current.length>=3){
+      var poly=lassoPathRef.current;
+      lassoPathRef.current=null;
+      var hits=[];
+      function _pInPoly(px,py){
+        var inside=false;
+        for(var i=0,j=poly.length-1;i<poly.length;j=i++){
+          var xi=poly[i].x,yi=poly[i].y,xj=poly[j].x,yj=poly[j].y;
+          if(((yi>py)!==(yj>py))&&(px<(xj-xi)*(py-yi)/(yj-yi)+xi))inside=!inside;
+        }
+        return inside;
+      }
+      function _checkStroke(s,idx,side){
+        if(!s||!s.anchors)return;
+        var anc=s.anchors;
+        for(var ai=0;ai<anc.length;ai++){
+          var sx=minToXWithSide(anc[ai].tm,side);
+          var L=layoutRef.current;
+          if(!L)continue;
+          var sy;
+          if(typeof L.dpmax==='number'&&typeof L.pxPerYen==='number'&&L.pxPerYen>0){
+            sy=L.priceTop+(L.dpmax-anc[ai].p)*L.pxPerYen;
+          } else {
+            sy=L.priceTop+(1-(anc[ai].p-L.pmin)/(L.pmax-L.pmin))*L.priceH;
+          }
+          /* canvas座標 → screen座標に変換 */
+          var rect=getCanvasRect();
+          var scrX=sx+rect.left, scrY=sy+rect.top;
+          if(_pInPoly(scrX,scrY)){hits.push({side:side,idx:idx});return;}
+        }
+      }
+      if(strokes)strokes.forEach(function(s,i){_checkStroke(s,i,'cur');});
+      if(refStrokes)refStrokes.forEach(function(s,i){_checkStroke(s,i,'ref');});
+      if(hits.length>0){setLassoSel(hits);setSelectedIdx(null);}
+      else{setLassoSel(null);}
+      drawCrosshair();
+      return;
+    }
+    lassoPathRef.current=null;
+    /* 2026-04-23: 投げ縄マルチ移動確定 */
+    if(lassoMoveRef.current){
+      var lm=lassoMoveRef.current;
+      lassoMoveRef.current=null;
+      if(lm.dtm||lm.dp){
+        lm.origItems.forEach(function(it){
+          var arr=(it.side==='ref')?(refStrokes||[]):(strokes||[]);
+          var s=arr[it.idx]; if(!s)return;
+          var newStroke=Object.assign({},s,{
+            anchors:it.anchors.map(function(a){return {tm:a.tm+(lm.dtm||0), p:a.p+(lm.dp||0)};})
+          });
+          if(onStrokeUpdate)onStrokeUpdate(it.side,it.idx,newStroke);
+        });
+      }
+      drawCrosshair();
+      return;
+    }
     // eraser ドラッグ終了: 1件以上消したら履歴コミット
     if(drawRef.current.on&&drawRef.current.eraser){
       if(drawRef.current.didDelete&&props.onEraserSessionEnd){
@@ -2643,6 +2784,26 @@ function DataChart(props){
       }
     }
     if(e.touches.length===2){
+      /* 2026-04-23: 2本指ダブルタップで消しゴムツール切替
+         — 2本指touchstart が 600ms以内に2回発生したら発火
+         — 同一シーケンス内の連続触りは50ms以内フィルタで除外 */
+      var _now2=Date.now();
+      var _hist2=twoTapHistRef.current;
+      _hist2=_hist2.filter(function(h){return _now2-h<600;});
+      if(!(_hist2.length>0&&_now2-_hist2[_hist2.length-1]<50)){
+        _hist2.push(_now2);
+        twoTapHistRef.current=_hist2;
+        if(_hist2.length>=2){
+          twoTapHistRef.current=[];
+          if(e.preventDefault)e.preventDefault();
+          if(props.onTwoFingerDoubleTap)props.onTwoFingerDoubleTap();
+          drawRef.current={on:false};
+          panStartRef.current=null;
+          moveRef.current=null;
+          pinchRef.current=null;
+          return;
+        }
+      }
       // ピンチ開始
       if(e.preventDefault)e.preventDefault();
       var t1=e.touches[0], t2=e.touches[1];
@@ -2736,27 +2897,6 @@ function DataChart(props){
       if(!e.touches||e.touches.length<2){pinchRef.current=null;panStartRef.current=null;}
       return;
     }
-    /* 2026-04-20: トリプルタップでツール⇄消しゴム入れ替え
-       - 直近3タップが 500ms 以内、かつ位置ズレ30px 以内、かつ残り touch=0 (全指離れた) */
-    if(e.touches&&e.touches.length===0&&e.changedTouches&&e.changedTouches.length===1){
-      var t=e.changedTouches[0];
-      var now=Date.now();
-      var x=t.clientX, y=t.clientY;
-      var hist=tripleTapRef.current;
-      /* 古いタップを除外 (500ms超) */
-      hist=hist.filter(function(h){return now-h.t<500;});
-      /* 位置ズレがあれば履歴リセット */
-      if(hist.length>0){
-        var last=hist[hist.length-1];
-        if(Math.hypot(x-last.x,y-last.y)>30)hist=[];
-      }
-      hist.push({t:now,x:x,y:y});
-      tripleTapRef.current=hist;
-      if(hist.length>=3){
-        tripleTapRef.current=[];
-        if(props.onTripleTap)props.onTripleTap();
-      }
-    }
     onMouseUp();
   }
   // ペンのホバー (Apple Pencil / S Pen 等) - 触れず浮かせている時に十字カーソル追従
@@ -2774,23 +2914,31 @@ function DataChart(props){
   // ダブルクリック: (機能削除、ユーザー要望)
 
   /* ツール切替時 / データ切替時: 選択状態をリセット */
-  useEffect(function(){setSelectedIdx(null);},[drawTool,data,tf]);
+  useEffect(function(){setSelectedIdx(null);setLassoSel(null);},[drawTool,data,tf]);
 
   /* Delete/Escapeキー: 選択削除・解除 (C6: side対応) */
   useEffect(function(){
     function onKey(e){
-      if(e.key==='Escape'){setSelectedIdx(null);return;}
-      if((e.key==='Delete'||e.key==='Backspace')&&selectedIdx!=null){
+      if(e.key==='Escape'){setSelectedIdx(null);setLassoSel(null);return;}
+      if(e.key==='Delete'||e.key==='Backspace'){
         // input/textarea にフォーカス中は無視
         var ae=document.activeElement;
         if(ae&&(ae.tagName==='INPUT'||ae.tagName==='TEXTAREA'||ae.isContentEditable))return;
-        if(onStrokeDelete)onStrokeDelete(selectedIdx.side,selectedIdx.idx);
-        setSelectedIdx(null);
+        /* 2026-04-23: lassoSel マルチ削除 */
+        if(lassoSel&&lassoSel.length>0){
+          if(onStrokeDeleteMany)onStrokeDeleteMany(lassoSel);
+          setLassoSel(null);
+          return;
+        }
+        if(selectedIdx!=null){
+          if(onStrokeDelete)onStrokeDelete(selectedIdx.side,selectedIdx.idx);
+          setSelectedIdx(null);
+        }
       }
     }
     window.addEventListener('keydown',onKey);
     return function(){window.removeEventListener('keydown',onKey);};
-  },[selectedIdx,onStrokeDelete]);
+  },[selectedIdx,lassoSel,onStrokeDelete,onStrokeDeleteMany]);
 
   /* 2026-04-21: 横スクロールバー描画 (出来高エリア境目)
      表示: top = priceBot+3 (divY と同位置の水平線付近)、
@@ -2955,7 +3103,46 @@ function DataChart(props){
     /* 2026-04-21: 横スクロールバー (出来高エリア境目) */
     renderHorizScrollbar(),
     /* 2026-04-21: 縦スクロールバー (価格軸右側) */
-    renderVertScrollbar()
+    renderVertScrollbar(),
+    /* 2026-04-23: 投げ縄マルチ選択時の色変更バー */
+    lassoSel&&lassoSel.length>0&&ce("div",{
+      style:{position:"absolute",top:8,left:"50%",transform:"translateX(-50%)",
+        display:"flex",gap:4,padding:"6px 10px",background:"rgba(28,28,30,0.95)",
+        borderRadius:10,border:"1px solid #6366F1",zIndex:100,alignItems:"center",
+        boxShadow:"0 4px 16px rgba(0,0,0,.5)"}
+    },
+      ce("span",{style:{fontSize:11,color:"#a5b4fc",fontWeight:600,marginRight:4}},lassoSel.length+"件選択"),
+      ['#ff0054','#11ded9','#ffcc00','#ff6600','#00cc66','#6366F1','#ffffff','#aaaaaa'].map(function(c){
+        return ce("div",{key:c,
+          onClick:function(ev){
+            ev.stopPropagation();
+            /* 全選択ストロークの色を変更 */
+            lassoSel.forEach(function(sel){
+              var arr=(sel.side==='ref')?(refStrokes||[]):(strokes||[]);
+              var s=arr[sel.idx]; if(!s)return;
+              var ns=Object.assign({},s,{color:c});
+              if(onStrokeUpdate)onStrokeUpdate(sel.side,sel.idx,ns);
+            });
+          },
+          style:{width:20,height:20,borderRadius:"50%",background:c,cursor:"pointer",
+            border:c==='#ffffff'?"1px solid #555":"1px solid transparent",flexShrink:0}
+        });
+      }),
+      ce("div",{
+        onClick:function(ev){
+          ev.stopPropagation();
+          if(onStrokeDeleteMany)onStrokeDeleteMany(lassoSel);
+          setLassoSel(null);
+        },
+        style:{marginLeft:6,fontSize:13,cursor:"pointer",color:"#f87171",fontWeight:700,
+          padding:"2px 6px",borderRadius:4,background:"rgba(248,113,113,0.1)"}
+      },"🗑"),
+      ce("div",{
+        onClick:function(ev){ev.stopPropagation();setLassoSel(null);},
+        style:{marginLeft:2,fontSize:11,cursor:"pointer",color:"#888",fontWeight:600,
+          padding:"2px 6px"}
+      },"✕")
+    )
   );
 }
 
@@ -3001,7 +3188,7 @@ function computeEnhancedBars(bars, refBars){
    2026-04-21: 地図モデルズーム化 — dim.zoom で X/Y 同倍率
                barW = Z_BASE_BAR_PX * zoom, pxPerYen = (Z_BASE_PRICE_PX/10) * zoom
                uSpan は zoom と chartW から派生 (view.uE は setView で同期されている前提) */
-function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,editingTextIdx,refBars,refData,gapVis,refStrokes,hideHint){
+function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,editingTextIdx,refBars,refData,gapVis,refStrokes,hideHint,lassoSel){
   // B完全版: EMA 前日連続化 (refData ありなら bars の EMA を上書き)
   bars=computeEnhancedBars(bars, refBars);
   var dpr=window.devicePixelRatio||1;
@@ -3346,6 +3533,10 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
       if(selectedIdx&&selectedIdx.side==='cur'&&selectedIdx.idx===idx){
         drawSelectionHighlight(ctx,s,minToXCur,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
       }
+      /* 2026-04-23: lassoSel マルチ選択ハイライト */
+      if(lassoSel&&lassoSel.some(function(ls){return ls.side==='cur'&&ls.idx===idx;})){
+        drawSelectionHighlight(ctx,s,minToXCur,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
+      }
     });
   }
   // C6: ref側stroke描画 + selection対応
@@ -3362,6 +3553,10 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
         drawAnalysisStroke(ctx,s,minToXRef,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
       }
       if(selectedIdx&&selectedIdx.side==='ref'&&selectedIdx.idx===idx){
+        drawSelectionHighlight(ctx,s,minToXRef,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
+      }
+      /* 2026-04-23: lassoSel マルチ選択ハイライト */
+      if(lassoSel&&lassoSel.some(function(ls){return ls.side==='ref'&&ls.idx===idx;})){
         drawSelectionHighlight(ctx,s,minToXRef,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
       }
     });
@@ -4730,8 +4925,8 @@ function ImageAnnotator(props){
               externalCursorRef:analysisCursorRef, externalCursorBump:cursorBump,
               onExternalCursorChange:notifyAnalysisCursor,
               strokes:(analysisStrokes&&analysisStrokes[analysisTf])||[],
-              /* 2026-04-20: トリプルタップで現ツール⇄消しゴム入れ替え */
-              onTripleTap:function(){
+              /* 2026-04-23: 2本指ダブルタップで現ツール⇄消しゴム入れ替え */
+              onTwoFingerDoubleTap:function(){
                 if(tool==='eraser'){
                   /* 消しゴム中 → 前ツールに戻す */
                   var prev=prevToolBeforeEraserRef.current||'pan';
