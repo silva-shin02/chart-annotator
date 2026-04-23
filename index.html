@@ -1152,6 +1152,7 @@ function RefAnalysisPicker(props){
   var onSelect=props.onSelect, onClose=props.onClose, fbCfg=props.fbCfg||{};
   var currentTicker=props.currentTicker;        // 現在分析中の ticker (必須)
   var currentDraftId=props.currentDraftId;      // 現在開いてる draft の id (自分自身を除外用)
+  var currentDate=props.currentDate||'';        // 現在開いてるチャートの日付
   var s2=useState(caLoadMeta);    var meta=s2[0];
   var s3=useState(null);          var loading=s3[0],setLoading=s3[1];
   var BT2={border:"none",cursor:"pointer",fontFamily:"inherit"};
@@ -1224,12 +1225,16 @@ function RefAnalysisPicker(props){
           boxShadow:"0 24px 64px rgba(0,0,0,.8)",border:"1px solid #2a2a2a",
           display:"flex",flexDirection:"column",overflow:"hidden"}},
         /* header */
-        ce("div",{style:{padding:"16px 18px",borderBottom:"1px solid #2a2a2a",display:"flex",alignItems:"center",gap:10,flexShrink:0}},
-          ce("span",{style:{fontSize:16,fontWeight:700,color:"#fff",flex:1}},
-            "📊 過去チャートを開く — "+(currentTicker||'(ticker未設定)')
+        ce("div",{style:{padding:"16px 18px",borderBottom:"1px solid #2a2a2a",display:"flex",flexDirection:"column",gap:6,flexShrink:0}},
+          ce("div",{style:{display:"flex",alignItems:"center",gap:10}},
+            ce("span",{style:{fontSize:16,fontWeight:700,color:"#fff",flex:1}},
+              "📊 過去チャートを開く — "+(currentTicker||'(ticker未設定)')
+            ),
+            ce("button",{onClick:onClose,style:Object.assign({},BT2,{fontSize:13,fontWeight:700,
+              background:"#2a2a2a",color:"#aaa",padding:"7px 14px",borderRadius:8})},"閉じる")
           ),
-          ce("button",{onClick:onClose,style:Object.assign({},BT2,{fontSize:13,fontWeight:700,
-            background:"#2a2a2a",color:"#aaa",padding:"7px 14px",borderRadius:8})},"閉じる")
+          currentDate&&ce("div",{style:{fontSize:12,color:"#86efac",fontWeight:600}},
+            "📅 現在表示中: "+currentDate)
         ),
         /* body: 過去データ一覧 */
         ce("div",{style:{flex:1,overflowY:"auto",padding:14,
@@ -5545,6 +5550,7 @@ function ImageAnnotator(props){
       fbCfg:props.fbCfg,
       currentTicker:img._ticker||(analysisData&&analysisData.ticker)||'',
       currentDraftId:img._draftId||savedDraftIdRef.current||null,
+      currentDate:(analysisData&&analysisData.date)||'',
       onSelect:function(ref){
         setRefAnalysis(ref);
         setShowRefAnalysisPicker(false);
