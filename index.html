@@ -1295,6 +1295,7 @@ function DataChart(props){
   var onStrokeDelete=props.onStrokeDelete;
   var onStrokeUpdate=props.onStrokeUpdate;  // (idx, newStroke) → 選択ストローク更新用
   var onStrokeDeleteMany=props.onStrokeDeleteMany;  // ([{side,idx}]) → 一括削除
+  var onStrokeUpdateMany=props.onStrokeUpdateMany;  // ([{side,idx,stroke}]) → 一括更新
   var barsKey=tf==='5m'?'bars_5m':'bars_1m';
   var bars=(data&&data[barsKey])||[];
 
@@ -1581,9 +1582,9 @@ function DataChart(props){
          pricePx は最小ラベル間隔px として転用 */
       var dimWithPx=Object.assign({},dim,{pricePx:pricePx,zoom:zoom});
       var canvas=canvasRef.current; if(!canvas)return;
-      /* 2026-04-20: iPad カクつき対策 — iPad のみ DPR=1 に固定して描画負荷を 1/4 に軽減 */
+      /* 2026-04-23: iPad DPR上限2 (1では描画がぼやける、3以上はメモリ過大のためcap) */
       var origDPR=window.devicePixelRatio||1;
-      var forceDPR=(caIsIPad()&&origDPR>1)?1:origDPR;
+      var forceDPR=(caIsIPad()&&origDPR>2)?2:origDPR;
       var dprOverridden=false;
       if(forceDPR!==origDPR){
         try{Object.defineProperty(window,'devicePixelRatio',{value:forceDPR,configurable:true});
@@ -1749,7 +1750,8 @@ function DataChart(props){
       ctx.fillStyle='#000';
       ctx.fillText(pStr,L.padL+L.chartW+7,cy);
     }
-    /* 2026-04-23: 投げ縄パス描画 (破線) */
+    /* 2026-04-23: 投げ縄パス描画 (破線) + マルチ移動プレビュー */
+    try{
     if(lassoPathRef.current&&lassoPathRef.current.length>=2&&containerRef.current){
       var lRect=getCanvasRect();
       ctx.save();
@@ -1767,7 +1769,6 @@ function DataChart(props){
       ctx.fill();
       ctx.restore();
     }
-    /* 2026-04-23: マルチ移動プレビュー (選択ストロークを半透明で移動先に描画) */
     if(lassoMoveRef.current&&lassoSel&&L){
       var lmv=lassoMoveRef.current;
       ctx.save();
@@ -1789,6 +1790,7 @@ function DataChart(props){
       });
       ctx.restore();
     }
+    }catch(_lassoErr){}
   }
 
   /* 2026-04-20: 分離モード用 drawCrosshair — price/vol 両overlay に分割描画
@@ -2493,11 +2495,15 @@ function DataChart(props){
       cursorRef.current={x:e.clientX-rect.left,y:e.clientY-rect.top};
       notifyExternalCursorFromLocal();
     }
-    /* 2026-04-23: 投げ縄パス描画中 → ポイント追加 */
+    /* 2026-04-23: 投げ縄パス描画中 → ポイント追加 (4px未満は間引き) */
     if(lassoPathRef.current){
-      lassoPathRef.current.push({x:e.clientX,y:e.clientY});
+      var _lp=lassoPathRef.current;
+      var _last=_lp[_lp.length-1];
+      if(!_last||Math.hypot(e.clientX-_last.x,e.clientY-_last.y)>=4){
+        _lp.push({x:e.clientX,y:e.clientY});
+      }
       if(!rafRef.current){
-        rafRef.current=requestAnimationFrame(function(){drawCrosshair();rafRef.current=null;});
+        rafRef.current=requestAnimationFrame(function(){try{drawCrosshair();}catch(err){}rafRef.current=null;});
       }
       return;
     }
@@ -2509,7 +2515,7 @@ function DataChart(props){
         lassoMoveRef.current.dp=tpLm.p-lassoMoveRef.current.startP;
       }
       if(!rafRef.current){
-        rafRef.current=requestAnimationFrame(function(){drawCrosshair();rafRef.current=null;});
+        rafRef.current=requestAnimationFrame(function(){try{drawCrosshair();}catch(err){}rafRef.current=null;});
       }
       return;
     }
@@ -3116,13 +3122,15 @@ function DataChart(props){
         return ce("div",{key:c,
           onClick:function(ev){
             ev.stopPropagation();
-            /* 全選択ストロークの色を変更 */
+            /* 全選択ストロークの色を一括変更 */
+            if(!onStrokeUpdateMany)return;
+            var items=[];
             lassoSel.forEach(function(sel){
               var arr=(sel.side==='ref')?(refStrokes||[]):(strokes||[]);
               var s=arr[sel.idx]; if(!s)return;
-              var ns=Object.assign({},s,{color:c});
-              if(onStrokeUpdate)onStrokeUpdate(sel.side,sel.idx,ns);
+              items.push({side:sel.side,idx:sel.idx,stroke:Object.assign({},s,{color:c})});
             });
+            onStrokeUpdateMany(items);
           },
           style:{width:20,height:20,borderRadius:"50%",background:c,cursor:"pointer",
             border:c==='#ffffff'?"1px solid #555":"1px solid transparent",flexShrink:0}
@@ -5072,6 +5080,39 @@ function ImageAnnotator(props){
               setAnalysisStrokes(next);
               analysisCommit(next);
             }
+          },
+          /* 2026-04-23: onStrokeUpdateMany — 一括色変更等、複数ストロークを1回のstate更新で処理 */
+          onStrokeUpdateMany:function(items){
+            if(!items||!items.length)return;
+            var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
+            var curArr=(curObj[analysisTf]||[]).slice();
+            var ra=refAnalysisRef.current;
+            var rObj=ra?(ra.analysisStrokes||{'1m':[],'5m':[]}):null;
+            var rArr=rObj?(rObj[analysisTf]||[]).slice():null;
+            var curChanged=false, refChanged=false;
+            items.forEach(function(it){
+              if(it.side==='ref'&&rArr){
+                rArr[it.idx]=Object.assign({},it.stroke,{side:'ref'});
+                refChanged=true;
+              }else{
+                curArr[it.idx]=Object.assign({},it.stroke,{side:'cur'});
+                curChanged=true;
+              }
+            });
+            var nextCur=null, nextRefObj=null;
+            if(curChanged){
+              nextCur=Object.assign({},curObj,(function(){var o={};o[analysisTf]=curArr;return o;})());
+              setAnalysisStrokes(nextCur);
+            }
+            if(refChanged&&rObj&&ra){
+              nextRefObj=Object.assign({},rObj,(function(){var o={};o[analysisTf]=rArr;return o;})());
+              setRefAnalysis(Object.assign({},ra,{analysisStrokes:nextRefObj}));
+              triggerRefAutoSave();
+            }
+            analysisCommit(
+              nextCur||analysisStrokesRef.current,
+              nextRefObj||(ra?ra.analysisStrokes:null)
+            );
           },
           /* C6: onRequestTextInput({tm,p,screenX,screenY,editIdx,side}) */
           onRequestTextInput:function(req){
