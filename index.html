@@ -979,6 +979,7 @@ var TOOLS=[
   {id:"freehand",label:"フリー"},
   {id:"text",  label:"Ｔテキスト"},
   {id:"lasso", label:"選択・変形"},
+  {id:"lassoFree", label:"投げ縄"},
   {id:"eraser",label:"消しゴム"},
 ];
 
@@ -2390,32 +2391,12 @@ function DataChart(props){
         setMoveHint({side:hHit.side, idx:hHit.idx});
         return;
       }
-      // クリック位置にストロークがあるか
+      // クリック位置にストロークがあれば選択、無ければ選択解除
       var hi=hitTestStroke(e.clientX,e.clientY);
       if(hi==null){
-        /* 2026-04-23: 空白部分からドラッグ → フリーハンド投げ縄パス開始 */
         setSelectedIdx(null);
-        setLassoSel(null);
-        lassoPathRef.current=[{x:e.clientX,y:e.clientY}];
-        drawCrosshair();
         return;
       }
-      /* 2026-04-23: hitしたストロークが既に lassoSel に含まれている場合 → マルチ移動開始 */
-      if(lassoSel&&lassoSel.length>1){
-        var inSel=lassoSel.some(function(s){return s.side===hi.side&&s.idx===hi.idx;});
-        if(inSel){
-          /* マルチ移動開始: 全選択ストロークの元 anchors を記録 */
-          var origItems=lassoSel.map(function(s){
-            var arr=(s.side==='ref')?(refStrokes||[]):(strokes||[]);
-            var stk=arr[s.idx];
-            return {side:s.side,idx:s.idx,anchors:stk?(stk.anchors||[]).map(function(a){return {tm:a.tm,p:a.p};}):[]};
-          });
-          lassoMoveRef.current={startTM:tp.tm,startP:tp.p,origItems:origItems};
-          return;
-        }
-      }
-      /* 単一ストロークを選択 (lassoSelクリア) */
-      setLassoSel(null);
       setSelectedIdx(hi);
       /* 既存textをhitした場合はtext modeと同じ挙動 */
       var hiArr=(hi.side==='ref')?(refStrokes||[]):(strokes||[]);
@@ -2435,6 +2416,29 @@ function DataChart(props){
       }
       // 選択したストロークをドラッグで移動 → moveRef開始 (C6: side 保持)
       moveRef.current={side:hi.side, idx:hi.idx, startTM:tp.tm, startP:tp.p, dtm:0, dp:0, moving:false};
+      return;
+    }
+    /* 2026-04-23: 投げ縄ツール — フリーハンド囲い→マルチ選択→一括移動/色変え */
+    if(drawTool==='lassoFree'){
+      /* lassoSel内のストロークをhit → マルチ移動開始 */
+      var lfHi=hitTestStroke(e.clientX,e.clientY);
+      if(lfHi&&lassoSel&&lassoSel.length>0){
+        var lfInSel=lassoSel.some(function(s){return s.side===lfHi.side&&s.idx===lfHi.idx;});
+        if(lfInSel){
+          var origItems=lassoSel.map(function(s){
+            var arr=(s.side==='ref')?(refStrokes||[]):(strokes||[]);
+            var stk=arr[s.idx];
+            return {side:s.side,idx:s.idx,anchors:stk?(stk.anchors||[]).map(function(a){return {tm:a.tm,p:a.p};}):[]};
+          });
+          lassoMoveRef.current={startTM:tp.tm,startP:tp.p,origItems:origItems};
+          return;
+        }
+      }
+      /* 空白 or 選択外 → 投げ縄パス開始 */
+      setSelectedIdx(null);
+      setLassoSel(null);
+      lassoPathRef.current=[{x:e.clientX,y:e.clientY}];
+      drawCrosshair();
       return;
     }
     if(drawTool==='text'){
@@ -4581,7 +4585,7 @@ function ImageAnnotator(props){
   // ── switchTool ──
   function switchTool(t){
     // 現ツールの設定を保存
-    var noSave=["pan","eraser","lasso"];
+    var noSave=["pan","eraser","lasso","lassoFree"];
     if(noSave.indexOf(tool)<0){
       toolMemRef.current[tool]={color:color,lineW:lineW,opacity:opacity,fontSize:fontSize,fontBold:fontBold};
     }
@@ -4635,7 +4639,7 @@ function ImageAnnotator(props){
           TOOLS.map(function(t){
             return ce("button",{key:'ana_'+t.id,onClick:function(){switchTool(t.id);},
               style:Object.assign({},TS,{fontSize:IS_TOUCH?11:12,padding:IS_TOUCH?"5px 7px":"6px 10px",
-                background:tool===t.id?(t.id==="eraser"?"#E65100":t.id==="lasso"?"#007AFF":t.id==="text"?"#D4AC0D":"#6366F1"):"#2a2a2a",
+                background:tool===t.id?(t.id==="eraser"?"#E65100":t.id==="lasso"?"#007AFF":t.id==="lassoFree"?"#0ea5e9":t.id==="text"?"#D4AC0D":"#6366F1"):"#2a2a2a",
                 color:tool===t.id?(t.id==="text"?"#1a1a1a":"#fff"):"#aaa"})},
               t.label);
           })
