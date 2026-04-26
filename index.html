@@ -6105,19 +6105,23 @@ function DraftLibrary(props){
   // ── IndexedDBからサムネイルキャッシュを復元 ──
   useEffect(function(){
     var current=caLoadMeta();
-    var needRestore=current.filter(function(m){return m.thumbUrl&&!_thumbMemCache[m.id];});
+    /* thumbUrl有無にかかわらず、メモリキャッシュにないもの全てを復元対象 */
+    var needRestore=current.filter(function(m){return !_thumbMemCache[m.id];});
     if(!needRestore.length)return;
-    var restored=0;
+    var pending=needRestore.length;
+    var anyRestored=false;
+    function onDone(){
+      pending--;
+      if(pending<=0&&anyRestored){setMeta(function(prev){return prev.slice();});}
+    }
     needRestore.forEach(function(m){
       idbGet('thumb_'+m.id,function(val){
         if(val){
           _thumbMemCache[m.id]=val;
-          restored++;
-          if(restored===needRestore.length){
-            setMeta(function(prev){return prev.slice();});  // 再レンダリングトリガー
-          }
-        } else {
-          // IndexedDBにない→thumbUrlからDLしてキャッシュ
+          anyRestored=true;
+          onDone();
+        } else if(m.thumbUrl){
+          // IDBにない & thumbUrlあり → Firebase StorageからDLしてキャッシュ
           var tImg=new Image();
           tImg.crossOrigin='anonymous';
           tImg.onload=function(){
@@ -6127,19 +6131,26 @@ function DraftLibrary(props){
             tctx.drawImage(tImg,0,0,W,H);
             try{
               var thumb=tc.toDataURL('image/png');
-              caSaveThumb(m.id,thumb);  // メモリ+IndexedDB
+              caSaveThumb(m.id,thumb);
+              anyRestored=true;
             }catch(e){
-              /* CORS未設定で tainted canvas → サムネキャッシュ失敗、次回再試行 */
               if(!window._caCorsWarned){window._caCorsWarned=true;
                 console.warn('[CORS] thumb cache failed. Firebase Storage bucket に CORS設定が必要');}
             }
-            restored++;
-            if(restored===needRestore.length){
-              setMeta(function(prev){return prev.slice();});
-            }
+            onDone();
           };
-          tImg.onerror=function(){restored++;if(restored===needRestore.length){setMeta(function(prev){return prev.slice();});}};
+          tImg.onerror=function(){onDone();};
           tImg.src=m.thumbUrl;
+        } else {
+          /* IDBにもthumbUrlもない → データからサムネ再生成 */
+          caLoadDataAsync(m.id,function(d){
+            if(d&&d.analysisData){
+              generateAnalysisThumb(d.analysisData,function(thumb){
+                if(thumb){caSaveThumb(m.id,thumb);anyRestored=true;}
+                onDone();
+              });
+            } else {onDone();}
+          });
         }
       });
     });
@@ -6189,12 +6200,19 @@ function DraftLibrary(props){
     function processNext(){
       if(idx>=missing.length)return;
       var m=missing[idx]; idx++;
-      var d=caLoadData(m.id);
-      if(d&&(d.orig_base64||d.base64)){
-        genThumb(m,'data:'+(d.orig_mt||d.mt||'image/png')+';base64,'+(d.orig_base64||d.base64));
-        return;
-      }
-      if(dataBase&&!_fbIsPaused(fbCfg)){
+      caLoadDataAsync(m.id,function(d){
+        if(d&&(d.orig_base64||d.base64)){
+          genThumb(m,'data:'+(d.orig_mt||d.mt||'image/png')+';base64,'+(d.orig_base64||d.base64));
+          return;
+        }
+        if(d&&d.analysisData){
+          generateAnalysisThumb(d.analysisData,function(thumb){
+            if(thumb){caSaveThumb(m.id,thumb);setMeta(function(prev){return prev.slice();});}
+            setTimeout(processNext,100);
+          });
+          return;
+        }
+        if(dataBase&&!_fbIsPaused(fbCfg)){
         fetch(dataBase+'/'+m.id+'.json'+auth).then(function(r){return r.ok?r.json():null;})
         .then(function(fbData){
           if(!fbData){processNext();return;}
@@ -6207,6 +6225,7 @@ function DraftLibrary(props){
         return;
       }
       processNext();
+      }); /* caLoadDataAsync */
     }
     processNext();
   },[]);
