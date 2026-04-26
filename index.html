@@ -6681,8 +6681,8 @@ function DraftLibrary(props){
       }
       return false;  /* 続行 */
     }
-    // 同期OFFまたはFirebase未設定 → ローカルデータのみ
-    if(_fbIsPaused(fbCfg)||!fbCfg.url){
+    // 同期OFFまたはFirebase未設定またはオフライン → ローカルデータのみ
+    if(_fbIsPaused(fbCfg)||!fbCfg.url||!navigator.onLine){
       var d0=caLoadData(id);
       if(handleLegacyImageDraft(d0))return;  /* 旧画像-only draft: 中断 */
       if(d0&&(d0.orig_base64||d0.base64)){onOpen(Object.assign({},d0,extra));return;}
@@ -6692,7 +6692,7 @@ function DraftLibrary(props){
         if(handleLegacyImageDraft(ad))return;  /* 旧画像-only draft: 中断 */
         if(ad&&(ad.orig_base64||ad.base64)){onOpen(Object.assign({},ad,extra));return;}
         if(isJsonOnly(ad)){onOpen(Object.assign({},ad,extra));return;}  /* JSONのみdraft */
-        window.caToast('データが見つかりません（Firebase未設定または同期停止中）','error');
+        window.caToast('データが見つかりません','error');
       });
       return;
     }
@@ -6769,7 +6769,20 @@ function DraftLibrary(props){
           });
         }
         setSyncStatus(null);window.caToast('データが見つかりません','error');
-      }).catch(function(e){setSyncStatus(null);console.error('[openChart] Error:',e);window.caToast('読込失敗: '+(e&&e.message?e.message:'不明なエラー'),'error');});
+      }).catch(function(e){
+        setSyncStatus(null);
+        console.error('[openChart] Error:',e);
+        /* 2026-04-23: fetch失敗時はローカルデータにフォールバック */
+        if(d&&(d.orig_base64||d.base64)){
+          window.caToast('オフラインのためローカルデータで開きます','info');
+          onOpen(Object.assign({},d,extra));return;
+        }
+        if(isJsonOnly(d)){
+          window.caToast('オフラインのためローカルデータで開きます','info');
+          onOpen(Object.assign({},d,extra));return;
+        }
+        window.caToast('読込失敗: '+(e&&e.message?e.message:'不明なエラー'),'error');
+      });
     }); // caLoadDataAsync
   }
 
