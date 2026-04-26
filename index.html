@@ -6439,12 +6439,38 @@ function DraftLibrary(props){
       }).catch(function(e){console.error('fetchFullMeta trash:',e);});
   }
 
+  /* 2026-04-23: オフライン用 — 全チャートデータをIDBにプリフェッチ
+     オンライン時にバックグラウンドで実行し、IDBにないデータをFirebaseから取得してキャッシュ */
+  function prefetchAllData(){
+    if(_fbIsPaused(fbCfg)||!navigator.onLine)return;
+    var dataBase=makeDraftsDataBase();
+    if(!dataBase)return;
+    var allMeta=caLoadMeta();
+    var idx=0;
+    function next(){
+      if(idx>=allMeta.length)return;
+      var m=allMeta[idx]; idx++;
+      caLoadDataAsync(m.id,function(existing){
+        if(existing){next();return;} /* 既にIDBにある → スキップ */
+        fetch(dataBase+'/'+m.id+'.json'+auth)
+          .then(function(r){return r.ok?r.text():null;})
+          .then(function(txt){
+            if(txt){var d;try{d=JSON.parse(txt);}catch(e){}if(d)caSaveData(m.id,d);}
+            next();
+          }).catch(function(){next();});
+      });
+    }
+    /* 初回fetchFullMetaの完了を待ってから開始 (3秒遅延) */
+    setTimeout(next,3000);
+  }
+
   // ── 自動停止コールバック登録 ──
   // ── ポーリング開始 ──
   useEffect(function(){
     if(_fbIsPaused(fbCfg))return;
     setSyncStatus('loading');
     fetchFullMeta(); // 初回はフルメタ取得
+    prefetchAllData(); // オフライン用キャッシュ
     var timer=setInterval(function(){
       
       setSyncStatus('loading');pollFb();
@@ -6692,7 +6718,9 @@ function DraftLibrary(props){
         if(handleLegacyImageDraft(ad))return;  /* 旧画像-only draft: 中断 */
         if(ad&&(ad.orig_base64||ad.base64)){onOpen(Object.assign({},ad,extra));return;}
         if(isJsonOnly(ad)){onOpen(Object.assign({},ad,extra));return;}  /* JSONのみdraft */
-        window.caToast('データが見つかりません','error');
+        window.caToast(!navigator.onLine
+          ?'オフラインのためデータを取得できません。オンラインで一度開くとキャッシュされます'
+          :'データが見つかりません','error');
       });
       return;
     }
