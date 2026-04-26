@@ -4254,24 +4254,47 @@ function ImageAnnotator(props){
       function doActualWrite(){
         var draftBase=cfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts';
         var draftDataBase=cfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
-        /* 2026-04-21: 画像mode撤去後のサムネ取得 (img._thumb が空でも、
-           analysisDataから generateAnalysisThumb で生成、localStorage キャッシュ優先) */
-        var cachedThumb=caLoadThumb(draftId);
-        var needGen=!cachedThumb && !!analysisDataRef.current;
+        /* 2026-04-26: サムネ修正 A-E
+           A. PUT→PATCH (既存キー thumbUrl/analysisDate を破壊しない)
+           B. autoSave内で uploadThumbToStorage → thumbUrl を PATCH body に含める
+           C. analysisDate を PATCH body に含める
+           D. thumb(base64) を meta に書かない (IDBのみ)
+           E. 毎回 generateAnalysisThumb で最新サムネ生成 */
         var _nowThumb=Date.now();
-        var _needUp=!lastThumbUrlRef.current||(_nowThumb-lastThumbUploadAtRef.current>30000);
+        var _shouldUpload=cfg2.storageBucket&&
+          (!lastThumbUploadAtRef.current||(_nowThumb-lastThumbUploadAtRef.current>30000));
         function proceedWithThumb(thumb){
-          if(thumb && !cachedThumb)caSaveThumb(draftId,thumb);
-          var metaDb={ticker:img._ticker||'',name:img._name||img.name||'chart',savedAt:savedAt};
-          if(thumb)metaDb.thumb=thumb;
-          var metaBody=JSON.stringify(metaDb);fetch(draftBase+'/'+draftId+'.json'+auth,{method:'PUT',
-            headers:{'Content-Type':'application/json'},body:metaBody})
-            .catch(function(e){console.error('draft meta sync:',e);});
+          if(thumb)caSaveThumb(draftId,thumb);  /* ローカル IDB のみ */
+          var analysisDate=(analysisDataRef.current&&analysisDataRef.current.date)||'';
+          var metaPatch={
+            ticker:img._ticker||'',
+            name:img._name||img.name||'chart',
+            savedAt:savedAt
+          };
+          if(analysisDate)metaPatch.analysisDate=analysisDate;
+          function sendPatch(){
+            fetch(draftBase+'/'+draftId+'.json'+auth,{method:'PATCH',
+              headers:{'Content-Type':'application/json'},body:JSON.stringify(metaPatch)})
+              .catch(function(e){console.error('draft meta sync:',e);});
+          }
+          if(_shouldUpload&&thumb){
+            uploadThumbToStorage(cfg2,draftId,thumb).then(function(url){
+              if(url){
+                metaPatch.thumbUrl=url;
+                lastThumbUploadAtRef.current=_nowThumb;
+                lastThumbUrlRef.current=url;
+              }
+              sendPatch();
+            }).catch(function(){sendPatch();});
+          } else {
+            sendPatch();  /* PATCH なので既存 thumbUrl は保持される */
+          }
         }
-        if(needGen){
+        /* E: 毎回再生成 (cachedThumb優先ロジック撤去) */
+        if(analysisDataRef.current){
           generateAnalysisThumb(analysisDataRef.current,function(thumb){proceedWithThumb(thumb||'');});
         } else {
-          proceedWithThumb(cachedThumb||img._thumb||'');
+          proceedWithThumb('');
         }
         // data — 2026-04-20 C8: _v を同梱 (polling側で競合検出に利用)
         var draftData={name:img._name||img.name||'chart',_v:savedAt};
