@@ -4259,21 +4259,30 @@ function ImageAnnotator(props){
         var cachedThumb=caLoadThumb(draftId);
         var needGen=!cachedThumb && !!analysisDataRef.current;
         var _nowThumb=Date.now();
+        /* _needUp: 30秒間隔で Storage upload を制限 (ローカル生成は毎回行う) */
         var _needUp=!lastThumbUrlRef.current||(_nowThumb-lastThumbUploadAtRef.current>30000);
         function proceedWithThumb(thumb){
-          if(thumb && !cachedThumb)caSaveThumb(draftId,thumb);  /* localStorageキャッシュ */
+          if(thumb)caSaveThumb(draftId,thumb);  /* localStorageキャッシュ更新 (毎回) */
           var _thumbP=(_needUp&&thumb)?uploadThumbToStorage(cfg2,draftId,thumb):Promise.resolve(lastThumbUrlRef.current);
-          // meta
+          // meta — 2026-04-26: PUT→PATCH 変更
+          // PUT は meta オブジェクトを丸ごと上書きし、thumbUrl 無しのときに
+          // 既存 thumbUrl を消してしまう問題があった。PATCH なら指定フィールドのみ更新。
           _thumbP.then(function(thumbUrl){
             if(_needUp&&thumbUrl){lastThumbUploadAtRef.current=_nowThumb;lastThumbUrlRef.current=thumbUrl;}
             var metaDb={ticker:img._ticker||'',name:img._name||img.name||'chart',savedAt:savedAt};
             if(thumbUrl)metaDb.thumbUrl=thumbUrl;
-            var metaBody=JSON.stringify(metaDb);fetch(draftBase+'/'+draftId+'.json'+auth,{method:'PUT',
+            var metaBody=JSON.stringify(metaDb);
+            fetch(draftBase+'/'+draftId+'.json'+auth,{method:'PATCH',
               headers:{'Content-Type':'application/json'},body:metaBody})
               .catch(function(e){console.error('draft meta sync:',e);});
           });
         }
-        if(needGen){
+        /* 2026-04-26: 編集中の analysisData があれば毎回サムネを再生成 (古いサムネ残存防止) */
+        if(analysisDataRef.current){
+          generateAnalysisThumb(analysisDataRef.current,function(thumb){
+            proceedWithThumb(thumb||cachedThumb||img._thumb||'');
+          });
+        } else if(needGen){
           generateAnalysisThumb(analysisDataRef.current,function(thumb){proceedWithThumb(thumb||'');});
         } else {
           proceedWithThumb(cachedThumb||img._thumb||'');
@@ -6548,7 +6557,9 @@ function DraftLibrary(props){
     thumbP.then(function(thumbUrl){
       var metaDb={ticker:metaItem.ticker,name:metaItem.name,savedAt:metaItem.savedAt};
       if(thumbUrl)metaDb.thumbUrl=thumbUrl;
-      var body=JSON.stringify(metaDb);return fetch(base+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:body});
+      var body=JSON.stringify(metaDb);
+      // 2026-04-26: PUT→PATCH 変更で thumbUrl などの既存フィールドを保護
+      return fetch(base+'/'+id+'.json'+auth,{method:'PATCH',headers:{'Content-Type':'application/json'},body:body});
     }).then(function(){
       var tsBase=fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-ts';
       var tsBody=JSON.stringify({t:metaItem.savedAt||Date.now()});fetch(tsBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:tsBody})
