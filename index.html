@@ -976,13 +976,51 @@ var TOOLS=[
   {id:"arrow", label:"矢印"},
   {id:"rect",  label:"四角"},
   {id:"circle",label:"丸"},
+  {id:"ruler", label:"📏定規"},
+  {id:"zone",  label:"▬ゾーン"},
+  {id:"trade", label:"▼▲トレード"},
   {id:"marker",label:"マーカー"},
   {id:"freehand",label:"フリー"},
   {id:"text",  label:"Ｔテキスト"},
+  {id:"snippet",label:"💬スニペット"},
   {id:"lasso", label:"選択・変形"},
   {id:"lassoFree", label:"投げ縄"},
   {id:"eraser",label:"消しゴム"},
 ];
+/* 2026-04-26: スニペット定義 (localStorage永続化) */
+var CA_SNIPPETS_KEY='ca_snippets_v1';
+var CA_DEFAULT_SNIPPETS=[
+  'EMA9タッチ見送り','出来高不足','VWAP上で見送り','損切り遅れ',
+  'エントリー◎','利確OK','逆行','ノイズ','強トレンド日','寄り天',
+  '9:15前見送り','後場見送り','EMA乖離大','板薄い'
+];
+function caLoadSnippets(){
+  try{var v=JSON.parse(localStorage.getItem(CA_SNIPPETS_KEY));if(v&&v.length)return v;}catch(e){}
+  return CA_DEFAULT_SNIPPETS.slice();
+}
+function caSaveSnippets(arr){
+  try{localStorage.setItem(CA_SNIPPETS_KEY,JSON.stringify(arr));}catch(e){}
+}
+/* 2026-04-26: 銘柄別メモ (localStorage + Firebase) */
+var CA_TICKER_NOTES_KEY='ca_ticker_notes_v1';
+function caLoadTickerNotes(){
+  try{var v=JSON.parse(localStorage.getItem(CA_TICKER_NOTES_KEY));if(v&&typeof v==='object')return v;}catch(e){}
+  return {};
+}
+function caSaveTickerNotes(obj){
+  try{localStorage.setItem(CA_TICKER_NOTES_KEY,JSON.stringify(obj));}catch(e){}
+}
+function caGetTickerNote(ticker){
+  if(!ticker)return '';
+  var notes=caLoadTickerNotes();
+  return notes[ticker]||'';
+}
+function caSetTickerNote(ticker,text){
+  if(!ticker)return;
+  var notes=caLoadTickerNotes();
+  if(text)notes[ticker]=text; else delete notes[ticker];
+  caSaveTickerNotes(notes);
+}
 
 /* ─── DisplaySettingsModal (表示・動作設定) ──────────────────
    2026-04-20: FbSettingsModal から独立、今後拡張予定の設定群をまとめる
@@ -1652,10 +1690,12 @@ function DataChart(props){
           color:drawColor,width:drawWidth,opacity:drawOpacity};
         drawAnalysisStrokeExt(ctx,preview,minToXloc,pToYloc,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
       } else {
-        // 2点ツール: line/dotted/arrow/rect/circle/marker
+        // 2点ツール: line/dotted/arrow/rect/circle/marker/ruler/zone
         var preview2={type:drawTool,
           anchors:[{tm:d.sTM,p:d.sP},{tm:d.cTM,p:d.cP}],
           color:drawColor,width:drawWidth,opacity:drawOpacity};
+        if(drawTool==='ruler')preview2._tf=tf;
+        if(drawTool==='trade'){preview2._tf=tf;preview2._dir=props.tradeDir||'short';}
         drawAnalysisStroke(ctx,preview2,minToXloc,pToYloc,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
       }
     }
@@ -2181,12 +2221,17 @@ function DataChart(props){
       if(tp==='horizontal'){
         var y=pToYloc(s.anchors[0].p);
         if(Math.abs(cy-y)<=TOL)return {side:clickSide,idx:i};
-      } else if((tp==='line'||tp==='dotted'||tp==='arrow'||tp==='marker')&&s.anchors.length>=2){
+      } else if((tp==='line'||tp==='dotted'||tp==='arrow'||tp==='marker'||tp==='ruler'||tp==='trade')&&s.anchors.length>=2){
         var a1=s.anchors[0], a2=s.anchors[1];
         var x1=minToXloc(a1.tm), y1=pToYloc(a1.p);
         var x2=minToXloc(a2.tm), y2=pToYloc(a2.p);
         var tol=tp==='marker'?(s.width||2)*5+4:TOL;
         if(distPtToSeg(cx,cy,x1,y1,x2,y2)<=tol)return {side:clickSide,idx:i};
+      } else if(tp==='zone'&&s.anchors.length>=2){
+        /* ゾーン: 価格帯の上下境界線付近 or 帯の内部をクリック */
+        var zy1=pToYloc(Math.max(s.anchors[0].p,s.anchors[1].p));
+        var zy2=pToYloc(Math.min(s.anchors[0].p,s.anchors[1].p));
+        if(cy>=zy1-TOL&&cy<=zy2+TOL&&cx>=L.padL&&cx<=L.padL+L.chartW)return {side:clickSide,idx:i};
       } else if(tp==='rect'&&s.anchors.length>=2){
         var a1=s.anchors[0], a2=s.anchors[1];
         var x1=minToXloc(a1.tm), y1=pToYloc(a1.p);
@@ -2483,9 +2528,24 @@ function DataChart(props){
       drawCrosshair();
       return;
     }
+    /* 2026-04-26: スニペット — 選択中テキストを即配置 (テキストエディタ不要) */
+    if(drawTool==='snippet'){
+      var snipTxt=props.snippetText;
+      if(snipTxt&&onStrokeAdd){
+        var snipStroke={id:'s_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),
+          type:'text',side:tpSide,
+          anchors:[{tm:tp.tm,p:tp.p}],
+          text:snipTxt,
+          color:drawColor,width:1,opacity:drawOpacity,
+          fontSize:props.drawFontSize||15,fontBold:!!props.drawFontBold};
+        onStrokeAdd(snipStroke);
+      }
+      return;
+    }
     // 2点ツール: ドラッグ開始 (C6: side 記録)
     if(drawTool==='line'||drawTool==='dotted'||drawTool==='arrow'||
-       drawTool==='rect'||drawTool==='circle'||drawTool==='marker'){
+       drawTool==='rect'||drawTool==='circle'||drawTool==='marker'||
+       drawTool==='ruler'||drawTool==='zone'||drawTool==='trade'){
       drawRef.current={on:true, side:tpSide, sTM:tp.tm, sP:tp.p, cTM:tp.tm, cP:tp.p};
       drawCrosshair();
     }
@@ -2757,6 +2817,10 @@ function DataChart(props){
             type:drawTool,side:commitSide,
             anchors:[{tm:d.sTM,p:d.sP},{tm:d.cTM,p:d.cP}],
             color:drawColor,width:drawWidth,opacity:drawOpacity};
+          /* 2026-04-26: 定規に _tf を付与 (ラベルのバー本数計算用) */
+          if(drawTool==='ruler')stroke._tf=tf;
+          /* 2026-04-26: トレードに _tf と _dir を付与 */
+          if(drawTool==='trade'){stroke._tf=tf;stroke._dir=props.tradeDir||'short';}
           if(onStrokeAdd)onStrokeAdd(stroke);
         }
       }
@@ -3670,6 +3734,115 @@ function drawAnalysisStroke(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,priceTo
     ctx.lineCap='butt';
     ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
     ctx.lineCap='butt';
+  } else if(s.type==='ruler'){
+    /* 2026-04-26: 定規ツール — 点線 + 両端ドット + 中央ラベル (値幅/分数) */
+    var dashR=Math.max(4*Z, w*2);
+    ctx.setLineDash([dashR,dashR]);
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+    ctx.setLineDash([]);
+    /* 両端ドット */
+    var dotR=Math.max(3*Z,w);
+    ctx.beginPath(); ctx.arc(x1,y1,dotR,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x2,y2,dotR,0,Math.PI*2); ctx.fill();
+    /* 値幅・分数ラベル */
+    var dp=Math.abs(s.anchors[1].p-s.anchors[0].p);
+    var dtm=Math.abs(s.anchors[1].tm-s.anchors[0].tm);
+    var step=(s._tf==='5m')?5:1;
+    var barCount=Math.round(dtm/step);
+    var labelR=(dp>=1?dp.toFixed(1)+'円':'') + (dp>=1&&barCount>0?' / ':'') + (barCount>0?barCount+'本':'');
+    if(!labelR)labelR='0';
+    var mx=(x1+x2)/2, my=(y1+y2)/2;
+    var lblFsR=Math.max(10*Z,10);
+    ctx.font='bold '+lblFsR+'px -apple-system,Helvetica,sans-serif';
+    ctx.textBaseline='bottom'; ctx.textAlign='center';
+    var lblWR=ctx.measureText(labelR).width+8*Z;
+    var lblHR=lblFsR+6*Z;
+    ctx.globalAlpha=0.85;
+    ctx.fillStyle='#1a1a2e';
+    ctx.fillRect(mx-lblWR/2,my-lblHR-2*Z,lblWR,lblHR);
+    ctx.fillStyle=col;
+    ctx.globalAlpha=1;
+    ctx.fillText(labelR,mx,my-4*Z);
+  } else if(s.type==='zone'){
+    /* 2026-04-26: ゾーンハイライト — 全幅半透明帯 */
+    var zy1=Math.min(y1,y2), zy2=Math.max(y1,y2);
+    var zoneH=Math.max(zy2-zy1,1);
+    ctx.globalAlpha=op*0.18;
+    ctx.fillStyle=col;
+    ctx.fillRect(padL,zy1,chartW,zoneH);
+    /* 上下の境界線 */
+    ctx.globalAlpha=op*0.6;
+    ctx.lineWidth=Math.max(1,w*0.5);
+    ctx.setLineDash([4*Z,3*Z]);
+    ctx.beginPath(); ctx.moveTo(padL,zy1); ctx.lineTo(padL+chartW,zy1); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(padL,zy2); ctx.lineTo(padL+chartW,zy2); ctx.stroke();
+    ctx.setLineDash([]);
+    /* 右端に価格幅ラベル */
+    var zDp=Math.abs(s.anchors[1].p-s.anchors[0].p);
+    if(zDp>=0.5){
+      var zLbl=zDp.toFixed(1)+'円';
+      var zFs=Math.max(9*Z,9);
+      ctx.font=zFs+'px -apple-system,Helvetica,sans-serif';
+      ctx.textBaseline='middle'; ctx.textAlign='right';
+      ctx.globalAlpha=op*0.9;
+      ctx.fillStyle=col;
+      ctx.fillText(zLbl,padL+chartW-4,(zy1+zy2)/2);
+    }
+  } else if(s.type==='trade'){
+    /* 2026-04-26: トレードマーカー — エントリー▼/イグジット▲ + 接続線 + P&Lラベル */
+    var isShort=(s._dir||'short')==='short';
+    var entryP=s.anchors[0].p, exitP=s.anchors[1].p;
+    var pnl=isShort?(entryP-exitP):(exitP-entryP);
+    var isWin=pnl>0;
+    var triH=Math.max(8*Z,8), triW=Math.max(6*Z,6);
+    /* 接続点線 */
+    var dashT=Math.max(3*Z,3);
+    ctx.setLineDash([dashT,dashT]);
+    ctx.globalAlpha=op*0.5;
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha=op;
+    /* エントリーマーカー (anchor[0]) */
+    ctx.fillStyle=isShort?'#ef4444':'#22c55e'; /* short=赤▼, long=緑▲ */
+    ctx.beginPath();
+    if(isShort){
+      /* ▼ 下三角 */
+      ctx.moveTo(x1,y1+triH); ctx.lineTo(x1-triW,y1-triH*0.3); ctx.lineTo(x1+triW,y1-triH*0.3);
+    } else {
+      /* ▲ 上三角 */
+      ctx.moveTo(x1,y1-triH); ctx.lineTo(x1-triW,y1+triH*0.3); ctx.lineTo(x1+triW,y1+triH*0.3);
+    }
+    ctx.closePath(); ctx.fill();
+    /* イグジットマーカー (anchor[1]) */
+    ctx.fillStyle=isShort?'#22c55e':'#ef4444'; /* short=緑▲, long=赤▼ */
+    ctx.beginPath();
+    if(isShort){
+      /* ▲ 上三角 */
+      ctx.moveTo(x2,y2-triH); ctx.lineTo(x2-triW,y2+triH*0.3); ctx.lineTo(x2+triW,y2+triH*0.3);
+    } else {
+      /* ▼ 下三角 */
+      ctx.moveTo(x2,y2+triH); ctx.lineTo(x2-triW,y2-triH*0.3); ctx.lineTo(x2+triW,y2-triH*0.3);
+    }
+    ctx.closePath(); ctx.fill();
+    /* P&Lラベル */
+    var dtmT=Math.abs(s.anchors[1].tm-s.anchors[0].tm);
+    var stepT=(s._tf==='5m')?5:1;
+    var barCountT=Math.round(dtmT/stepT);
+    var pnlSign=pnl>=0?'+':'';
+    var pnlTxt=pnlSign+pnl.toFixed(1)+'円';
+    if(barCountT>0)pnlTxt+=' / '+barCountT+'本';
+    var mx2=(x1+x2)/2, my2=(y1+y2)/2;
+    var lblFsT=Math.max(11*Z,11);
+    ctx.font='bold '+lblFsT+'px -apple-system,Helvetica,sans-serif';
+    ctx.textBaseline='bottom'; ctx.textAlign='center';
+    var lblWT=ctx.measureText(pnlTxt).width+10*Z;
+    var lblHT=lblFsT+6*Z;
+    ctx.globalAlpha=0.9;
+    ctx.fillStyle=isWin?'#14532d':'#7f1d1d';
+    ctx.fillRect(mx2-lblWT/2,my2-lblHT-3*Z,lblWT,lblHT);
+    ctx.fillStyle=isWin?'#4ade80':'#fca5a5';
+    ctx.globalAlpha=1;
+    ctx.fillText(pnlTxt,mx2,my2-5*Z);
   }
   ctx.globalAlpha=1;
 }
@@ -3754,10 +3927,18 @@ function getHandleAnchors(s){
   if(!s||!s.anchors||s.anchors.length<2)return [];
   var tp=s.type||s.tool;
   var a1=s.anchors[0], a2=s.anchors[1];
-  if(tp==='line'||tp==='dotted'||tp==='arrow'||tp==='marker'){
+  if(tp==='line'||tp==='dotted'||tp==='arrow'||tp==='marker'||tp==='ruler'||tp==='trade'){
     return [
       {id:'p1', tm:a1.tm, p:a1.p, cur:'move'},
       {id:'p2', tm:a2.tm, p:a2.p, cur:'move'}
+    ];
+  }
+  if(tp==='zone'){
+    /* ゾーン: 上下の価格レベルのみ調整 (tmは中央固定) */
+    var tmMidZ=(a1.tm+a2.tm)/2;
+    return [
+      {id:'p1', tm:tmMidZ, p:a1.p, cur:'ns-resize'},
+      {id:'p2', tm:tmMidZ, p:a2.p, cur:'ns-resize'}
     ];
   }
   if(tp==='rect'||tp==='circle'){
@@ -3783,9 +3964,15 @@ function applyHandleTransform(s, handleId, dtm, dp){
   if(!s||!s.anchors||s.anchors.length<2)return s;
   var a1=s.anchors[0], a2=s.anchors[1];
   var tp=s.type||s.tool;
-  if(tp==='line'||tp==='dotted'||tp==='arrow'||tp==='marker'){
+  if(tp==='line'||tp==='dotted'||tp==='arrow'||tp==='marker'||tp==='ruler'||tp==='trade'){
     if(handleId==='p1')return Object.assign({},s,{anchors:[{tm:a1.tm+dtm,p:a1.p+dp},a2]});
     if(handleId==='p2')return Object.assign({},s,{anchors:[a1,{tm:a2.tm+dtm,p:a2.p+dp}]});
+    return s;
+  }
+  if(tp==='zone'){
+    /* ゾーン: 価格レベルのみ移動 (tm は変更しない) */
+    if(handleId==='p1')return Object.assign({},s,{anchors:[{tm:a1.tm,p:a1.p+dp},a2]});
+    if(handleId==='p2')return Object.assign({},s,{anchors:[a1,{tm:a2.tm,p:a2.p+dp}]});
     return s;
   }
   if(tp==='rect'||tp==='circle'){
@@ -3853,8 +4040,8 @@ function drawSelectionHighlight(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,pri
     var PAD=4;
     ctx.strokeRect(x-PAD, y-PAD, mW+PAD*2, tH+PAD*2);
   } else if(s.anchors.length>=2){
-    /* 2026-04-22: line/dotted/arrow は枠線不要 (形状が明瞭で冗長) — ハンドル(○)のみ表示 */
-    if(tp!=='line'&&tp!=='dotted'&&tp!=='arrow'){
+    /* 2026-04-22: line/dotted/arrow/ruler/zone は枠線不要 (形状が明瞭で冗長) — ハンドル(○)のみ表示 */
+    if(tp!=='line'&&tp!=='dotted'&&tp!=='arrow'&&tp!=='ruler'&&tp!=='zone'&&tp!=='trade'){
       // bounding box
       var minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
       s.anchors.forEach(function(a){
@@ -4024,6 +4211,47 @@ function ImageAnnotator(props){
   var st7=useState(15);      var fontSize=st7[0],setFontSize=st7[1];
   var st8=useState("15");    var fontSizeStr=st8[0],setFontSizeStr=st8[1];
   var st9=useState(false);   var fontBold=st9[0],setFontBold=st9[1];
+  /* 2026-04-26: スニペット機能 */
+  var stSnips=useState(caLoadSnippets); var snippets=stSnips[0],setSnippets=stSnips[1];
+  var stSelSnip=useState(0); var selSnipIdx=stSelSnip[0],setSelSnipIdx=stSelSnip[1]; /* 選択中スニペットindex */
+  var stSnipEdit=useState(false); var snippetEditing=stSnipEdit[0],setSnippetEditing=stSnipEdit[1];
+  /* 2026-04-26: トレードマーカー方向 (short=空売り/long=買い) */
+  var stTradeDir=useState('short'); var tradeDir=stTradeDir[0],setTradeDir=stTradeDir[1];
+  /* 2026-04-26: 銘柄別メモパネル */
+  var tickerForNote=img._ticker||(analysisData&&analysisData.ticker)||'';
+  var stTNote=useState(function(){return caGetTickerNote(tickerForNote);}); var tickerNote=stTNote[0],setTickerNote=stTNote[1];
+  var stTNoteOpen=useState(false); var tickerNoteOpen=stTNoteOpen[0],setTickerNoteOpen=stTNoteOpen[1];
+  var tickerNoteSaveTimerRef=useRef(null);
+  function updateTickerNote(val){
+    setTickerNote(val);
+    if(tickerNoteSaveTimerRef.current)clearTimeout(tickerNoteSaveTimerRef.current);
+    tickerNoteSaveTimerRef.current=setTimeout(function(){
+      caSetTickerNote(tickerForNote,val);
+      /* Firebase にも保存 */
+      var cfg=props.fbCfg;
+      if(!_fbIsPaused(cfg)&&cfg.url&&tickerForNote){
+        var auth=cfg.secret?'?auth='+cfg.secret:'';
+        var noteUrl=cfg.url.replace(/\/$/,'')+'/chart-annotator-ticker-notes/'+encodeURIComponent(tickerForNote)+'.json'+auth;
+        fetch(noteUrl,{method:'PUT',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({note:val,updatedAt:Date.now()})}).catch(function(){});
+      }
+    },1000);
+  }
+  /* マウント時にFirebaseからも取得 (ローカルより新しければ上書き) */
+  useEffect(function(){
+    var cfg=props.fbCfg;
+    if(!_fbIsPaused(cfg)&&cfg.url&&tickerForNote){
+      var auth=cfg.secret?'?auth='+cfg.secret:'';
+      var noteUrl=cfg.url.replace(/\/$/,'')+'/chart-annotator-ticker-notes/'+encodeURIComponent(tickerForNote)+'.json'+auth;
+      fetch(noteUrl).then(function(r){return r.ok?r.json():null;}).then(function(d){
+        if(d&&d.note!=null){
+          setTickerNote(d.note);
+          caSetTickerNote(tickerForNote,d.note);
+        }
+      }).catch(function(){});
+    }
+    return function(){if(tickerNoteSaveTimerRef.current)clearTimeout(tickerNoteSaveTimerRef.current);};
+  },[]);
   /* 2026-04-20 Step3: 画像mode state撤去 (textInputState/floatPos) */
   /* 分析モード用 state */
   var stATI=useState(null);  var analysisTextInput=stATI[0],setAnalysisTextInput=stATI[1];
@@ -4604,25 +4832,29 @@ function ImageAnnotator(props){
   // ── switchTool ──
   function switchTool(t){
     // 現ツールの設定を保存
-    var noSave=["pan","eraser","lasso","lassoFree"];
+    var noSave=["pan","eraser","lasso","lassoFree","snippet"];
     if(noSave.indexOf(tool)<0){
       toolMemRef.current[tool]={color:color,lineW:lineW,opacity:opacity,fontSize:fontSize,fontBold:fontBold};
     }
     // marker離脱時のリセット
     if(tool==="marker"&&t!=="marker"){setLineW(2);setOpacity(1);}
+    // zone離脱時のリセット
+    if(tool==="zone"&&t!=="zone"){setLineW(2);setOpacity(1);}
     // dotted離脱時: 水平スナップを元に戻す
     if(tool==="dotted"&&t!=="dotted"){setHoriz(prevHorizRef.current);}
     setTool(t);
     /* 2026-04-20 Step3: 画像mode選択cleanup撤去 (analysis selectedIdx は DataChart 管理) */
     // marker進入時の固定設定
     if(t==="marker"){setLineW(3);setOpacity(0.7);}
+    // zone進入時の固定設定
+    if(t==="zone"){setLineW(2);setOpacity(0.5);}
     // dotted進入時: 水平スナップ自動ON
     if(t==="dotted"&&tool!=="dotted"){prevHorizRef.current=horiz;setHoriz(true);}
     // 保存済み設定の復元
     var mem=toolMemRef.current[t];
     if(mem&&noSave.indexOf(t)<0){
       setColor(mem.color);
-      if(t!=="marker"){setLineW(mem.lineW);setOpacity(mem.opacity);}
+      if(t!=="marker"&&t!=="zone"){setLineW(mem.lineW);setOpacity(mem.opacity);}
       if(t==="text"){setFontSize(mem.fontSize);setFontSizeStr(String(mem.fontSize));}
     }
   }
@@ -4656,10 +4888,12 @@ function ImageAnnotator(props){
         /* 分析モード時: 描画ツール */
         analysisData && ce("div",{style:{display:"flex",gap:IS_TOUCH?3:5,flexWrap:"nowrap",flexShrink:0}},
           TOOLS.map(function(t){
+            var activeBg=t.id==="eraser"?"#E65100":t.id==="lasso"?"#007AFF":t.id==="lassoFree"?"#0ea5e9":t.id==="text"?"#D4AC0D":t.id==="ruler"?"#10b981":t.id==="zone"?"#d97706":t.id==="snippet"?"#8b5cf6":t.id==="trade"?"#dc2626":"#6366F1";
+            var activeFg=(t.id==="text"||t.id==="zone")?"#1a1a1a":"#fff";
             return ce("button",{key:'ana_'+t.id,onClick:function(){switchTool(t.id);},
               style:Object.assign({},TS,{fontSize:IS_TOUCH?11:12,padding:IS_TOUCH?"5px 7px":"6px 10px",
-                background:tool===t.id?(t.id==="eraser"?"#E65100":t.id==="lasso"?"#007AFF":t.id==="lassoFree"?"#0ea5e9":t.id==="text"?"#D4AC0D":"#6366F1"):"#2a2a2a",
-                color:tool===t.id?(t.id==="text"?"#1a1a1a":"#fff"):"#aaa"})},
+                background:tool===t.id?activeBg:"#2a2a2a",
+                color:tool===t.id?activeFg:"#aaa"})},
               t.label);
           })
         ),
@@ -4822,8 +5056,106 @@ function ImageAnnotator(props){
                 background:fontBold?"#D4AC0D":"#2a2a2a",color:fontBold?"#1a1a1a":"#aaa",border:"none"}},"B")
           )
         )
+      ),
+      /* Row 3: スニペットパレット (snippetツール選択時のみ表示) */
+      (analysisData && tool==='snippet') && ce("div",{
+        style:{display:"flex",gap:4,alignItems:"center",padding:"5px 8px",
+        flexWrap:"nowrap",overflowX:"auto",overflowY:"hidden",WebkitOverflowScrolling:"touch",
+        borderTop:"1px solid #2a2a2a",background:"#1a1025",touchAction:"pan-x"}},
+        snippets.map(function(sn,si){
+          return ce("button",{key:'snip_'+si,
+            onClick:function(){setSelSnipIdx(si);},
+            style:{padding:"4px 10px",fontSize:11,fontWeight:selSnipIdx===si?700:400,
+              borderRadius:12,border:selSnipIdx===si?"2px solid #8b5cf6":"1px solid #555",
+              background:selSnipIdx===si?"#8b5cf6":"#2a2a2a",
+              color:selSnipIdx===si?"#fff":"#ccc",
+              cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}},
+            sn);
+        }),
+        /* 区切り */
+        ce("div",{style:{width:1,height:18,background:"#444",flexShrink:0,margin:"0 4px"}}),
+        /* 編集ボタン */
+        ce("button",{onClick:function(){setSnippetEditing(!snippetEditing);},
+          style:{padding:"4px 8px",fontSize:11,borderRadius:8,border:"1px solid #555",
+            background:snippetEditing?"#4c1d95":"#2a2a2a",color:snippetEditing?"#c4b5fd":"#aaa",
+            cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}},
+          snippetEditing?"✓ 完了":"✏ 編集")
+      ),
+      /* スニペット編集パネル (編集モード時のみ) */
+      (analysisData && tool==='snippet' && snippetEditing) && ce("div",{
+        style:{display:"flex",flexDirection:"column",gap:4,padding:"6px 10px",
+        borderTop:"1px solid #2a2a2a",background:"#0f0a1a",maxHeight:140,overflowY:"auto",flexShrink:0}},
+        snippets.map(function(sn,si){
+          return ce("div",{key:'snipe_'+si,style:{display:"flex",gap:4,alignItems:"center"}},
+            ce("span",{style:{fontSize:11,color:"#ccc",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},sn),
+            ce("button",{onClick:function(){
+              var nArr=snippets.slice(); nArr.splice(si,1);
+              setSnippets(nArr); caSaveSnippets(nArr);
+              if(selSnipIdx>=nArr.length&&nArr.length>0)setSelSnipIdx(nArr.length-1);
+            },style:{padding:"2px 8px",fontSize:10,borderRadius:4,border:"none",
+              background:"#7f1d1d",color:"#fca5a5",cursor:"pointer",flexShrink:0}},"✕")
+          );
+        }),
+        ce("div",{style:{display:"flex",gap:4,alignItems:"center",marginTop:2}},
+          ce("input",{id:"ca_snip_add_input",type:"text",placeholder:"新しいスニペットを追加…",
+            onKeyDown:function(e){
+              if(e.key==='Enter'){
+                var v=e.target.value.trim();
+                if(v){var nArr=snippets.concat([v]);setSnippets(nArr);caSaveSnippets(nArr);e.target.value='';}
+              }
+            },
+            style:{flex:1,padding:"4px 8px",fontSize:11,borderRadius:6,border:"1px solid #444",
+              background:"#1a1a2e",color:"#eee",outline:"none",fontFamily:"inherit"}}),
+          ce("button",{onClick:function(){
+            var inp=document.getElementById('ca_snip_add_input');
+            if(inp&&inp.value.trim()){
+              var nArr=snippets.concat([inp.value.trim()]);setSnippets(nArr);caSaveSnippets(nArr);inp.value='';
+            }
+          },style:{padding:"4px 10px",fontSize:11,borderRadius:6,border:"none",
+            background:"#8b5cf6",color:"#fff",cursor:"pointer",fontWeight:700,flexShrink:0}},"+追加")
+        )
+      ),
+      /* Row 4: トレード方向切替 (tradeツール選択時のみ表示) */
+      (analysisData && tool==='trade') && ce("div",{
+        style:{display:"flex",gap:6,alignItems:"center",padding:"5px 10px",
+        borderTop:"1px solid #2a2a2a",background:"#1a0a0a"}},
+        ce("span",{style:{fontSize:11,color:"#888",flexShrink:0}},"方向:"),
+        ce("button",{onClick:function(){setTradeDir('short');},
+          style:{padding:"4px 12px",fontSize:11,fontWeight:700,borderRadius:8,
+            border:tradeDir==='short'?"2px solid #ef4444":"1px solid #555",
+            background:tradeDir==='short'?"#991b1b":"#2a2a2a",
+            color:tradeDir==='short'?"#fca5a5":"#aaa",cursor:"pointer",flexShrink:0}},
+          "▼ 空売り"),
+        ce("button",{onClick:function(){setTradeDir('long');},
+          style:{padding:"4px 12px",fontSize:11,fontWeight:700,borderRadius:8,
+            border:tradeDir==='long'?"2px solid #22c55e":"1px solid #555",
+            background:tradeDir==='long'?"#14532d":"#2a2a2a",
+            color:tradeDir==='long'?"#86efac":"#aaa",cursor:"pointer",flexShrink:0}},
+          "▲ 買い"),
+        ce("span",{style:{fontSize:10,color:"#666",marginLeft:8}},
+          tradeDir==='short'?'始点=売りエントリー → 終点=買戻し':'始点=買いエントリー → 終点=売り')
       )
     ), /* end toolbar */
+
+    /* ── 銘柄別メモバー (2026-04-26) ── */
+    tickerForNote&&ce("div",{style:{background:"#0d1117",borderBottom:"1px solid #1e2d3d",flexShrink:0}},
+      ce("div",{onClick:function(){setTickerNoteOpen(!tickerNoteOpen);},
+        style:{display:"flex",alignItems:"center",gap:6,padding:"4px 10px",cursor:"pointer"}},
+        ce("span",{style:{fontSize:11,color:"#58a6ff"}},tickerNoteOpen?"▾":"▸"),
+        ce("span",{style:{fontSize:11,fontWeight:700,color:"#58a6ff"}},"📝 "+tickerForNote+" メモ"),
+        !tickerNoteOpen&&tickerNote&&ce("span",{style:{fontSize:10,color:"#8b949e",flex:1,
+          overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginLeft:6}},tickerNote)
+      ),
+      tickerNoteOpen&&ce("div",{style:{padding:"0 10px 6px"}},
+        ce("textarea",{value:tickerNote,
+          onChange:function(e){updateTickerNote(e.target.value);},
+          placeholder:tickerForNote+" の特徴・注意点をメモ…",
+          style:{width:"100%",minHeight:48,maxHeight:120,padding:"6px 8px",fontSize:12,
+            background:"#161b22",border:"1px solid #30363d",borderRadius:6,
+            color:"#e6edf3",resize:"vertical",outline:"none",
+            fontFamily:"-apple-system,'Helvetica Neue',sans-serif",lineHeight:1.5}})
+      )
+    ),
 
     /* ── 別端末更新通知バナー ── */
     remoteUpdate&&ce("div",{style:{
@@ -4947,6 +5279,8 @@ function ImageAnnotator(props){
               refStrokes:(refAnalysis&&refAnalysis.analysisStrokes)?(refAnalysis.analysisStrokes[analysisTf]||[]):null,
               drawTool:tool, drawColor:color, drawWidth:lineW, drawOpacity:opacity,
               drawFontSize:fontSize, drawFontBold:fontBold,
+              snippetText:(tool==='snippet'&&snippets.length)?snippets[selSnipIdx%snippets.length]:'',
+              tradeDir:tradeDir,
               horiz:horiz,
               /* F2: 時間軸ビュー / pShift controlled、2026-04-21: zoom も追加 */
               view:analysisView, onViewChange:setAnalysisView,
@@ -6080,6 +6414,55 @@ function DraftLibrary(props){
   var s9=useState(function(){try{var v=localStorage.getItem(CA_SORT_KEY);if(v&&SORT_MODES.find(function(m){return m.id===v;}))return v;}catch(e){}return 'name_desc';});
   var sortMode=s9[0],setSortMode=s9[1];
   function changeSortMode(v){setSortMode(v);try{localStorage.setItem(CA_SORT_KEY,v);}catch(e){}}
+  /* 2026-04-26: アノテーション横断検索 */
+  var sSearch=useState(false);   var showSearch=sSearch[0],setShowSearch=sSearch[1];
+  var sQuery=useState('');       var searchQuery=sQuery[0],setSearchQuery=sQuery[1];
+  var sResults=useState([]);     var searchResults=sResults[0],setSearchResults=sResults[1];
+  var sSearching=useState(false);var searching=sSearching[0],setSearching=sSearching[1];
+  function doSearch(q){
+    if(!q||!q.trim()){setSearchResults([]);return;}
+    setSearching(true);
+    var query=q.trim().toLowerCase();
+    var results=[];
+    var pending=meta.length;
+    if(pending===0){setSearchResults([]);setSearching(false);return;}
+    meta.forEach(function(m){
+      caLoadDataAsync(m.id,function(d){
+        var matches=[];
+        /* チャート名にマッチ */
+        if((m.name||'').toLowerCase().indexOf(query)>=0){
+          matches.push({field:'名前',text:m.name});
+        }
+        /* テキストストロークをスキャン */
+        if(d&&d.analysisStrokes){
+          ['1m','5m'].forEach(function(tfk){
+            var arr=d.analysisStrokes[tfk]||[];
+            arr.forEach(function(s){
+              if((s.type||s.tool)==='text'&&s.text){
+                if(s.text.toLowerCase().indexOf(query)>=0){
+                  matches.push({field:tfk+'注釈',text:s.text.substring(0,60)});
+                }
+              }
+            });
+          });
+        }
+        if(matches.length>0){
+          results.push({meta:m,matches:matches});
+        }
+        pending--;
+        if(pending<=0){
+          /* ticker順→日付順 */
+          results.sort(function(a,b){
+            var tc=(a.meta.ticker||'').localeCompare(b.meta.ticker||'','ja');
+            if(tc!==0)return tc;
+            return (b.meta.savedAt||0)-(a.meta.savedAt||0);
+          });
+          setSearchResults(results);
+          setSearching(false);
+        }
+      });
+    });
+  }
   /* highlightDate がある場合、該当カードまで自動スクロール */
   useEffect(function(){
     if(!highlightDate||!selTicker)return;
@@ -6097,7 +6480,7 @@ function DraftLibrary(props){
   var dragSrcRef=useRef(null);
   var addFileRef=useRef(null);
   useEffect(function(){
-    function onBack(){if(showTrash){setShowTrash(false);}else{onClose();}}
+    function onBack(){if(showSearch){setShowSearch(false);setSearchQuery('');setSearchResults([]);}else if(showTrash){setShowTrash(false);}else{onClose();}}
     window.addEventListener('ca_back',onBack);
     return function(){window.removeEventListener('ca_back',onBack);};
   },[showTrash,onClose]);
@@ -6925,7 +7308,13 @@ function DraftLibrary(props){
         background:_fbIsPaused(fbCfg)?"#7f1d1d":"#431407",
         color:_fbIsPaused(fbCfg)?"#f87171":"#fb923c",fontWeight:700,flexShrink:0}},
         _fbIsPaused(fbCfg)?'⏸ 同期停止中':syncStatus==='loading'?'⏳ 同期中':'🔥 同期有効'),
-      ce("button",{onClick:function(){setShowTrash(function(v){return !v;});},
+      /* 2026-04-26: 横断検索ボタン */
+      !showTrash&&ce("button",{onClick:function(){setShowSearch(!showSearch);if(!showSearch){setSearchQuery('');setSearchResults([]);}},
+        style:Object.assign({},BT,{fontSize:13,fontWeight:700,
+          background:showSearch?"#1e3a5f":"#2a2a2a",
+          color:showSearch?"#93c5fd":"#888",
+          padding:"7px 12px",borderRadius:8})},"🔍"),
+      ce("button",{onClick:function(){setShowTrash(function(v){return !v;});setShowSearch(false);},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,
           background:showTrash?"#431407":"#2a2a2a",
           color:showTrash?"#fb923c":"#888",
@@ -6993,6 +7382,56 @@ function DraftLibrary(props){
         background:"#16a34a",color:"#fff",padding:"9px 16px",borderRadius:8,fontSize:13,fontWeight:700})},"追加"),
       ce("button",{onClick:function(){setAdding(false);setNewName('');},
         style:Object.assign({},BT,{background:"#333",color:"#aaa",padding:"9px 12px",borderRadius:8,fontSize:13})},"✕")
+    ),
+
+    /* ── 横断検索パネル (2026-04-26) ── */
+    showSearch&&!showTrash&&ce("div",{style:{display:"flex",flexDirection:"column",flex:1,overflow:"hidden"}},
+      ce("div",{style:{padding:"8px 12px",display:"flex",gap:6,alignItems:"center",
+        borderBottom:"1px solid #1e2d3d",background:"#0d1117",flexShrink:0}},
+        ce("span",{style:{fontSize:13,color:"#58a6ff",flexShrink:0}},"🔍"),
+        ce("input",{autoFocus:true,value:searchQuery,
+          onChange:function(e){setSearchQuery(e.target.value);},
+          onKeyDown:function(e){if(e.key==='Enter')doSearch(searchQuery);},
+          placeholder:"注釈テキスト・チャート名を検索…",
+          style:{flex:1,padding:"7px 10px",fontSize:13,background:"#161b22",
+            border:"1px solid #30363d",borderRadius:8,color:"#e6edf3",outline:"none",
+            fontFamily:"inherit"}}),
+        ce("button",{onClick:function(){doSearch(searchQuery);},
+          style:Object.assign({},BT,{padding:"7px 14px",fontSize:12,fontWeight:700,
+            background:"#1f6feb",color:"#fff",borderRadius:8})},"検索"),
+        ce("button",{onClick:function(){setShowSearch(false);setSearchQuery('');setSearchResults([]);},
+          style:Object.assign({},BT,{padding:"7px 10px",fontSize:12,
+            background:"#2a2a2a",color:"#aaa",borderRadius:8})},"✕")
+      ),
+      searching&&ce("div",{style:{textAlign:"center",color:"#8b949e",padding:30,fontSize:13}},"検索中…"),
+      !searching&&searchResults.length===0&&searchQuery&&ce("div",{style:{textAlign:"center",color:"#8b949e",padding:30,fontSize:13}},"該当なし"),
+      !searching&&searchResults.length>0&&ce("div",{style:{flex:1,overflowY:"auto",padding:10}},
+        ce("div",{style:{fontSize:11,color:"#8b949e",marginBottom:8}},searchResults.length+"件のチャートがヒット"),
+        searchResults.map(function(r){
+          var m=r.meta;
+          var dateStr=m.savedAt?new Date(m.savedAt).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
+          return ce("div",{key:m.id,onClick:function(){openChart(m.id);setShowSearch(false);},
+            style:{display:"flex",gap:8,padding:"8px 10px",background:"#161b22",
+              borderRadius:8,border:"1px solid #21262d",marginBottom:6,cursor:"pointer",
+              alignItems:"flex-start"}},
+            ce("div",{style:{flex:1,minWidth:0}},
+              ce("div",{style:{display:"flex",gap:6,alignItems:"center",marginBottom:3}},
+                ce("span",{style:{fontSize:10,padding:"1px 6px",borderRadius:4,
+                  background:"#1f2937",color:"#9ca3af",fontWeight:700}},m.ticker||'?'),
+                ce("span",{style:{fontSize:12,fontWeight:700,color:"#e6edf3",
+                  overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},m.name||m.id),
+                ce("span",{style:{fontSize:10,color:"#8b949e",flexShrink:0}},dateStr)
+              ),
+              r.matches.map(function(mt,mi){
+                return ce("div",{key:mi,style:{fontSize:11,color:"#8b949e",marginTop:2,
+                  overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},
+                  ce("span",{style:{color:"#58a6ff",marginRight:4}},mt.field+":"),
+                  mt.text);
+              })
+            )
+          );
+        })
+      )
     ),
 
     /* ── ゴミ箱ビュー (2026-04-22 刷新: チャート別/削除した銘柄 タブ構成) ── */
@@ -7129,7 +7568,7 @@ function DraftLibrary(props){
     ),
 
     /* ── 通常ビュー ── */
-    !showTrash&&ce("div",{style:{display:"flex",flex:1,overflow:"hidden"}},
+    !showTrash&&!showSearch&&ce("div",{style:{display:"flex",flex:1,overflow:"hidden"}},
       /* ticker list */
       ce("div",{style:{width:IS_TOUCH?130:155,background:"#161616",borderRight:"1px solid #2a2a2a",
         overflowY:"auto",flexShrink:0}},
