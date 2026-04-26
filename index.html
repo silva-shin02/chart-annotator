@@ -4084,11 +4084,11 @@ function ImageAnnotator(props){
 
   /* 2026-04-20 Step3: 画像mode dprRef 撤去 */
   var autoSaveTimerRef=useRef(null);
-  var loadedSavedAtRef=useRef(0);
+  var loadedSavedAtRef=useRef(img._savedAt||0); /* 2026-04-26 fix: 0初期化だと初回poll/autoSaveが必ず誤爆 */
   var lastLocalCommitRef=useRef(0);
   /* 2026-04-20 C8: 楽観ロック用バージョン番号。PUT前に remote の _v と比較、
      不一致なら conflict として書き込み拒否。同期ごとに +1。 */
-  var loadedVersionRef=useRef(0);
+  var loadedVersionRef=useRef(img._savedAt||0); /* 2026-04-26 fix: 同上 */
   /* 2026-04-20: thumb upload 頻度制限 (30秒以内は既存URL再利用、帯域削減) */
   var lastThumbUploadAtRef=useRef(0);
   var lastThumbUrlRef=useRef(null);
