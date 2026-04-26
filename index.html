@@ -6107,19 +6107,18 @@ function DraftLibrary(props){
   // ── IndexedDBからサムネイルキャッシュを復元 ──
   useEffect(function(){
     var current=caLoadMeta();
-    var needRestore=current.filter(function(m){return m.thumbUrl&&!_thumbMemCache[m.id];});
+    /* 2026-04-23: thumbUrl有無にかかわらず、メモリキャッシュにないもの全てをIDBから復元 */
+    var needRestore=current.filter(function(m){return !_thumbMemCache[m.id];});
     if(!needRestore.length)return;
     var restored=0;
+    function checkDone(){restored++;if(restored===needRestore.length){setMeta(function(prev){return prev.slice();});}}
     needRestore.forEach(function(m){
       idbGet('thumb_'+m.id,function(val){
         if(val){
           _thumbMemCache[m.id]=val;
-          restored++;
-          if(restored===needRestore.length){
-            setMeta(function(prev){return prev.slice();});  // 再レンダリングトリガー
-          }
-        } else {
-          // IndexedDBにない→thumbUrlからDLしてキャッシュ
+          checkDone();
+        } else if(m.thumbUrl){
+          // IndexedDBにもない & thumbUrlあり → Firebase StorageからDLしてキャッシュ
           var tImg=new Image();
           tImg.crossOrigin='anonymous';
           tImg.onload=function(){
@@ -6131,17 +6130,23 @@ function DraftLibrary(props){
               var thumb=tc.toDataURL('image/png');
               caSaveThumb(m.id,thumb);  // メモリ+IndexedDB
             }catch(e){
-              /* CORS未設定で tainted canvas → サムネキャッシュ失敗、次回再試行 */
               if(!window._caCorsWarned){window._caCorsWarned=true;
                 console.warn('[CORS] thumb cache failed. Firebase Storage bucket に CORS設定が必要');}
             }
-            restored++;
-            if(restored===needRestore.length){
-              setMeta(function(prev){return prev.slice();});
-            }
+            checkDone();
           };
-          tImg.onerror=function(){restored++;if(restored===needRestore.length){setMeta(function(prev){return prev.slice();});}};
+          tImg.onerror=function(){checkDone();};
           tImg.src=m.thumbUrl;
+        } else {
+          /* IDBにもthumbUrlもない → データからサムネ再生成を試みる */
+          caLoadDataAsync(m.id,function(d){
+            if(d&&d.analysisData){
+              generateAnalysisThumb(d.analysisData,function(thumb){
+                if(thumb)caSaveThumb(m.id,thumb);
+                checkDone();
+              });
+            } else {checkDone();}
+          });
         }
       });
     });
