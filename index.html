@@ -4259,30 +4259,21 @@ function ImageAnnotator(props){
         var cachedThumb=caLoadThumb(draftId);
         var needGen=!cachedThumb && !!analysisDataRef.current;
         var _nowThumb=Date.now();
-        /* _needUp: 30秒間隔で Storage upload を制限 (ローカル生成は毎回行う) */
         var _needUp=!lastThumbUrlRef.current||(_nowThumb-lastThumbUploadAtRef.current>30000);
         function proceedWithThumb(thumb){
-          if(thumb)caSaveThumb(draftId,thumb);  /* localStorageキャッシュ更新 (毎回) */
+          if(thumb && !cachedThumb)caSaveThumb(draftId,thumb);  /* localStorageキャッシュ */
           var _thumbP=(_needUp&&thumb)?uploadThumbToStorage(cfg2,draftId,thumb):Promise.resolve(lastThumbUrlRef.current);
-          // meta — 2026-04-26: PUT→PATCH 変更
-          // PUT は meta オブジェクトを丸ごと上書きし、thumbUrl 無しのときに
-          // 既存 thumbUrl を消してしまう問題があった。PATCH なら指定フィールドのみ更新。
+          // meta
           _thumbP.then(function(thumbUrl){
             if(_needUp&&thumbUrl){lastThumbUploadAtRef.current=_nowThumb;lastThumbUrlRef.current=thumbUrl;}
             var metaDb={ticker:img._ticker||'',name:img._name||img.name||'chart',savedAt:savedAt};
             if(thumbUrl)metaDb.thumbUrl=thumbUrl;
-            var metaBody=JSON.stringify(metaDb);
-            fetch(draftBase+'/'+draftId+'.json'+auth,{method:'PATCH',
+            var metaBody=JSON.stringify(metaDb);fetch(draftBase+'/'+draftId+'.json'+auth,{method:'PUT',
               headers:{'Content-Type':'application/json'},body:metaBody})
               .catch(function(e){console.error('draft meta sync:',e);});
           });
         }
-        /* 2026-04-26: 編集中の analysisData があれば毎回サムネを再生成 (古いサムネ残存防止) */
-        if(analysisDataRef.current){
-          generateAnalysisThumb(analysisDataRef.current,function(thumb){
-            proceedWithThumb(thumb||cachedThumb||img._thumb||'');
-          });
-        } else if(needGen){
+        if(needGen){
           generateAnalysisThumb(analysisDataRef.current,function(thumb){proceedWithThumb(thumb||'');});
         } else {
           proceedWithThumb(cachedThumb||img._thumb||'');
@@ -6061,8 +6052,6 @@ function DraftLibrary(props){
   var sTT=useState('charts');       var trashTab=sTT[0],setTrashTab=sTT[1];
   var sFDA=useState(false);         var fileDragActive=sFDA[0],setFileDragActive=sFDA[1];
   var fileDragCountRef=useRef(0);
-  var sPF=useState(null);           var prefetchStatus=sPF[0],setPrefetchStatus=sPF[1]; // null | {done,total} | 'done'
-  var sOL=useState(typeof navigator!=='undefined'?navigator.onLine:true); var isOnline=sOL[0],setIsOnline=sOL[1];
   var CA_SORT_KEY='ca_sort_mode_v1';
   var SORT_MODES=[
     {id:'name_desc', label:'名前 ↓'},
@@ -6116,18 +6105,19 @@ function DraftLibrary(props){
   // ── IndexedDBからサムネイルキャッシュを復元 ──
   useEffect(function(){
     var current=caLoadMeta();
-    /* 2026-04-23: thumbUrl有無にかかわらず、メモリキャッシュにないもの全てをIDBから復元 */
-    var needRestore=current.filter(function(m){return !_thumbMemCache[m.id];});
+    var needRestore=current.filter(function(m){return m.thumbUrl&&!_thumbMemCache[m.id];});
     if(!needRestore.length)return;
     var restored=0;
-    function checkDone(){restored++;if(restored===needRestore.length){setMeta(function(prev){return prev.slice();});}}
     needRestore.forEach(function(m){
       idbGet('thumb_'+m.id,function(val){
         if(val){
           _thumbMemCache[m.id]=val;
-          checkDone();
-        } else if(m.thumbUrl){
-          // IndexedDBにもない & thumbUrlあり → Firebase StorageからDLしてキャッシュ
+          restored++;
+          if(restored===needRestore.length){
+            setMeta(function(prev){return prev.slice();});  // 再レンダリングトリガー
+          }
+        } else {
+          // IndexedDBにない→thumbUrlからDLしてキャッシュ
           var tImg=new Image();
           tImg.crossOrigin='anonymous';
           tImg.onload=function(){
@@ -6139,23 +6129,17 @@ function DraftLibrary(props){
               var thumb=tc.toDataURL('image/png');
               caSaveThumb(m.id,thumb);  // メモリ+IndexedDB
             }catch(e){
+              /* CORS未設定で tainted canvas → サムネキャッシュ失敗、次回再試行 */
               if(!window._caCorsWarned){window._caCorsWarned=true;
                 console.warn('[CORS] thumb cache failed. Firebase Storage bucket に CORS設定が必要');}
             }
-            checkDone();
+            restored++;
+            if(restored===needRestore.length){
+              setMeta(function(prev){return prev.slice();});
+            }
           };
-          tImg.onerror=function(){checkDone();};
+          tImg.onerror=function(){restored++;if(restored===needRestore.length){setMeta(function(prev){return prev.slice();});}};
           tImg.src=m.thumbUrl;
-        } else {
-          /* IDBにもthumbUrlもない → データからサムネ再生成を試みる */
-          caLoadDataAsync(m.id,function(d){
-            if(d&&d.analysisData){
-              generateAnalysisThumb(d.analysisData,function(thumb){
-                if(thumb)caSaveThumb(m.id,thumb);
-                checkDone();
-              });
-            } else {checkDone();}
-          });
         }
       });
     });
@@ -6454,98 +6438,17 @@ function DraftLibrary(props){
       }).catch(function(e){console.error('fetchFullMeta trash:',e);});
   }
 
-  /* 2026-04-23: オフライン用 — 全チャートデータをIDBにプリフェッチ
-     オンライン時にバックグラウンドで実行し、IDBにないデータをFirebaseから取得してキャッシュ
-     manual=true: ボタン押下時、全件を並列DL+進捗表示 */
-  function prefetchAllData(manual){
-    if(_fbIsPaused(fbCfg)||!navigator.onLine){
-      if(manual)window.caToast('オフラインまたは同期停止中のためダウンロードできません','error');
-      return;
-    }
-    var dataBase=makeDraftsDataBase();
-    if(!dataBase){if(manual)window.caToast('Firebase未設定です','error');return;}
-    var allMeta=caLoadMeta();
-    if(!allMeta.length){if(manual)window.caToast('チャートがありません','info');return;}
-    /* まずIDBにないものだけ収集 */
-    var missing=[];var checked=0;
-    allMeta.forEach(function(m){
-      caLoadDataAsync(m.id,function(existing){
-        checked++;
-        if(!existing)missing.push(m);
-        if(checked===allMeta.length){
-          if(missing.length===0){
-            if(manual){window.caToast('✓ 全'+allMeta.length+'件キャッシュ済み','success');setPrefetchStatus('done');}
-            return;
-          }
-          if(manual)setPrefetchStatus({done:0,total:missing.length});
-          /* 並列数制限付きダウンロード (manual: 4並列, background: 1並列) */
-          var concurrency=manual?4:1;
-          var idx=0, done=0;
-          function fetchOne(){
-            if(idx>=missing.length)return;
-            var m2=missing[idx]; idx++;
-            fetch(dataBase+'/'+m2.id+'.json'+auth)
-              .then(function(r){return r.ok?r.text():null;})
-              .then(function(txt){
-                if(txt){var d;try{d=JSON.parse(txt);}catch(e){}if(d)caSaveData(m2.id,d);}
-                done++;
-                if(manual)setPrefetchStatus({done:done,total:missing.length});
-                if(done===missing.length){
-                  if(manual){
-                    setPrefetchStatus('done');
-                    window.caToast('✓ '+done+'件ダウンロード完了。オフラインで利用できます','success');
-                  }
-                }
-                fetchOne();
-              }).catch(function(){done++;if(manual)setPrefetchStatus({done:done,total:missing.length});fetchOne();});
-          }
-          for(var c=0;c<concurrency;c++)fetchOne();
-        }
-      });
-    });
-  }
-
   // ── 自動停止コールバック登録 ──
   // ── ポーリング開始 ──
   useEffect(function(){
     if(_fbIsPaused(fbCfg))return;
     setSyncStatus('loading');
     fetchFullMeta(); // 初回はフルメタ取得
-    setTimeout(function(){prefetchAllData(false);},3000); // オフライン用キャッシュ (3秒遅延)
     var timer=setInterval(function(){
       
       setSyncStatus('loading');pollFb();
     },15000);
     return function(){clearInterval(timer);};
-  },[]);
-
-  /* 2026-04-23: PWA — オフライン検出 + オンライン復帰時の自動再同期 */
-  useEffect(function(){
-    function goOnline(){
-      setIsOnline(true);
-      window.caToast('オンラインに復帰しました。再同期中…','success');
-      /* 全ローカルデータをFirebaseへ再プッシュ */
-      if(!_fbIsPaused(fbCfg)){
-        setSyncStatus('loading');
-        /* tickers */
-        fbSyncTickers(tickers);
-        /* 全メタ+データをfbSaveDraft */
-        var allMeta=caLoadMeta();
-        allMeta.forEach(function(m){
-          var d=caLoadData(m.id);
-          if(d)fbSaveDraft(m.id,m,d);
-        });
-        /* pollでリモート側も取得 */
-        setTimeout(function(){fetchFullMeta();},2000);
-      }
-    }
-    function goOffline(){
-      setIsOnline(false);
-      window.caToast('オフラインです。ローカル保存で継続できます','info');
-    }
-    window.addEventListener('online',goOnline);
-    window.addEventListener('offline',goOffline);
-    return function(){window.removeEventListener('online',goOnline);window.removeEventListener('offline',goOffline);};
   },[]);
 
   // ── Firebase ヘルパー（meta=旧パス / data=新パス 分離）──
@@ -6557,9 +6460,7 @@ function DraftLibrary(props){
     thumbP.then(function(thumbUrl){
       var metaDb={ticker:metaItem.ticker,name:metaItem.name,savedAt:metaItem.savedAt};
       if(thumbUrl)metaDb.thumbUrl=thumbUrl;
-      var body=JSON.stringify(metaDb);
-      // 2026-04-26: PUT→PATCH 変更で thumbUrl などの既存フィールドを保護
-      return fetch(base+'/'+id+'.json'+auth,{method:'PATCH',headers:{'Content-Type':'application/json'},body:body});
+      var body=JSON.stringify(metaDb);return fetch(base+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:body});
     }).then(function(){
       var tsBase=fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-ts';
       var tsBody=JSON.stringify({t:metaItem.savedAt||Date.now()});fetch(tsBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:tsBody})
@@ -6750,8 +6651,8 @@ function DraftLibrary(props){
       }
       return false;  /* 続行 */
     }
-    // 同期OFFまたはFirebase未設定またはオフライン → ローカルデータのみ
-    if(_fbIsPaused(fbCfg)||!fbCfg.url||!navigator.onLine){
+    // 同期OFFまたはFirebase未設定 → ローカルデータのみ
+    if(_fbIsPaused(fbCfg)||!fbCfg.url){
       var d0=caLoadData(id);
       if(handleLegacyImageDraft(d0))return;  /* 旧画像-only draft: 中断 */
       if(d0&&(d0.orig_base64||d0.base64)){onOpen(Object.assign({},d0,extra));return;}
@@ -6761,9 +6662,7 @@ function DraftLibrary(props){
         if(handleLegacyImageDraft(ad))return;  /* 旧画像-only draft: 中断 */
         if(ad&&(ad.orig_base64||ad.base64)){onOpen(Object.assign({},ad,extra));return;}
         if(isJsonOnly(ad)){onOpen(Object.assign({},ad,extra));return;}  /* JSONのみdraft */
-        window.caToast(!navigator.onLine
-          ?'オフラインのためデータを取得できません。オンラインで一度開くとキャッシュされます'
-          :'データが見つかりません','error');
+        window.caToast('データが見つかりません（Firebase未設定または同期停止中）','error');
       });
       return;
     }
@@ -6840,20 +6739,7 @@ function DraftLibrary(props){
           });
         }
         setSyncStatus(null);window.caToast('データが見つかりません','error');
-      }).catch(function(e){
-        setSyncStatus(null);
-        console.error('[openChart] Error:',e);
-        /* 2026-04-23: fetch失敗時はローカルデータにフォールバック */
-        if(d&&(d.orig_base64||d.base64)){
-          window.caToast('オフラインのためローカルデータで開きます','info');
-          onOpen(Object.assign({},d,extra));return;
-        }
-        if(isJsonOnly(d)){
-          window.caToast('オフラインのためローカルデータで開きます','info');
-          onOpen(Object.assign({},d,extra));return;
-        }
-        window.caToast('読込失敗: '+(e&&e.message?e.message:'不明なエラー'),'error');
-      });
+      }).catch(function(e){setSyncStatus(null);console.error('[openChart] Error:',e);window.caToast('読込失敗: '+(e&&e.message?e.message:'不明なエラー'),'error');});
     }); // caLoadDataAsync
   }
 
@@ -6895,19 +6781,9 @@ function DraftLibrary(props){
       ce("span",{style:{fontSize:16,fontWeight:700,color:"#fff",flex:1}},
         showTrash?"🗑 ゴミ箱":"📋 チャート一覧"),
       fbCfg.url&&ce("span",{style:{fontSize:10,padding:"3px 7px",borderRadius:5,
-        background:!isOnline?"#1e293b":_fbIsPaused(fbCfg)?"#7f1d1d":"#431407",
-        color:!isOnline?"#94a3b8":_fbIsPaused(fbCfg)?"#f87171":"#fb923c",fontWeight:700,flexShrink:0}},
-        !isOnline?'📴 オフライン':_fbIsPaused(fbCfg)?'⏸ 同期停止中':syncStatus==='loading'?'⏳ 同期中':'🔥 同期有効'),
-      /* 2026-04-23: オフライン準備ボタン */
-      isOnline&&fbCfg.url&&!_fbIsPaused(fbCfg)&&ce("button",{
-        onClick:function(){prefetchAllData(true);},
-        disabled:prefetchStatus&&prefetchStatus!=='done'&&typeof prefetchStatus==='object',
-        style:Object.assign({},BT,{fontSize:11,fontWeight:700,padding:"5px 10px",borderRadius:6,flexShrink:0,
-          background:prefetchStatus==='done'?"#14532d":prefetchStatus&&typeof prefetchStatus==='object'?"#1e3a5f":"#0ea5e9",
-          color:prefetchStatus==='done'?"#86efac":prefetchStatus&&typeof prefetchStatus==='object'?"#93c5fd":"#fff"})},
-        prefetchStatus==='done'?'✓ キャッシュ済'
-          :prefetchStatus&&typeof prefetchStatus==='object'?'⬇ '+prefetchStatus.done+'/'+prefetchStatus.total
-          :'⬇ オフライン準備'),
+        background:_fbIsPaused(fbCfg)?"#7f1d1d":"#431407",
+        color:_fbIsPaused(fbCfg)?"#f87171":"#fb923c",fontWeight:700,flexShrink:0}},
+        _fbIsPaused(fbCfg)?'⏸ 同期停止中':syncStatus==='loading'?'⏳ 同期中':'🔥 同期有効'),
       ce("button",{onClick:function(){setShowTrash(function(v){return !v;});},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,
           background:showTrash?"#431407":"#2a2a2a",
