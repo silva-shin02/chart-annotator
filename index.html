@@ -5915,7 +5915,7 @@ function caDeleteThumb(id){delete _thumbMemCache[id];idbDel('thumb_'+id);}
 function generateAnalysisThumb(analysisData, cb){
   try{
     if(!analysisData||!analysisData.bars_1m||!analysisData.bars_1m.length){cb('');return;}
-    var W=300, H=188;
+    var W=800, H=500;
     var c=document.createElement('canvas');
     c.width=W; c.height=H;
     var bars=analysisData.bars_1m;
@@ -5942,7 +5942,7 @@ function generateAnalysisThumb(analysisData, cb){
     }finally{
       try{Object.defineProperty(window,'devicePixelRatio',{value:origDPR,configurable:true});}catch(e){}
     }
-    try{cb(c.toDataURL('image/jpeg',0.6));}
+    try{cb(c.toDataURL('image/png'));}
     catch(e){console.warn('[thumb] toDataURL failed:',e);cb('');}
   }catch(err){
     console.error('generateAnalysisThumb:',err);
@@ -6211,10 +6211,18 @@ function DraftLibrary(props){
         fetch(dataBase+'/'+m.id+'.json'+auth).then(function(r){return r.ok?r.json():null;})
         .then(function(fbData){
           if(!fbData){processNext();return;}
+          /* データをIDBにキャッシュ (次回リロード時のサムネ再生成高速化) */
+          caSaveData(m.id,fbData);
           if(fbData.orig_base64||fbData.base64){
             genThumb(m,'data:'+(fbData.orig_mt||fbData.mt||'image/png')+';base64,'+(fbData.orig_base64||fbData.base64));
           } else if(fbData.imageUrl){
             genThumb(m,fbData.imageUrl);
+          } else if(fbData.analysisData){
+            /* JSON-onlyデータ → analysisDataからサムネ再生成 */
+            generateAnalysisThumb(fbData.analysisData,function(thumb){
+              if(thumb){caSaveThumb(m.id,thumb);setMeta(function(prev){return prev.slice();});}
+              setTimeout(processNext,100);
+            });
           } else {processNext();}
         })["catch"](function(){processNext();});
         return;
@@ -6425,6 +6433,36 @@ function DraftLibrary(props){
           if(!fbIds.includes(m.id)&&(now-(m.savedAt||0)<300000)&&caLoadData(m.id))merged.push(m);
         });
         setMeta(merged);caSaveMeta(merged);
+        /* 2026-04-23: サムネがないチャートをデータから再生成 */
+        var noThumb=merged.filter(function(m){return !_thumbMemCache[m.id]&&!m.thumb&&!m.thumbUrl;});
+        if(noThumb.length){
+          var _dBase=makeDraftsDataBase();
+          var _ti=0;
+          function _genNext(){
+            if(_ti>=noThumb.length)return;
+            var _m=noThumb[_ti]; _ti++;
+            caLoadDataAsync(_m.id,function(_d){
+              if(_d&&_d.analysisData){
+                generateAnalysisThumb(_d.analysisData,function(_th){
+                  if(_th){caSaveThumb(_m.id,_th);setMeta(function(p){return p.slice();});}
+                  setTimeout(_genNext,50);
+                });
+              } else if(_dBase&&!_fbIsPaused(fbCfg)){
+                fetch(_dBase+'/'+_m.id+'.json'+auth).then(function(r){return r.ok?r.json():null;})
+                .then(function(_fb){
+                  if(_fb){caSaveData(_m.id,_fb);}
+                  if(_fb&&_fb.analysisData){
+                    generateAnalysisThumb(_fb.analysisData,function(_th2){
+                      if(_th2){caSaveThumb(_m.id,_th2);setMeta(function(p){return p.slice();});}
+                      setTimeout(_genNext,50);
+                    });
+                  } else {setTimeout(_genNext,50);}
+                }).catch(function(){setTimeout(_genNext,50);});
+              } else {setTimeout(_genNext,50);}
+            });
+          }
+          _genNext();
+        }
       })
       .catch(function(e){console.error('fetchFullMeta drafts:',e);setSyncStatus(null);});
 
