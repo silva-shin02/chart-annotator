@@ -6160,11 +6160,27 @@ function DraftLibrary(props){
           tImg.onerror=function(){onDone();};
           tImg.src=m.thumbUrl;
         } else {
-          /* IDBにもthumbUrlもない → データからサムネ再生成 */
+          /* IDBにもthumbUrlもない → データからサムネ再生成 + Storage UL */
           caLoadDataAsync(m.id,function(d){
             if(d&&d.analysisData){
               generateAnalysisThumb(d.analysisData,function(thumb){
-                if(thumb){caSaveThumb(m.id,thumb);anyRestored=true;}
+                if(thumb){
+                  caSaveThumb(m.id,thumb);anyRestored=true;
+                  if(fbCfg&&fbCfg.storageBucket&&!_fbIsPaused(fbCfg)){
+                    uploadThumbToStorage(fbCfg,m.id,thumb).then(function(thumbUrl){
+                      if(thumbUrl){
+                        setMeta(function(prev){
+                          var nm=prev.map(function(x){return x.id===m.id?Object.assign({},x,{thumbUrl:thumbUrl}):x;});
+                          caSaveMeta(nm);return nm;
+                        });
+                        fetch(fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts/'+m.id+'.json'+(fbCfg.secret?'?auth='+fbCfg.secret:''),{
+                          method:'PATCH',headers:{'Content-Type':'application/json'},
+                          body:JSON.stringify({thumbUrl:thumbUrl})
+                        })["catch"](function(e){console.error('regen thumbUrl patch:',e);});
+                      }
+                    });
+                  }
+                }
                 onDone();
               });
             } else {onDone();}
@@ -6225,7 +6241,25 @@ function DraftLibrary(props){
         }
         if(d&&d.analysisData){
           generateAnalysisThumb(d.analysisData,function(thumb){
-            if(thumb){caSaveThumb(m.id,thumb);setMeta(function(prev){return prev.slice();});}
+            if(thumb){
+              caSaveThumb(m.id,thumb);
+              setMeta(function(prev){return prev.slice();});
+              /* Storage UL → Firebase meta に thumbUrl を PATCH */
+              if(fbCfg&&fbCfg.storageBucket&&!_fbIsPaused(fbCfg)){
+                uploadThumbToStorage(fbCfg,m.id,thumb).then(function(thumbUrl){
+                  if(thumbUrl){
+                    setMeta(function(prev){
+                      var nm=prev.map(function(x){return x.id===m.id?Object.assign({},x,{thumbUrl:thumbUrl}):x;});
+                      caSaveMeta(nm);return nm;
+                    });
+                    fetch(fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts/'+m.id+'.json'+(fbCfg.secret?'?auth='+fbCfg.secret:''),{
+                      method:'PATCH',headers:{'Content-Type':'application/json'},
+                      body:JSON.stringify({thumbUrl:thumbUrl})
+                    })["catch"](function(e){console.error('regen thumbUrl patch:',e);});
+                  }
+                });
+              }
+            }
             setTimeout(processNext,100);
           });
           return;
@@ -6241,9 +6275,26 @@ function DraftLibrary(props){
           } else if(fbData.imageUrl){
             genThumb(m,fbData.imageUrl);
           } else if(fbData.analysisData){
-            /* JSON-onlyデータ → analysisDataからサムネ再生成 */
+            /* JSON-onlyデータ → analysisDataからサムネ再生成 + Storage UL */
             generateAnalysisThumb(fbData.analysisData,function(thumb){
-              if(thumb){caSaveThumb(m.id,thumb);setMeta(function(prev){return prev.slice();});}
+              if(thumb){
+                caSaveThumb(m.id,thumb);
+                setMeta(function(prev){return prev.slice();});
+                if(fbCfg&&fbCfg.storageBucket&&!_fbIsPaused(fbCfg)){
+                  uploadThumbToStorage(fbCfg,m.id,thumb).then(function(thumbUrl){
+                    if(thumbUrl){
+                      setMeta(function(prev){
+                        var nm=prev.map(function(x){return x.id===m.id?Object.assign({},x,{thumbUrl:thumbUrl}):x;});
+                        caSaveMeta(nm);return nm;
+                      });
+                      fetch(fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts/'+m.id+'.json'+(fbCfg.secret?'?auth='+fbCfg.secret:''),{
+                        method:'PATCH',headers:{'Content-Type':'application/json'},
+                        body:JSON.stringify({thumbUrl:thumbUrl})
+                      })["catch"](function(e){console.error('regen thumbUrl patch:',e);});
+                    }
+                  });
+                }
+              }
               setTimeout(processNext,100);
             });
           } else {processNext();}
@@ -6456,18 +6507,33 @@ function DraftLibrary(props){
           if(!fbIds.includes(m.id)&&(now-(m.savedAt||0)<300000)&&caLoadData(m.id))merged.push(m);
         });
         setMeta(merged);caSaveMeta(merged);
-        /* 2026-04-23: サムネがないチャートをデータから再生成 */
+        /* 2026-04-23: サムネがないチャートをデータから再生成 + Storage UL */
         var noThumb=merged.filter(function(m){return !_thumbMemCache[m.id]&&!m.thumb&&!m.thumbUrl;});
         if(noThumb.length){
           var _dBase=makeDraftsDataBase();
           var _ti=0;
+          function _ulThumb(_mid,_th){
+            if(!fbCfg||!fbCfg.storageBucket||_fbIsPaused(fbCfg))return;
+            uploadThumbToStorage(fbCfg,_mid,_th).then(function(tu){
+              if(tu){
+                setMeta(function(p){
+                  var nm=p.map(function(x){return x.id===_mid?Object.assign({},x,{thumbUrl:tu}):x;});
+                  caSaveMeta(nm);return nm;
+                });
+                fetch(fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts/'+_mid+'.json'+(fbCfg.secret?'?auth='+fbCfg.secret:''),{
+                  method:'PATCH',headers:{'Content-Type':'application/json'},
+                  body:JSON.stringify({thumbUrl:tu})
+                })["catch"](function(e){console.error('regen thumbUrl patch:',e);});
+              }
+            });
+          }
           function _genNext(){
             if(_ti>=noThumb.length)return;
             var _m=noThumb[_ti]; _ti++;
             caLoadDataAsync(_m.id,function(_d){
               if(_d&&_d.analysisData){
                 generateAnalysisThumb(_d.analysisData,function(_th){
-                  if(_th){caSaveThumb(_m.id,_th);setMeta(function(p){return p.slice();});}
+                  if(_th){caSaveThumb(_m.id,_th);setMeta(function(p){return p.slice();});_ulThumb(_m.id,_th);}
                   setTimeout(_genNext,50);
                 });
               } else if(_dBase&&!_fbIsPaused(fbCfg)){
@@ -6476,7 +6542,7 @@ function DraftLibrary(props){
                   if(_fb){caSaveData(_m.id,_fb);}
                   if(_fb&&_fb.analysisData){
                     generateAnalysisThumb(_fb.analysisData,function(_th2){
-                      if(_th2){caSaveThumb(_m.id,_th2);setMeta(function(p){return p.slice();});}
+                      if(_th2){caSaveThumb(_m.id,_th2);setMeta(function(p){return p.slice();});_ulThumb(_m.id,_th2);}
                       setTimeout(_genNext,50);
                     });
                   } else {setTimeout(_genNext,50);}
