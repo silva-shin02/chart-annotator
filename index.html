@@ -8,6 +8,7 @@
 <meta name="apple-mobile-web-app-title" content="チャート分析ツール 完全版"/>
 <meta name="theme-color" content="#111111"/>
 <link rel="manifest" href="manifest.json"/>
+<link rel="apple-touch-icon" href="icon-192.png"/>
 <title>チャート分析ツール 完全版</title>
 <style>
 *,*::before,*::after{box-sizing:border-box}
@@ -6051,6 +6052,7 @@ function DraftLibrary(props){
   var sTT=useState('charts');       var trashTab=sTT[0],setTrashTab=sTT[1];
   var sFDA=useState(false);         var fileDragActive=sFDA[0],setFileDragActive=sFDA[1];
   var fileDragCountRef=useRef(0);
+  var sOL=useState(typeof navigator!=='undefined'?navigator.onLine:true); var isOnline=sOL[0],setIsOnline=sOL[1];
   var CA_SORT_KEY='ca_sort_mode_v1';
   var SORT_MODES=[
     {id:'name_desc', label:'名前 ↓'},
@@ -6450,6 +6452,35 @@ function DraftLibrary(props){
     return function(){clearInterval(timer);};
   },[]);
 
+  /* 2026-04-23: PWA — オフライン検出 + オンライン復帰時の自動再同期 */
+  useEffect(function(){
+    function goOnline(){
+      setIsOnline(true);
+      window.caToast('オンラインに復帰しました。再同期中…','success');
+      /* 全ローカルデータをFirebaseへ再プッシュ */
+      if(!_fbIsPaused(fbCfg)){
+        setSyncStatus('loading');
+        /* tickers */
+        fbSyncTickers(tickers);
+        /* 全メタ+データをfbSaveDraft */
+        var allMeta=caLoadMeta();
+        allMeta.forEach(function(m){
+          var d=caLoadData(m.id);
+          if(d)fbSaveDraft(m.id,m,d);
+        });
+        /* pollでリモート側も取得 */
+        setTimeout(function(){fetchFullMeta();},2000);
+      }
+    }
+    function goOffline(){
+      setIsOnline(false);
+      window.caToast('オフラインです。ローカル保存で継続できます','info');
+    }
+    window.addEventListener('online',goOnline);
+    window.addEventListener('offline',goOffline);
+    return function(){window.removeEventListener('online',goOnline);window.removeEventListener('offline',goOffline);};
+  },[]);
+
   // ── Firebase ヘルパー（meta=旧パス / data=新パス 分離）──
   function fbSaveDraft(id,metaItem,data){
     var base=makeDraftsBase(), dataBase=makeDraftsDataBase();
@@ -6780,9 +6811,9 @@ function DraftLibrary(props){
       ce("span",{style:{fontSize:16,fontWeight:700,color:"#fff",flex:1}},
         showTrash?"🗑 ゴミ箱":"📋 チャート一覧"),
       fbCfg.url&&ce("span",{style:{fontSize:10,padding:"3px 7px",borderRadius:5,
-        background:_fbIsPaused(fbCfg)?"#7f1d1d":"#431407",
-        color:_fbIsPaused(fbCfg)?"#f87171":"#fb923c",fontWeight:700,flexShrink:0}},
-        _fbIsPaused(fbCfg)?'⏸ 同期停止中':syncStatus==='loading'?'⏳ 同期中':'🔥 同期有効'),
+        background:!isOnline?"#1e293b":_fbIsPaused(fbCfg)?"#7f1d1d":"#431407",
+        color:!isOnline?"#94a3b8":_fbIsPaused(fbCfg)?"#f87171":"#fb923c",fontWeight:700,flexShrink:0}},
+        !isOnline?'📴 オフライン':_fbIsPaused(fbCfg)?'⏸ 同期停止中':syncStatus==='loading'?'⏳ 同期中':'🔥 同期有効'),
       ce("button",{onClick:function(){setShowTrash(function(v){return !v;});},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,
           background:showTrash?"#431407":"#2a2a2a",
@@ -7446,7 +7477,18 @@ ReactDOM.createRoot(document.getElementById('root')).render(ce(App,null));
 </script>
 <script>
 if('serviceWorker' in navigator){
-  navigator.serviceWorker.register('sw.js').catch(function(e){console.warn('SW registration failed:',e);});
+  navigator.serviceWorker.register('sw.js').then(function(reg){
+    /* 新しいSWが待機中なら即座にactivate */
+    if(reg.waiting){reg.waiting.postMessage({type:'SKIP_WAITING'});}
+    reg.addEventListener('updatefound',function(){
+      var nw=reg.installing;
+      if(nw)nw.addEventListener('statechange',function(){
+        if(nw.state==='installed'&&navigator.serviceWorker.controller){
+          nw.postMessage({type:'SKIP_WAITING'});
+        }
+      });
+    });
+  }).catch(function(e){console.warn('SW registration failed:',e);});
 }
 </script>
 </body>
