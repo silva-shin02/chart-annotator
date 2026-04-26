@@ -6052,6 +6052,7 @@ function DraftLibrary(props){
   var sTT=useState('charts');       var trashTab=sTT[0],setTrashTab=sTT[1];
   var sFDA=useState(false);         var fileDragActive=sFDA[0],setFileDragActive=sFDA[1];
   var fileDragCountRef=useRef(0);
+  var sPF=useState(null);           var prefetchStatus=sPF[0],setPrefetchStatus=sPF[1]; // null | {done,total} | 'done'
   var sOL=useState(typeof navigator!=='undefined'?navigator.onLine:true); var isOnline=sOL[0],setIsOnline=sOL[1];
   var CA_SORT_KEY='ca_sort_mode_v1';
   var SORT_MODES=[
@@ -6440,28 +6441,54 @@ function DraftLibrary(props){
   }
 
   /* 2026-04-23: オフライン用 — 全チャートデータをIDBにプリフェッチ
-     オンライン時にバックグラウンドで実行し、IDBにないデータをFirebaseから取得してキャッシュ */
-  function prefetchAllData(){
-    if(_fbIsPaused(fbCfg)||!navigator.onLine)return;
-    var dataBase=makeDraftsDataBase();
-    if(!dataBase)return;
-    var allMeta=caLoadMeta();
-    var idx=0;
-    function next(){
-      if(idx>=allMeta.length)return;
-      var m=allMeta[idx]; idx++;
-      caLoadDataAsync(m.id,function(existing){
-        if(existing){next();return;} /* 既にIDBにある → スキップ */
-        fetch(dataBase+'/'+m.id+'.json'+auth)
-          .then(function(r){return r.ok?r.text():null;})
-          .then(function(txt){
-            if(txt){var d;try{d=JSON.parse(txt);}catch(e){}if(d)caSaveData(m.id,d);}
-            next();
-          }).catch(function(){next();});
-      });
+     オンライン時にバックグラウンドで実行し、IDBにないデータをFirebaseから取得してキャッシュ
+     manual=true: ボタン押下時、全件を並列DL+進捗表示 */
+  function prefetchAllData(manual){
+    if(_fbIsPaused(fbCfg)||!navigator.onLine){
+      if(manual)window.caToast('オフラインまたは同期停止中のためダウンロードできません','error');
+      return;
     }
-    /* 初回fetchFullMetaの完了を待ってから開始 (3秒遅延) */
-    setTimeout(next,3000);
+    var dataBase=makeDraftsDataBase();
+    if(!dataBase){if(manual)window.caToast('Firebase未設定です','error');return;}
+    var allMeta=caLoadMeta();
+    if(!allMeta.length){if(manual)window.caToast('チャートがありません','info');return;}
+    /* まずIDBにないものだけ収集 */
+    var missing=[];var checked=0;
+    allMeta.forEach(function(m){
+      caLoadDataAsync(m.id,function(existing){
+        checked++;
+        if(!existing)missing.push(m);
+        if(checked===allMeta.length){
+          if(missing.length===0){
+            if(manual){window.caToast('✓ 全'+allMeta.length+'件キャッシュ済み','success');setPrefetchStatus('done');}
+            return;
+          }
+          if(manual)setPrefetchStatus({done:0,total:missing.length});
+          /* 並列数制限付きダウンロード (manual: 4並列, background: 1並列) */
+          var concurrency=manual?4:1;
+          var idx=0, done=0;
+          function fetchOne(){
+            if(idx>=missing.length)return;
+            var m2=missing[idx]; idx++;
+            fetch(dataBase+'/'+m2.id+'.json'+auth)
+              .then(function(r){return r.ok?r.text():null;})
+              .then(function(txt){
+                if(txt){var d;try{d=JSON.parse(txt);}catch(e){}if(d)caSaveData(m2.id,d);}
+                done++;
+                if(manual)setPrefetchStatus({done:done,total:missing.length});
+                if(done===missing.length){
+                  if(manual){
+                    setPrefetchStatus('done');
+                    window.caToast('✓ '+done+'件ダウンロード完了。オフラインで利用できます','success');
+                  }
+                }
+                fetchOne();
+              }).catch(function(){done++;if(manual)setPrefetchStatus({done:done,total:missing.length});fetchOne();});
+          }
+          for(var c=0;c<concurrency;c++)fetchOne();
+        }
+      });
+    });
   }
 
   // ── 自動停止コールバック登録 ──
@@ -6470,7 +6497,7 @@ function DraftLibrary(props){
     if(_fbIsPaused(fbCfg))return;
     setSyncStatus('loading');
     fetchFullMeta(); // 初回はフルメタ取得
-    prefetchAllData(); // オフライン用キャッシュ
+    setTimeout(function(){prefetchAllData(false);},3000); // オフライン用キャッシュ (3秒遅延)
     var timer=setInterval(function(){
       
       setSyncStatus('loading');pollFb();
@@ -6855,6 +6882,16 @@ function DraftLibrary(props){
         background:!isOnline?"#1e293b":_fbIsPaused(fbCfg)?"#7f1d1d":"#431407",
         color:!isOnline?"#94a3b8":_fbIsPaused(fbCfg)?"#f87171":"#fb923c",fontWeight:700,flexShrink:0}},
         !isOnline?'📴 オフライン':_fbIsPaused(fbCfg)?'⏸ 同期停止中':syncStatus==='loading'?'⏳ 同期中':'🔥 同期有効'),
+      /* 2026-04-23: オフライン準備ボタン */
+      isOnline&&fbCfg.url&&!_fbIsPaused(fbCfg)&&ce("button",{
+        onClick:function(){prefetchAllData(true);},
+        disabled:prefetchStatus&&prefetchStatus!=='done'&&typeof prefetchStatus==='object',
+        style:Object.assign({},BT,{fontSize:10,fontWeight:700,padding:"3px 8px",borderRadius:5,flexShrink:0,
+          background:prefetchStatus==='done'?"#14532d":prefetchStatus&&typeof prefetchStatus==='object'?"#1e3a5f":"#1e293b",
+          color:prefetchStatus==='done'?"#86efac":prefetchStatus&&typeof prefetchStatus==='object'?"#93c5fd":"#94a3b8"})},
+        prefetchStatus==='done'?'✓ キャッシュ済'
+          :prefetchStatus&&typeof prefetchStatus==='object'?'⬇ '+prefetchStatus.done+'/'+prefetchStatus.total
+          :'⬇ オフライン準備'),
       ce("button",{onClick:function(){setShowTrash(function(v){return !v;});},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,
           background:showTrash?"#431407":"#2a2a2a",
