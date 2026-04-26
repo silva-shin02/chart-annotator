@@ -6886,9 +6886,9 @@ function DraftLibrary(props){
       isOnline&&fbCfg.url&&!_fbIsPaused(fbCfg)&&ce("button",{
         onClick:function(){prefetchAllData(true);},
         disabled:prefetchStatus&&prefetchStatus!=='done'&&typeof prefetchStatus==='object',
-        style:Object.assign({},BT,{fontSize:10,fontWeight:700,padding:"3px 8px",borderRadius:5,flexShrink:0,
-          background:prefetchStatus==='done'?"#14532d":prefetchStatus&&typeof prefetchStatus==='object'?"#1e3a5f":"#1e293b",
-          color:prefetchStatus==='done'?"#86efac":prefetchStatus&&typeof prefetchStatus==='object'?"#93c5fd":"#94a3b8"})},
+        style:Object.assign({},BT,{fontSize:11,fontWeight:700,padding:"5px 10px",borderRadius:6,flexShrink:0,
+          background:prefetchStatus==='done'?"#14532d":prefetchStatus&&typeof prefetchStatus==='object'?"#1e3a5f":"#0ea5e9",
+          color:prefetchStatus==='done'?"#86efac":prefetchStatus&&typeof prefetchStatus==='object'?"#93c5fd":"#fff"})},
         prefetchStatus==='done'?'✓ キャッシュ済'
           :prefetchStatus&&typeof prefetchStatus==='object'?'⬇ '+prefetchStatus.done+'/'+prefetchStatus.total
           :'⬇ オフライン準備'),
