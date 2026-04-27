@@ -4268,6 +4268,39 @@ function ImageAnnotator(props){
   var stSnips=useState(caLoadSnippets); var snippets=stSnips[0],setSnippets=stSnips[1];
   var stSelSnip=useState(0); var selSnipIdx=stSelSnip[0],setSelSnipIdx=stSelSnip[1]; /* 選択中スニペットindex */
   var stSnipEdit=useState(false); var snippetEditing=stSnipEdit[0],setSnippetEditing=stSnipEdit[1];
+  /* 2026-04-27: スタンプ Firebase 同期 (銘柄メモと同じパターン、last-write-wins) */
+  var snipSaveTimerRef=useRef(null);
+  function updateSnippets(nArr){
+    setSnippets(nArr); caSaveSnippets(nArr);
+    if(snipSaveTimerRef.current)clearTimeout(snipSaveTimerRef.current);
+    snipSaveTimerRef.current=setTimeout(function(){
+      var cfg=props.fbCfg;
+      if(!_fbIsPaused(cfg)&&cfg.url){
+        var auth=cfg.secret?'?auth='+cfg.secret:'';
+        var url=cfg.url.replace(/\/$/,'')+'/chart-annotator-snippets.json'+auth;
+        fetch(url,{method:'PUT',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({snippets:nArr,updatedAt:Date.now()})}).catch(function(){});
+      }
+    },1000);
+  }
+  /* マウント時に Firebase からスタンプ取得 (取得できればローカルを上書き) */
+  useEffect(function(){
+    var cfg=props.fbCfg;
+    if(!_fbIsPaused(cfg)&&cfg.url){
+      var auth=cfg.secret?'?auth='+cfg.secret:'';
+      var url=cfg.url.replace(/\/$/,'')+'/chart-annotator-snippets.json'+auth;
+      fetch(url).then(function(r){return r.ok?r.json():null;}).then(function(d){
+        if(d&&d.snippets&&Array.isArray(d.snippets)&&d.snippets.length>0){
+          /* 旧形式 (string[]) から救済 */
+          var arr=d.snippets.map(function(s){
+            return typeof s==='string'?{text:s,color:'#ff9500'}:{text:s.text||'',color:s.color||'#ff9500'};
+          }).filter(function(s){return s.text;});
+          if(arr.length>0){ setSnippets(arr); caSaveSnippets(arr); }
+        }
+      }).catch(function(){});
+    }
+    return function(){if(snipSaveTimerRef.current)clearTimeout(snipSaveTimerRef.current);};
+  },[]);
   /* 2026-04-26: トレードマーカー方向 (short=空売り/long=買い) */
   var stTradeDir=useState('short'); var tradeDir=stTradeDir[0],setTradeDir=stTradeDir[1];
   /* 2026-04-26: 銘柄別メモパネル */
@@ -5141,12 +5174,12 @@ function ImageAnnotator(props){
             ce("div",{style:{display:"flex",flexDirection:"column",gap:1,flexShrink:0}},
               ce("button",{disabled:si===0,onClick:function(){
                 var nArr=snippets.slice();var tmp=nArr[si];nArr[si]=nArr[si-1];nArr[si-1]=tmp;
-                setSnippets(nArr);caSaveSnippets(nArr);
+                updateSnippets(nArr);
                 if(selSnipIdx===si)setSelSnipIdx(si-1);else if(selSnipIdx===si-1)setSelSnipIdx(si);
               },style:{padding:"0 4px",fontSize:8,background:"none",border:"none",color:si===0?"#333":"#888",cursor:si===0?"default":"pointer",lineHeight:1}},"▲"),
               ce("button",{disabled:si===snippets.length-1,onClick:function(){
                 var nArr=snippets.slice();var tmp=nArr[si];nArr[si]=nArr[si+1];nArr[si+1]=tmp;
-                setSnippets(nArr);caSaveSnippets(nArr);
+                updateSnippets(nArr);
                 if(selSnipIdx===si)setSelSnipIdx(si+1);else if(selSnipIdx===si+1)setSelSnipIdx(si);
               },style:{padding:"0 4px",fontSize:8,background:"none",border:"none",color:si===snippets.length-1?"#333":"#888",cursor:si===snippets.length-1?"default":"pointer",lineHeight:1}},"▼")
             ),
@@ -5155,13 +5188,13 @@ function ImageAnnotator(props){
               var curIdx=SNIP_COLORS.indexOf(sn.color||'#ff9500');
               var nextIdx=(curIdx+1)%SNIP_COLORS.length;
               var nArr=snippets.slice();nArr[si]=Object.assign({},sn,{color:SNIP_COLORS[nextIdx]});
-              setSnippets(nArr);caSaveSnippets(nArr);
+              updateSnippets(nArr);
             },style:{width:14,height:14,borderRadius:"50%",background:sn.color||'#ff9500',
               border:"2px solid #444",cursor:"pointer",flexShrink:0}}),
             ce("span",{style:{fontSize:11,color:sn.color||'#ff9500',flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontWeight:600}},sn.text),
             ce("button",{onClick:function(){
               var nArr=snippets.slice(); nArr.splice(si,1);
-              setSnippets(nArr); caSaveSnippets(nArr);
+              updateSnippets(nArr);
               if(selSnipIdx>=nArr.length&&nArr.length>0)setSelSnipIdx(nArr.length-1);
             },style:{padding:"2px 8px",fontSize:10,borderRadius:4,border:"none",
               background:"#7f1d1d",color:"#fca5a5",cursor:"pointer",flexShrink:0}},"✕")
@@ -5172,7 +5205,7 @@ function ImageAnnotator(props){
             onKeyDown:function(e){
               if(e.key==='Enter'){
                 var v=e.target.value.trim();
-                if(v){var nArr=snippets.concat([{text:v,color:'#ff9500'}]);setSnippets(nArr);caSaveSnippets(nArr);e.target.value='';}
+                if(v){var nArr=snippets.concat([{text:v,color:'#ff9500'}]);updateSnippets(nArr);e.target.value='';}
               }
             },
             style:{flex:1,padding:"4px 8px",fontSize:11,borderRadius:6,border:"1px solid #444",
@@ -5180,7 +5213,7 @@ function ImageAnnotator(props){
           ce("button",{onClick:function(){
             var inp=document.getElementById('ca_snip_add_input');
             if(inp&&inp.value.trim()){
-              var nArr=snippets.concat([{text:inp.value.trim(),color:'#ff9500'}]);setSnippets(nArr);caSaveSnippets(nArr);inp.value='';
+              var nArr=snippets.concat([{text:inp.value.trim(),color:'#ff9500'}]);updateSnippets(nArr);inp.value='';
             }
           },style:{padding:"4px 10px",fontSize:11,borderRadius:6,border:"none",
             background:"#8b5cf6",color:"#fff",cursor:"pointer",fontWeight:700,flexShrink:0}},"+追加")
