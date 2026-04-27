@@ -1164,8 +1164,10 @@ function DisplaySettingsModal(props){
                 allTickers.map(function(t){
                   return ce("div",{key:t,style:{display:"flex",alignItems:"center",gap:8,padding:"4px 0"}},
                     ce("div",{style:{flex:1,fontSize:12,color:"#ddd",fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},t),
-                    ce("input",{type:"text",value:tickerCodes[t]||'',
-                      onChange:function(e){updateTickerCode(t,e.target.value);},
+                    ce("input",{type:"text",defaultValue:tickerCodes[t]||'',
+                      key:t+'_'+String(tickerCodes[t]||''),
+                      onBlur:function(e){updateTickerCode(t,e.target.value);},
+                      onKeyDown:function(e){if(e.key==='Enter'){e.target.blur();}},
                       placeholder:"1234",
                       style:{width:80,padding:"5px 8px",background:"#2a2a2a",border:"1px solid #3a3a3a",
                         borderRadius:5,color:"#fff",fontSize:12,textAlign:"center",fontFamily:"inherit"}})
@@ -6397,6 +6399,7 @@ function DraftLibrary(props){
   var s2=useState(caLoadMeta);      var meta=s2[0],setMeta=s2[1];
   var s3=useState(false);           var adding=s3[0],setAdding=s3[1];
   var s4=useState('');              var newName=s4[0],setNewName=s4[1];
+  var s4c=useState('');             var newCode=s4c[0],setNewCode=s4c[1];
   var s5=useState(null);            var syncStatus=s5[0],setSyncStatus=s5[1];
   var s6=useState(null);            var dragOver=s6[0],setDragOver=s6[1];
   var s7=useState(false);           var showTrash=s7[0],setShowTrash=s7[1];
@@ -6421,6 +6424,11 @@ function DraftLibrary(props){
   var sQuery=useState('');       var searchQuery=sQuery[0],setSearchQuery=sQuery[1];
   var sResults=useState([]);     var searchResults=sResults[0],setSearchResults=sResults[1];
   var sSearching=useState(false);var searching=sSearching[0],setSearching=sSearching[1];
+  /* 2026-04-27: 一括インポート画面 */
+  var sImport=useState(false);   var showImport=sImport[0],setShowImport=sImport[1];
+  var sImportDrag=useState(false);var importDragActive=sImportDrag[0],setImportDragActive=sImportDrag[1];
+  var importDragCountRef=useRef(0);
+  var sImportLog=useState([]); var importLog=sImportLog[0],setImportLog=sImportLog[1];
   function doSearch(q){
     if(!q||!q.trim()){setSearchResults([]);return;}
     setSearching(true);
@@ -6482,7 +6490,7 @@ function DraftLibrary(props){
   var dragSrcRef=useRef(null);
   var addFileRef=useRef(null);
   useEffect(function(){
-    function onBack(){if(showSearch){setShowSearch(false);setSearchQuery('');setSearchResults([]);}else if(showTrash){setShowTrash(false);}else{onClose();}}
+    function onBack(){if(showImport){setShowImport(false);}else if(showSearch){setShowSearch(false);setSearchQuery('');setSearchResults([]);}else if(showTrash){setShowTrash(false);}else{onClose();}}
     window.addEventListener('ca_back',onBack);
     return function(){window.removeEventListener('ca_back',onBack);};
   },[showTrash,onClose]);
@@ -6739,14 +6747,15 @@ function DraftLibrary(props){
 
   /* 2026-04-23: JSONファイル自動振り分けインポート (ドラッグ&ドロップ / ペースト対応)
      ファイル名先頭4桁の銘柄コード → tickerCodes 逆引きでマッチ、未登録銘柄は自動追加 */
-  function addJsonAutoRoute(files){
+  function addJsonAutoRoute(files, onLog){
     if(!files||files.length===0)return;
+    var _log=onLog||function(){};
     var fileArr=[];
     for(var fi=0;fi<files.length;fi++){
       var fn=(files[fi].name||'').toLowerCase();
       if(/\.json$/.test(fn)||files[fi].type==='application/json') fileArr.push(files[fi]);
     }
-    if(fileArr.length===0){window.caToast('JSONファイルが見つかりません','error');return;}
+    if(fileArr.length===0){window.caToast('JSONファイルが見つかりません','error');_log({file:'',msg:'JSONファイルが見つかりません',ok:false});return;}
     var processed=0, total=fileArr.length;
     var firstTicker=null;
     var _latestTickers=caLoadTickers();
@@ -6782,9 +6791,9 @@ function DraftLibrary(props){
       fr.onload=function(ev){
         var j;
         try{ j=JSON.parse(ev.target.result); }
-        catch(err){window.caToast('JSONパースエラー ('+file.name+'): '+err.message,'error'); processed++; return;}
+        catch(err){window.caToast('JSONパースエラー ('+file.name+'): '+err.message,'error');_log({file:file.name,msg:'パースエラー: '+err.message,ok:false}); processed++; return;}
         if(!j||!Array.isArray(j.bars_1m)){
-          window.caToast('形式が不正 ('+file.name+'): bars_1m が配列ではありません','error'); processed++; return;
+          window.caToast('形式が不正 ('+file.name+'): bars_1m が配列ではありません','error');_log({file:file.name,msg:'bars_1m が配列ではありません',ok:false}); processed++; return;
         }
         /* ticker 解決: ファイル名先頭4桁コード → j.ticker → ファイル名そのまま */
         var ticker=_resolveTickerByCode(file.name)||_resolveTickerByJson(j)||j.ticker||'未分類';
@@ -6809,6 +6818,7 @@ function DraftLibrary(props){
           fbSaveDraft(id,metaItem,data);
           processed++;
           window.caToast(chartName+' → '+ticker,'success');
+          _log({file:chartName,msg:'→ '+ticker,ok:true});
           /* 全ファイル完了後、最初のファイルの銘柄を自動選択 */
           if(processed===total&&firstTicker){setSelTicker(firstTicker);}
         });
@@ -7036,11 +7046,15 @@ function DraftLibrary(props){
   // ── 銘柄操作 ──
   function addTicker(){
     var n=newName.trim(); if(!n||tickers.includes(n))return;
+    var code=newCode.trim().replace(/[^0-9A-Za-z]/g,'');
+    if(!code){window.caToast('銘柄コードを入力してください','error');return;}
     var nt=tickers.concat([n]);setTickers(nt);caSaveTickers(nt);fbSyncTickers(nt);
+    /* 銘柄コードも同時保存 */
+    var codes=caLoadTickerCodes(); codes[n]=code; caSaveTickerCodes(codes);
     /* 2026-04-22: 同名が削除銘柄に存在すれば除去 (復元と同等) */
     var dt=caLoadDelTickers().filter(function(x){return x.name!==n;});
     caSaveDelTickers(dt);setDelTickers(dt);
-    setNewName('');setAdding(false);setSelTicker(n);
+    setNewName('');setNewCode('');setAdding(false);setSelTicker(n);
   }
   function deleteTicker(t){
     window.caConfirm('"'+t+'"を削除しますか？（チャートはゴミ箱に移動されます）',function(){
@@ -7311,12 +7325,18 @@ function DraftLibrary(props){
         color:_fbIsPaused(fbCfg)?"#f87171":"#fb923c",fontWeight:700,flexShrink:0}},
         _fbIsPaused(fbCfg)?'⏸ 同期停止中':syncStatus==='loading'?'⏳ 同期中':'🔥 同期有効'),
       /* 2026-04-26: 横断検索ボタン */
-      !showTrash&&ce("button",{onClick:function(){setShowSearch(!showSearch);if(!showSearch){setSearchQuery('');setSearchResults([]);}},
+      !showTrash&&!showImport&&ce("button",{onClick:function(){setShowSearch(!showSearch);if(!showSearch){setSearchQuery('');setSearchResults([]);}setShowImport(false);},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,
           background:showSearch?"#1e3a5f":"#2a2a2a",
           color:showSearch?"#93c5fd":"#888",
           padding:"7px 12px",borderRadius:8})},"🔍"),
-      ce("button",{onClick:function(){setShowTrash(function(v){return !v;});setShowSearch(false);},
+      /* 2026-04-27: 一括インポートボタン */
+      !showTrash&&!showSearch&&ce("button",{onClick:function(){setShowImport(!showImport);setImportLog([]);setShowSearch(false);},
+        style:Object.assign({},BT,{fontSize:13,fontWeight:700,
+          background:showImport?"#1e3a5f":"#2a2a2a",
+          color:showImport?"#93c5fd":"#888",
+          padding:"7px 12px",borderRadius:8})},"📥"),
+      ce("button",{onClick:function(){setShowTrash(function(v){return !v;});setShowSearch(false);setShowImport(false);},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,
           background:showTrash?"#431407":"#2a2a2a",
           color:showTrash?"#fb923c":"#888",
@@ -7373,17 +7393,22 @@ function DraftLibrary(props){
         "+ 銘柄を追加")
     ),
     /* add ticker input */
-    !showTrash&&adding&&ce("div",{style:{padding:"12px 16px",background:"#1a1a1a",borderBottom:"1px solid #222",
-      display:"flex",gap:8,flexShrink:0}},
+    !showTrash&&adding&&ce("div",{style:{padding:"10px 16px",background:"#1a1a1a",borderBottom:"1px solid #222",
+      display:"flex",gap:6,alignItems:"center",flexShrink:0,flexWrap:"wrap"}},
       ce("input",{ref:inputRef,value:newName,onChange:function(e){setNewName(e.target.value);},
-        onKeyDown:function(e){if(e.key==="Enter")addTicker();if(e.key==="Escape"){setAdding(false);setNewName('');}},
-        placeholder:"銘柄名（例: トヨタ）",
-        style:{flex:1,padding:"9px 12px",background:"#2a2a2a",border:"1px solid #444",
-          borderRadius:8,color:"#fff",fontSize:16,outline:"none"}}),
+        onKeyDown:function(e){if(e.key==="Enter")addTicker();if(e.key==="Escape"){setAdding(false);setNewName('');setNewCode('');}},
+        placeholder:"銘柄名",
+        style:{flex:1,minWidth:80,padding:"9px 10px",background:"#2a2a2a",border:"1px solid #444",
+          borderRadius:8,color:"#fff",fontSize:15,outline:"none"}}),
+      ce("input",{value:newCode,onChange:function(e){setNewCode(e.target.value.replace(/[^0-9A-Za-z]/g,''));},
+        onKeyDown:function(e){if(e.key==="Enter")addTicker();if(e.key==="Escape"){setAdding(false);setNewName('');setNewCode('');}},
+        placeholder:"コード(4桁)",
+        style:{width:90,padding:"9px 10px",background:"#2a2a2a",border:"1px solid #444",
+          borderRadius:8,color:"#fff",fontSize:15,outline:"none",textAlign:"center"}}),
       ce("button",{onClick:addTicker,style:Object.assign({},BT,{
-        background:"#16a34a",color:"#fff",padding:"9px 16px",borderRadius:8,fontSize:13,fontWeight:700})},"追加"),
-      ce("button",{onClick:function(){setAdding(false);setNewName('');},
-        style:Object.assign({},BT,{background:"#333",color:"#aaa",padding:"9px 12px",borderRadius:8,fontSize:13})},"✕")
+        background:"#16a34a",color:"#fff",padding:"9px 14px",borderRadius:8,fontSize:13,fontWeight:700})},"追加"),
+      ce("button",{onClick:function(){setAdding(false);setNewName('');setNewCode('');},
+        style:Object.assign({},BT,{background:"#333",color:"#aaa",padding:"9px 10px",borderRadius:8,fontSize:13})},"✕")
     ),
 
     /* ── 横断検索パネル (2026-04-26) ── */
@@ -7431,6 +7456,81 @@ function DraftLibrary(props){
                   mt.text);
               })
             )
+          );
+        })
+      )
+    ),
+
+    /* ── 一括インポート画面 (2026-04-27) ── */
+    showImport&&!showTrash&&!showSearch&&ce("div",{
+      style:{display:"flex",flexDirection:"column",flex:1,overflow:"hidden"},
+      onPaste:function(e){
+        var items=e.clipboardData&&e.clipboardData.items;
+        if(!items)return;
+        var files=[];
+        for(var i=0;i<items.length;i++){
+          var f=items[i].getAsFile&&items[i].getAsFile();
+          if(f&&(/\.json$/i.test(f.name)||f.type==='application/json'))files.push(f);
+        }
+        if(files.length>0){
+          e.preventDefault();
+          addJsonAutoRoute(files,function(entry){setImportLog(function(prev){return prev.concat([entry]);});});
+        }
+      }},
+      /* ドロップゾーン */
+      ce("div",{
+        onDragEnter:function(e){e.preventDefault();importDragCountRef.current++;setImportDragActive(true);},
+        onDragOver:function(e){e.preventDefault();},
+        onDragLeave:function(e){e.preventDefault();importDragCountRef.current--;if(importDragCountRef.current<=0){importDragCountRef.current=0;setImportDragActive(false);}},
+        onDrop:function(e){
+          e.preventDefault();importDragCountRef.current=0;setImportDragActive(false);
+          var files=e.dataTransfer.files;
+          if(files&&files.length>0){
+            addJsonAutoRoute(files,function(entry){setImportLog(function(prev){return prev.concat([entry]);});});
+          }
+        },
+        style:{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+          margin:16,borderRadius:12,
+          border:importDragActive?"3px dashed #6366F1":"3px dashed #333",
+          background:importDragActive?"rgba(99,102,241,0.08)":"rgba(255,255,255,0.02)",
+          transition:"all .15s",cursor:"pointer",minHeight:180}},
+        ce("div",{style:{fontSize:48,marginBottom:12,opacity:0.6}},importDragActive?"📥":"📂"),
+        ce("div",{style:{fontSize:15,fontWeight:700,color:importDragActive?"#a5b4fc":"#ccc",marginBottom:6}},
+          importDragActive?"ドロップして一括インポート":"JSONファイルをドラッグ＆ドロップ"),
+        ce("div",{style:{fontSize:12,color:"#888",marginBottom:16}},"またはCtrl+V でペースト / 下のボタンからファイル選択"),
+        ce("label",{style:{padding:"10px 24px",fontSize:13,fontWeight:700,borderRadius:8,
+          background:"#6366F1",color:"#fff",cursor:"pointer",display:"inline-block"}},
+          "ファイルを選択…",
+          ce("input",{type:"file",multiple:true,accept:".json,application/json",
+            style:{display:"none"},
+            onChange:function(e){
+              if(e.target.files&&e.target.files.length>0){
+                addJsonAutoRoute(e.target.files,function(entry){setImportLog(function(prev){return prev.concat([entry]);});});
+              }
+              e.target.value='';
+            }})
+        ),
+        ce("div",{style:{fontSize:11,color:"#666",marginTop:12}},"ファイル名先頭4桁の銘柄コードで自動振り分け")
+      ),
+      /* ログ表示 */
+      importLog.length>0&&ce("div",{style:{flexShrink:0,maxHeight:200,overflowY:"auto",
+        margin:"0 16px 16px",borderRadius:8,background:"#0d1117",border:"1px solid #21262d"}},
+        ce("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",
+          padding:"8px 12px",borderBottom:"1px solid #21262d"}},
+          ce("span",{style:{fontSize:12,fontWeight:700,color:"#e6edf3"}},
+            "処理結果 ("+importLog.filter(function(l){return l.ok;}).length+"/"+importLog.length+" 成功)"),
+          ce("button",{onClick:function(){setImportLog([]);},
+            style:Object.assign({},BT,{fontSize:11,padding:"3px 8px",borderRadius:4,
+              background:"#21262d",color:"#8b949e"})},"クリア")
+        ),
+        importLog.map(function(entry,ei){
+          return ce("div",{key:ei,style:{display:"flex",gap:6,alignItems:"center",
+            padding:"4px 12px",borderBottom:"1px solid #161b22",fontSize:11}},
+            ce("span",{style:{color:entry.ok?"#4ade80":"#f87171",flexShrink:0}},entry.ok?"✓":"✕"),
+            ce("span",{style:{color:"#e6edf3",fontWeight:600,flexShrink:0,maxWidth:140,
+              overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},entry.file),
+            ce("span",{style:{color:"#8b949e",flex:1,overflow:"hidden",textOverflow:"ellipsis",
+              whiteSpace:"nowrap"}},entry.msg)
           );
         })
       )
@@ -7570,7 +7670,7 @@ function DraftLibrary(props){
     ),
 
     /* ── 通常ビュー ── */
-    !showTrash&&!showSearch&&ce("div",{style:{display:"flex",flex:1,overflow:"hidden"}},
+    !showTrash&&!showSearch&&!showImport&&ce("div",{style:{display:"flex",flex:1,overflow:"hidden"}},
       /* ticker list */
       ce("div",{style:{width:IS_TOUCH?130:155,background:"#161616",borderRight:"1px solid #2a2a2a",
         overflowY:"auto",flexShrink:0}},
