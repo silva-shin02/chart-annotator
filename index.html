@@ -2424,11 +2424,44 @@ function DataChart(props){
     if(drawTool==='lassoFree'){
       var lfHi=hitTestStroke(e.clientX,e.clientY);
       var lfInSel=false;
-      if(lfHi&&lassoSel&&lassoSel.length>0){
-        lfInSel=lassoSel.some(function(s){return s.side===lfHi.side&&s.idx===lfHi.idx;});
+      if(lassoSel&&lassoSel.length>0){
+        /* (1) ストローク本体 hit */
+        if(lfHi){
+          lfInSel=lassoSel.some(function(s){return s.side===lfHi.side&&s.idx===lfHi.idx;});
+        }
+        /* (2) 2026-04-27: 統合bbox 内 hit (iPad対策、ストローク本体に外しても掴めるように) */
+        if(!lfInSel){
+          var L0=layoutRef.current;
+          var canvas0=canvasRef.current;
+          var ctx0=canvas0?canvas0.getContext('2d'):null;
+          if(L0&&ctx0){
+            var rect0=getCanvasRect();
+            var lx=e.clientX-rect0.left, ly=e.clientY-rect0.top;
+            var _pToY0=function(p){
+              if(typeof L0.dpmax==='number'&&typeof L0.pxPerYen==='number'&&L0.pxPerYen>0)return L0.priceTop+(L0.dpmax-p)*L0.pxPerYen;
+              return L0.priceTop+(1-(p-L0.pmin)/(L0.pmax-L0.pmin))*L0.priceH;
+            };
+            var bx1=Infinity,by1=Infinity,bx2=-Infinity,by2=-Infinity;
+            lassoSel.forEach(function(sel){
+              var arr=(sel.side==='ref')?(refStrokes||[]):(strokes||[]);
+              var st=arr[sel.idx]; if(!st)return;
+              var minFn=function(m){return minToXWithSide(m,sel.side);};
+              var b=getStrokeScreenBounds(ctx0,st,minFn,_pToY0);
+              if(!b)return;
+              if(b.x1<bx1)bx1=b.x1; if(b.y1<by1)by1=b.y1;
+              if(b.x2>bx2)bx2=b.x2; if(b.y2>by2)by2=b.y2;
+            });
+            if(bx1!==Infinity){
+              var BBOX_PAD=12;
+              if(lx>=bx1-BBOX_PAD&&lx<=bx2+BBOX_PAD&&ly>=by1-BBOX_PAD&&ly<=by2+BBOX_PAD){
+                lfInSel=true;
+              }
+            }
+          }
+        }
       }
       if(lfInSel){
-        /* lassoSel内のストロークをhit → マルチ移動開始 (tp必要、領域外なら何もしない) */
+        /* lassoSel内のストロークをhit (本体 or 統合bbox内) → マルチ移動開始 (tp必要、領域外なら何もしない) */
         var tpLF=pxToTimePrice(e.clientX,e.clientY);
         if(tpLF&&tpLF.p!=null){
           var origItems=lassoSel.map(function(s){
