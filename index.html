@@ -2419,6 +2419,34 @@ function DataChart(props){
       panStartRef.current={x:e.clientX,y:e.clientY,uS:view.uS,uE:view.uE,ps:pShift};
       return;
     }
+    /* 2026-04-27: 投げ縄ツール (tpチェック前に処理) — iPad等で出来高/padding領域からも開始可能に
+       lassoSel hit時のみ tp 必要 (マルチ移動開始)、空白→パス開始は画面座標のみで処理 */
+    if(drawTool==='lassoFree'){
+      var lfHi=hitTestStroke(e.clientX,e.clientY);
+      var lfInSel=false;
+      if(lfHi&&lassoSel&&lassoSel.length>0){
+        lfInSel=lassoSel.some(function(s){return s.side===lfHi.side&&s.idx===lfHi.idx;});
+      }
+      if(lfInSel){
+        /* lassoSel内のストロークをhit → マルチ移動開始 (tp必要、領域外なら何もしない) */
+        var tpLF=pxToTimePrice(e.clientX,e.clientY);
+        if(tpLF&&tpLF.p!=null){
+          var origItems=lassoSel.map(function(s){
+            var arr=(s.side==='ref')?(refStrokes||[]):(strokes||[]);
+            var stk=arr[s.idx];
+            return {side:s.side,idx:s.idx,anchors:stk?(stk.anchors||[]).map(function(a){return {tm:a.tm,p:a.p};}):[]};
+          });
+          lassoMoveRef.current={startTM:tpLF.tm,startP:tpLF.p,origItems:origItems};
+        }
+        return;
+      }
+      /* 空白 or 選択外 → 投げ縄パス開始 (tp不要、画面座標のみ) */
+      setSelectedIdx(null);
+      setLassoSel(null);
+      lassoPathRef.current=[{x:e.clientX,y:e.clientY}];
+      drawCrosshair();
+      return;
+    }
     var tp=pxToTimePrice(e.clientX,e.clientY);
     if(!tp||tp.p==null)return;
     /* C8a: xToSideTmでgap帯は近い側に境界clamp済み — gap block不要 */
@@ -2471,29 +2499,6 @@ function DataChart(props){
       }
       // 選択したストロークをドラッグで移動 → moveRef開始 (C6: side 保持)
       moveRef.current={side:hi.side, idx:hi.idx, startTM:tp.tm, startP:tp.p, dtm:0, dp:0, moving:false};
-      return;
-    }
-    /* 2026-04-23: 投げ縄ツール — フリーハンド囲い→マルチ選択→一括移動/色変え */
-    if(drawTool==='lassoFree'){
-      /* lassoSel内のストロークをhit → マルチ移動開始 */
-      var lfHi=hitTestStroke(e.clientX,e.clientY);
-      if(lfHi&&lassoSel&&lassoSel.length>0){
-        var lfInSel=lassoSel.some(function(s){return s.side===lfHi.side&&s.idx===lfHi.idx;});
-        if(lfInSel){
-          var origItems=lassoSel.map(function(s){
-            var arr=(s.side==='ref')?(refStrokes||[]):(strokes||[]);
-            var stk=arr[s.idx];
-            return {side:s.side,idx:s.idx,anchors:stk?(stk.anchors||[]).map(function(a){return {tm:a.tm,p:a.p};}):[]};
-          });
-          lassoMoveRef.current={startTM:tp.tm,startP:tp.p,origItems:origItems};
-          return;
-        }
-      }
-      /* 空白 or 選択外 → 投げ縄パス開始 */
-      setSelectedIdx(null);
-      setLassoSel(null);
-      lassoPathRef.current=[{x:e.clientX,y:e.clientY}];
-      drawCrosshair();
       return;
     }
     if(drawTool==='text'){
