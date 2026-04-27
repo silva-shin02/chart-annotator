@@ -975,12 +975,10 @@ var TOOLS=[
   {id:"dotted",label:"点線"},
   {id:"arrow", label:"矢印"},
   {id:"rect",  label:"四角"},
-  {id:"circle",label:"丸"},
-  {id:"trade", label:"▼▲トレード"},
   {id:"marker",label:"マーカー"},
   {id:"freehand",label:"フリー"},
   {id:"text",  label:"Ｔテキスト"},
-  {id:"snippet",label:"💬スニペット"},
+  {id:"snippet",label:"スタンプ"},
   {id:"lasso", label:"選択・変形"},
   {id:"lassoFree", label:"投げ縄"},
   {id:"eraser",label:"消しゴム"},
@@ -3730,14 +3728,14 @@ function drawAnalysisStroke(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,priceTo
     ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
     ctx.setLineDash([]);
   } else if(s.type==='arrow'){
-    // 線 + 矢尻 (矢尻サイズも zoom 連動)
+    // 線 + 矢尻 (矢尻サイズも zoom 連動) — 2026-04-27: 起点(x1,y1)側に矢尻
     ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
-    var ang=Math.atan2(y2-y1,x2-x1);
+    var ang=Math.atan2(y1-y2,x1-x2); // 終点→起点の向き
     var hs=Math.max(8*Z, w*3); // 矢尻サイズ (zoom連動)
     ctx.beginPath();
-    ctx.moveTo(x2,y2);
-    ctx.lineTo(x2-hs*Math.cos(ang-Math.PI/6), y2-hs*Math.sin(ang-Math.PI/6));
-    ctx.lineTo(x2-hs*Math.cos(ang+Math.PI/6), y2-hs*Math.sin(ang+Math.PI/6));
+    ctx.moveTo(x1,y1);
+    ctx.lineTo(x1-hs*Math.cos(ang-Math.PI/6), y1-hs*Math.sin(ang-Math.PI/6));
+    ctx.lineTo(x1-hs*Math.cos(ang+Math.PI/6), y1-hs*Math.sin(ang+Math.PI/6));
     ctx.closePath(); ctx.fill();
   } else if(s.type==='rect'){
     var rx=Math.min(x1,x2), ry=Math.min(y1,y2);
@@ -5170,7 +5168,7 @@ function ImageAnnotator(props){
           );
         }),
         ce("div",{style:{display:"flex",gap:4,alignItems:"center",marginTop:2}},
-          ce("input",{id:"ca_snip_add_input",type:"text",placeholder:"新しいスニペットを追加…",
+          ce("input",{id:"ca_snip_add_input",type:"text",placeholder:"新しいスタンプを追加…",
             onKeyDown:function(e){
               if(e.key==='Enter'){
                 var v=e.target.value.trim();
@@ -5187,26 +5185,6 @@ function ImageAnnotator(props){
           },style:{padding:"4px 10px",fontSize:11,borderRadius:6,border:"none",
             background:"#8b5cf6",color:"#fff",cursor:"pointer",fontWeight:700,flexShrink:0}},"+追加")
         )
-      ),
-      /* Row 4: トレード方向切替 (tradeツール選択時のみ表示) */
-      (analysisData && tool==='trade') && ce("div",{
-        style:{display:"flex",gap:6,alignItems:"center",padding:"5px 10px",
-        borderTop:"1px solid #2a2a2a",background:"#1a0a0a"}},
-        ce("span",{style:{fontSize:11,color:"#888",flexShrink:0}},"方向:"),
-        ce("button",{onClick:function(){setTradeDir('short');},
-          style:{padding:"4px 12px",fontSize:11,fontWeight:700,borderRadius:8,
-            border:tradeDir==='short'?"2px solid #ef4444":"1px solid #555",
-            background:tradeDir==='short'?"#991b1b":"#2a2a2a",
-            color:tradeDir==='short'?"#fca5a5":"#aaa",cursor:"pointer",flexShrink:0}},
-          "▼ 空売り"),
-        ce("button",{onClick:function(){setTradeDir('long');},
-          style:{padding:"4px 12px",fontSize:11,fontWeight:700,borderRadius:8,
-            border:tradeDir==='long'?"2px solid #22c55e":"1px solid #555",
-            background:tradeDir==='long'?"#14532d":"#2a2a2a",
-            color:tradeDir==='long'?"#86efac":"#aaa",cursor:"pointer",flexShrink:0}},
-          "▲ 買い"),
-        ce("span",{style:{fontSize:10,color:"#666",marginLeft:8}},
-          tradeDir==='short'?'始点=売りエントリー → 終点=買戻し':'始点=買いエントリー → 終点=売り')
       )
     ), /* end toolbar */
 
