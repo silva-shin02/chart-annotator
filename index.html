@@ -1314,7 +1314,7 @@ function RefAnalysisPicker(props){
                   transition:"border-color .15s"},
                 onMouseEnter:function(e){if(!isLoading)e.currentTarget.style.borderColor='#10b981';},
                 onMouseLeave:function(e){e.currentTarget.style.borderColor='#2a2a2a';}},
-                (m.thumbUrl||_thumbMemCache[m.id]||m.thumb)?ce("img",{src:_thumbMemCache[m.id]||m.thumbUrl||m.thumb,style:{width:"100%",display:"block",height:"auto"},draggable:false,onError:function(e){e.target.style.display="none";}})
+                (m.thumbUrl||_thumbMemCache[m.id]||m.thumb)?ce("img",{src:_thumbMemCache[m.id]||m.thumbUrl||m.thumb,style:{width:"100%",display:"block",height:"auto"},draggable:false,onError:function(e){e.target.style.display="none";caClearBrokenThumbUrl(m.id);}})
                   :ce("div",{style:{width:"100%",height:60,background:"#222",display:"flex",
                     alignItems:"center",justifyContent:"center",color:"#555",fontSize:10}},"no preview"),
                 ce("div",{style:{padding:"5px 7px"}},
@@ -6313,6 +6313,23 @@ function caSaveMeta(m){
     console.error('[caSaveMeta] save failed');
   }
 }
+/* 2026-04-27: Storage URL 破損時 (img onError) — meta から thumbUrl をクリア
+   次回ホームマウント時に missing 処理が自動再生成 + 再UL */
+function caClearBrokenThumbUrl(id){
+  try{
+    var s=localStorage.getItem(CA_META_KEY);if(!s)return;
+    var arr=JSON.parse(s);if(!Array.isArray(arr))return;
+    var changed=false;
+    for(var i=0;i<arr.length;i++){
+      if(arr[i].id===id&&arr[i].thumbUrl){
+        arr[i].thumbUrl='';
+        changed=true;
+        break;
+      }
+    }
+    if(changed)localStorage.setItem(CA_META_KEY,JSON.stringify(arr));
+  }catch(e){}
+}
 function caLoadData(id){
   /* C8a: localStorage 層を廃止 (data は容量が大きく fullになりやすい)。mem only同期版。
      本格ロードは caLoadDataAsync を使う (IDBフォールバックあり) */
@@ -7109,18 +7126,27 @@ function DraftLibrary(props){
   function fbSaveDraft(id,metaItem,data){
     var base=makeDraftsBase(), dataBase=makeDraftsDataBase();
     if(!base||_fbIsPaused(fbCfg))return;
-    // ① メタ書き込み（thumbをRTDBに直接保存、Storage不使用）→ TS/V書き込み
-    var metaDb={ticker:metaItem.ticker,name:metaItem.name,savedAt:metaItem.savedAt};
-    if(metaItem.thumbUrl)metaDb.thumbUrl=metaItem.thumbUrl;
-    if(metaItem.thumb)metaDb.thumb=metaItem.thumb;
-    var body=JSON.stringify(metaDb);
-    fetch(base+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:body})
-    .then(function(){
-      var tsBase=fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-ts';
-      var tsBody=JSON.stringify({t:metaItem.savedAt||Date.now()});fetch(tsBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:tsBody})
-        .catch(function(){});
-      fbWriteV();
-    }).catch(function(e){console.error('fbSaveDraft:',e);});
+    /* 2026-04-27: 案A+ — Storage UL を先に試行して thumbUrl を取得
+       RTDB の meta には thumb base64 を含めない (DL量削減: ~3000倍軽量化)
+       UL失敗時は thumbUrl なしで保存 → ホーム missing 処理で自動復元 */
+    var hasThumb=metaItem.thumb&&typeof metaItem.thumb==='string'&&metaItem.thumb.length>500;
+    var ulPromise=(hasThumb&&fbCfg.storageBucket)
+      ? uploadThumbToStorage(fbCfg,id,metaItem.thumb).catch(function(){return null;})
+      : Promise.resolve(metaItem.thumbUrl||null);
+    ulPromise.then(function(thumbUrl){
+      // ① メタ書き込み（thumb は除外、thumbUrl のみ）→ TS/V書き込み
+      var metaDb={ticker:metaItem.ticker,name:metaItem.name,savedAt:metaItem.savedAt};
+      if(thumbUrl)metaDb.thumbUrl=thumbUrl;
+      else if(metaItem.thumbUrl)metaDb.thumbUrl=metaItem.thumbUrl;
+      var body=JSON.stringify(metaDb);
+      fetch(base+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:body})
+      .then(function(){
+        var tsBase=fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-ts';
+        var tsBody=JSON.stringify({t:metaItem.savedAt||Date.now()});fetch(tsBase+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:tsBody})
+          .catch(function(){});
+        fbWriteV();
+      }).catch(function(e){console.error('fbSaveDraft:',e);});
+    });
     // ② データ書き込み（メタとは独立、並行でOK）
     /* 2026-04-20 Phase10: 画像base64 uploadToStorage分岐撤去 (analysis dataのみ) */
     if(data){
@@ -7729,7 +7755,7 @@ function DraftLibrary(props){
                         return ce("div",{key:m.id,
                           style:{width:IS_TOUCH?450:510,background:"#1a1a1a",borderRadius:10,
                             border:"1px solid #3a1a1a",overflow:"hidden",flexShrink:0}},
-                          (m.thumbUrl||_thumbMemCache[m.id]||m.thumb)?ce("img",{src:_thumbMemCache[m.id]||m.thumbUrl||m.thumb,style:{width:"100%",display:"block",height:"auto"},draggable:false,onError:function(e){e.target.style.display="none";}}):null,
+                          (m.thumbUrl||_thumbMemCache[m.id]||m.thumb)?ce("img",{src:_thumbMemCache[m.id]||m.thumbUrl||m.thumb,style:{width:"100%",display:"block",height:"auto"},draggable:false,onError:function(e){e.target.style.display="none";caClearBrokenThumbUrl(m.id);}}):null,
                           ce("div",{style:{padding:"8px 10px"}},
                             ce("div",{style:{fontSize:12,fontWeight:700,color:"#ddd",
                               overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},m.name),
@@ -7898,7 +7924,7 @@ function DraftLibrary(props){
                       background:"#4ade80",color:"#0a1f0a",fontSize:10,fontWeight:700,
                       borderRadius:4,letterSpacing:0.3}
                   },"📅 "+highlightDate),
-                  (m.thumbUrl||_thumbMemCache[m.id]||m.thumb)?ce("img",{src:_thumbMemCache[m.id]||m.thumbUrl||m.thumb,style:{width:"100%",display:"block",height:"auto"},draggable:false,onError:function(e){e.target.style.display="none";}})
+                  (m.thumbUrl||_thumbMemCache[m.id]||m.thumb)?ce("img",{src:_thumbMemCache[m.id]||m.thumbUrl||m.thumb,style:{width:"100%",display:"block",height:"auto"},draggable:false,onError:function(e){e.target.style.display="none";caClearBrokenThumbUrl(m.id);}})
                     :ce("div",{style:{width:"100%",height:80,background:"#222",display:"flex",
                       alignItems:"center",justifyContent:"center",color:"#555",fontSize:11}},"no preview"),
                   ce("button",{onClick:function(e){e.stopPropagation();deleteChart(m.id);},
