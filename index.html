@@ -7356,7 +7356,11 @@ function DraftLibrary(props){
     setSyncStatus('loading');
     // ローカルデータを先に非同期で取得し、Firebase取得と合流
     caLoadDataAsync(id,function(d){
-      fetch(dataBase+'/'+id+'.json'+auth).then(function(r){return r.ok?r.text():null;})
+      /* 2026-04-29 案G: ts pre-check で フルDL スキップ判定 (Firebase DL量削減)
+         ローカル data に analysisData + _v が揃っていて、remote ts.t ≤ local _v + 200ms なら
+         最新確定 → フルDL不要で即 onOpen。失敗/差分時は従来フルDL にフォールスルー */
+      function _doFullFetch(){
+        fetch(dataBase+'/'+id+'.json'+auth).then(function(r){return r.ok?r.text():null;})
         .then(function(txt){
           var fbData=txt?JSON.parse(txt):null;
           if(!fbData){
@@ -7424,6 +7428,28 @@ function DraftLibrary(props){
         }
         setSyncStatus(null);window.caToast('データが見つかりません','error');
       }).catch(function(e){setSyncStatus(null);console.error('[openChart] Error:',e);window.caToast('読込失敗: '+(e&&e.message?e.message:'不明なエラー'),'error');});
+      }
+      /* スキップ判定: 新フォーマット (analysisData あり) + _v 有効 が前提
+         旧画像draft (orig_base64) や _v 欠損データは従来通りフルDL */
+      var hasFullLocal=d&&d.analysisData&&typeof d._v==='number'&&d._v>0;
+      if(hasFullLocal){
+        var tsUrl=fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-ts/'+id+'.json'+auth;
+        fetch(tsUrl).then(function(r){return r.ok?r.json():null;})
+          .then(function(ts){
+            var remoteT=(ts&&typeof ts.t==='number')?ts.t:0;
+            if(remoteT&&remoteT<=d._v+200){
+              /* ローカル最新確定 → フルDLスキップ */
+              setSyncStatus(null);
+              onOpen(Object.assign({},d,extra));
+              return;
+            }
+            /* remote が新しい / ts 不在 → 従来フルDL */
+            _doFullFetch();
+          })
+          .catch(function(){_doFullFetch();});
+      } else {
+        _doFullFetch();
+      }
     }); // caLoadDataAsync
   }
 
