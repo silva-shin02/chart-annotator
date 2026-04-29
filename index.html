@@ -4739,8 +4739,21 @@ function ImageAnnotator(props){
     }
 
     /* 2026-04-20 C8: 楽観ロックと併用でポーリング間隔を5秒に短縮 (競合検出率向上) */
-    var timer=setInterval(poll,5000);
-    return function(){clearInterval(timer);};
+    /* 2026-04-29 案B: visibility連動 — タブ非表示時はポーリング停止、復帰時に即時1回poll+再開 */
+    var timer=null;
+    function start(){
+      if(timer)return;
+      poll(); // 即時1回 (復帰時に最新化)
+      timer=setInterval(poll,5000);
+    }
+    function stop(){if(timer){clearInterval(timer);timer=null;}}
+    function onVis(){if(document.hidden)stop();else start();}
+    if(!document.hidden)timer=setInterval(poll,5000);
+    document.addEventListener('visibilitychange',onVis);
+    return function(){
+      stop();
+      document.removeEventListener('visibilitychange',onVis);
+    };
   },[]);
   /* 分析モード用: ストローク変更を「現在のtfの履歴」に commit (C6: {cur,ref} 統合スナップショット)
      curStrokesObj: setAnalysisStrokes直後の全体オブジェクト
@@ -7111,15 +7124,27 @@ function DraftLibrary(props){
 
   // ── 自動停止コールバック登録 ──
   // ── ポーリング開始 ──
+  /* 2026-04-29 案B: visibility連動 — タブ非表示時はポーリング停止、復帰時に即時1回fetch+再開 */
   useEffect(function(){
     if(_fbIsPaused(fbCfg))return;
+    var timer=null;
+    function tick(){setSyncStatus('loading');pollFb();}
+    function start(){
+      if(timer)return;
+      tick(); // 即時1回 (復帰時に最新化)
+      timer=setInterval(tick,15000);
+    }
+    function stop(){if(timer){clearInterval(timer);timer=null;}}
+    function onVis(){if(document.hidden)stop();else start();}
+    // 初回: フルメタ取得 + (タブ表示中なら) ポーリング開始
     setSyncStatus('loading');
-    fetchFullMeta(); // 初回はフルメタ取得
-    var timer=setInterval(function(){
-      
-      setSyncStatus('loading');pollFb();
-    },15000);
-    return function(){clearInterval(timer);};
+    fetchFullMeta();
+    if(!document.hidden)timer=setInterval(tick,15000);
+    document.addEventListener('visibilitychange',onVis);
+    return function(){
+      stop();
+      document.removeEventListener('visibilitychange',onVis);
+    };
   },[]);
 
   // ── Firebase ヘルパー（meta=旧パス / data=新パス 分離）──
