@@ -2899,8 +2899,8 @@ function DataChart(props){
   // タッチ (iPad/スマホ) - 1本指: 描画、2本指: ピンチズーム＋パン
   function onTouchStart(e){
     if(props.textInputActive)return;
-    /* 2026-04-22: 3本指ダブルタップで移動(pan)ツール切替
-       - 3本指タッチstart が 600ms以内に2回発生したら発火
+    /* 2026-04-30: 3本指トリプルタップで移動(pan)ツール切替 (旧ダブル→トリプルに変更、誤発火低減)
+       - 3本指タッチstart が 600ms以内に3回発生したら発火
        - 同一シーケンス内の連続触りは50ms以内フィルタで除外 */
     if(e.touches.length===3){
       var _now=Date.now();
@@ -2909,7 +2909,7 @@ function DataChart(props){
       if(!(_hist.length>0&&_now-_hist[_hist.length-1]<50)){
         _hist.push(_now);
         threeTapHistRef.current=_hist;
-        if(_hist.length>=2){
+        if(_hist.length>=3){
           threeTapHistRef.current=[];
           if(e.preventDefault)e.preventDefault();
           if(props.onThreeFingerDoubleTap)props.onThreeFingerDoubleTap();
@@ -2923,8 +2923,8 @@ function DataChart(props){
       }
     }
     if(e.touches.length===2){
-      /* 2026-04-23: 2本指ダブルタップで消しゴムツール切替
-         — 2本指touchstart が 600ms以内に2回発生したら発火
+      /* 2026-04-30: 2本指トリプルタップで消しゴムツール切替 (旧ダブル→トリプルに変更、誤発火低減)
+         — 2本指touchstart が 600ms以内に3回発生したら発火
          — 同一シーケンス内の連続触りは50ms以内フィルタで除外 */
       var _now2=Date.now();
       var _hist2=twoTapHistRef.current;
@@ -2932,7 +2932,7 @@ function DataChart(props){
       if(!(_hist2.length>0&&_now2-_hist2[_hist2.length-1]<50)){
         _hist2.push(_now2);
         twoTapHistRef.current=_hist2;
-        if(_hist2.length>=2){
+        if(_hist2.length>=3){
           twoTapHistRef.current=[];
           if(e.preventDefault)e.preventDefault();
           if(props.onTwoFingerDoubleTap)props.onTwoFingerDoubleTap();
