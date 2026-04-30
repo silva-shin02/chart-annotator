@@ -1750,6 +1750,47 @@ function DataChart(props){
     }
     /* eraser: 赤枠プレビューは廃止 — なぞった瞬間に即削除する方式 */
 
+    /* 2026-04-29: 投げ縄パス描画 (破線) + マルチ移動プレビュー
+       早期 return (!showCrosshair||!L) の前に配置必須 — 後ろに置くと
+       十字線オフ時に投げ縄点線が描画されない iPad バグが復活する */
+    try{
+    if(lassoPathRef.current&&lassoPathRef.current.length>=2&&containerRef.current){
+      var lRect=getCanvasRect();
+      ctx.save();
+      ctx.setLineDash([6,4]);
+      ctx.strokeStyle='#6366F1';
+      ctx.lineWidth=1.5;
+      ctx.globalAlpha=0.8;
+      ctx.beginPath();
+      var lp=lassoPathRef.current;
+      ctx.moveTo(lp[0].x-lRect.left,lp[0].y-lRect.top);
+      for(var li=1;li<lp.length;li++)ctx.lineTo(lp[li].x-lRect.left,lp[li].y-lRect.top);
+      ctx.stroke();
+      ctx.restore();
+    }
+    if(lassoMoveRef.current&&lassoSel&&L){
+      var lmv=lassoMoveRef.current;
+      ctx.save();
+      ctx.globalAlpha=0.5;
+      lassoSel.forEach(function(sel){
+        var arr2=(sel.side==='ref')?(refStrokes||[]):(strokes||[]);
+        var s2=arr2[sel.idx]; if(!s2)return;
+        var moved=Object.assign({},s2,{
+          anchors:s2.anchors.map(function(a){return {tm:a.tm+(lmv.dtm||0),p:a.p+(lmv.dp||0)};})
+        });
+        var minFn=function(m){return minToXWithSide(m,sel.side);};
+        function pToYm(p){
+          if(typeof L.dpmax==='number'&&typeof L.pxPerYen==='number'&&L.pxPerYen>0)return L.priceTop+(L.dpmax-p)*L.pxPerYen;
+          return L.priceTop+(1-(p-L.pmin)/(L.pmax-L.pmin))*L.priceH;
+        }
+        var tp2=s2.type||s2.tool;
+        if(tp2==='freehand'||tp2==='text')drawAnalysisStrokeExt(ctx,moved,minFn,pToYm,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
+        else drawAnalysisStroke(ctx,moved,minFn,pToYm,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
+      });
+      ctx.restore();
+    }
+    }catch(_lassoErr){}
+
     /* 十字カーソル */
     if(!showCrosshair||!L)return;
     /* F2: 連動cursor が親から来ていればそれを自分の画面座標に変換して描く。
@@ -1809,44 +1850,6 @@ function DataChart(props){
       ctx.fillStyle='#000';
       ctx.fillText(pStr,L.padL+L.chartW+7,cy);
     }
-    /* 2026-04-23: 投げ縄パス描画 (破線) + マルチ移動プレビュー */
-    try{
-    if(lassoPathRef.current&&lassoPathRef.current.length>=2&&containerRef.current){
-      var lRect=getCanvasRect();
-      ctx.save();
-      ctx.setLineDash([6,4]);
-      ctx.strokeStyle='#6366F1';
-      ctx.lineWidth=1.5;
-      ctx.globalAlpha=0.8;
-      ctx.beginPath();
-      var lp=lassoPathRef.current;
-      ctx.moveTo(lp[0].x-lRect.left,lp[0].y-lRect.top);
-      for(var li=1;li<lp.length;li++)ctx.lineTo(lp[li].x-lRect.left,lp[li].y-lRect.top);
-      ctx.stroke();
-      ctx.restore();
-    }
-    if(lassoMoveRef.current&&lassoSel&&L){
-      var lmv=lassoMoveRef.current;
-      ctx.save();
-      ctx.globalAlpha=0.5;
-      lassoSel.forEach(function(sel){
-        var arr2=(sel.side==='ref')?(refStrokes||[]):(strokes||[]);
-        var s2=arr2[sel.idx]; if(!s2)return;
-        var moved=Object.assign({},s2,{
-          anchors:s2.anchors.map(function(a){return {tm:a.tm+(lmv.dtm||0),p:a.p+(lmv.dp||0)};})
-        });
-        var minFn=function(m){return minToXWithSide(m,sel.side);};
-        function pToYm(p){
-          if(typeof L.dpmax==='number'&&typeof L.pxPerYen==='number'&&L.pxPerYen>0)return L.priceTop+(L.dpmax-p)*L.pxPerYen;
-          return L.priceTop+(1-(p-L.pmin)/(L.pmax-L.pmin))*L.priceH;
-        }
-        var tp2=s2.type||s2.tool;
-        if(tp2==='freehand'||tp2==='text')drawAnalysisStrokeExt(ctx,moved,minFn,pToYm,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
-        else drawAnalysisStroke(ctx,moved,minFn,pToYm,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
-      });
-      ctx.restore();
-    }
-    }catch(_lassoErr){}
   }
 
   /* 2026-04-20: 分離モード用 drawCrosshair — price/vol 両overlay に分割描画
