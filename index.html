@@ -6866,6 +6866,7 @@ function exportAllDraftsAsPng(metaList, fbCfg, onProgress, onDone){
    - サムネ: 結果リスト・クエリプレビューとも 160×100 (旧80×50の2倍) */
 function PatternSearchModal(props){
   var open=props.open, onClose=props.onClose, meta=props.meta||[], fbCfg=props.fbCfg||{};
+  var tickersList=props.tickers||[];  /* 2026-05-03: 対象銘柄選択用 */
   var onOpenChart=props.onOpenChart||function(){};
   /* 2026-04-30: C - エディタから起動時の初期クエリ */
   var initialQueryDraftId=props.initialQueryDraftId||null;
@@ -6890,6 +6891,10 @@ function PatternSearchModal(props){
   var sCtotal=useState(0);     var totalCount=sCtotal[0],setTotalCount=sCtotal[1];
   /* 結果 state: [{rec, features, scoreObj}] (hit のみ score降順) */
   var sRes=useState([]);       var results=sRes[0],setResults=sRes[1];
+  /* 2026-05-03: 対象銘柄選択 (絞り込み)
+     - {ticker: bool} 形式、true=計算/結果対象、未設定/false=除外
+     - クエリチャート変更時にクエリ銘柄のみ ON にリセット (Q2:a) */
+  var sST=useState({});        var selectedTickers=sST[0], setSelectedTickers=sST[1];
   /* 特徴量キャッシュ (このモーダルセッション内、IDB から read 済) */
   var featsRef=useRef({});  /* {id: {vec_features_1m, vec_features_5m, ...}} */
   var cancelRef=useRef(false);
@@ -6902,6 +6907,19 @@ function PatternSearchModal(props){
     setPickerView(null);
     setPickerTicker(null);
   },[open, initialQueryDraftId]);
+
+  /* 2026-05-03: クエリチャート変更時、対象銘柄をクエリ銘柄のみ ON にリセット (Q2:a) */
+  useEffect(function(){
+    if(!queryDraftId){setSelectedTickers({}); return;}
+    var qm=meta.find(function(m){return m.id===queryDraftId;});
+    if(qm && qm.ticker){
+      var s={};
+      s[qm.ticker]=true;
+      setSelectedTickers(s);
+    }else{
+      setSelectedTickers({});
+    }
+  },[queryDraftId]);
 
   /* 開いた瞬間に計算開始 (close で cancel) */
   useEffect(function(){
@@ -6976,6 +6994,8 @@ function PatternSearchModal(props){
       if(k===queryDraftId)continue;  /* クエリ自身は除外 */
       var rec=featsRef.current[k];
       if(!rec)continue;
+      /* 2026-05-03: 対象銘柄フィルタ (Q5:a - 計算は全銘柄、結果のみ絞り込み) */
+      if(rec.ticker && !selectedTickers[rec.ticker])continue;
       var f3=rec[qKey];
       if(!f3)continue;
       var s=useDtw?scorePhase4DTW(f3, queryF, paramsTemplate)
@@ -6988,7 +7008,7 @@ function PatternSearchModal(props){
   useEffect(function(){
     if(!open || computing)return;
     recomputeResults();
-  }, [tf, computing, queryDraftId, paramsTemplate.threshold, paramsTemplate.algorithm]);
+  }, [tf, computing, queryDraftId, paramsTemplate.threshold, paramsTemplate.algorithm, selectedTickers]);
 
   if(!open)return null;
   function updateP(k, v){setParamsTemplate(function(p){var np=Object.assign({},p);np[k]=v;return np;});}
@@ -7177,6 +7197,65 @@ function PatternSearchModal(props){
             ce("div",{style:{flex:1,minWidth:0,fontSize:12,color:"#c4a5f7"}},
               ce("div",{style:{fontWeight:700,fontSize:14}},"クエリ: "+(qm?(qm.ticker||'?'):'?')),
               ce("div",{style:{color:"#888",marginTop:4}},qm?(qm.analysisDate||qm.name||''):'')
+            )
+          );
+        })(),
+        /* 2026-05-03: 対象銘柄選択 (ピル/タグ式、複数選択、デフォルトはクエリ銘柄のみ) */
+        queryDraftId && (function(){
+          var localTickerCounts={};
+          meta.forEach(function(m){
+            var t=m.ticker||'(未分類)';
+            localTickerCounts[t]=(localTickerCounts[t]||0)+1;
+          });
+          var qm=meta.find(function(x){return x.id===queryDraftId;});
+          var queryTicker=qm?(qm.ticker||''):'';
+          /* クエリ銘柄を先頭、残りは tickers 配列順 (ホーム左サイドの並び順 = Q4:a) */
+          var sortedTickerList=[];
+          if(queryTicker && localTickerCounts[queryTicker]) sortedTickerList.push(queryTicker);
+          tickersList.forEach(function(t){
+            if(t!==queryTicker && localTickerCounts[t]) sortedTickerList.push(t);
+          });
+          /* tickers 配列に無い銘柄 (削除済み等) は末尾 */
+          Object.keys(localTickerCounts).forEach(function(t){
+            if(t!==queryTicker && sortedTickerList.indexOf(t)===-1) sortedTickerList.push(t);
+          });
+          var selCount=0;
+          sortedTickerList.forEach(function(t){if(selectedTickers[t])selCount++;});
+          return ce("div",{style:{marginLeft:130,marginBottom:10,padding:"8px 10px",
+            background:"#181020",borderRadius:8,border:"1px solid #2a1a3a"}},
+            ce("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap"}},
+              ce("span",{style:{fontSize:11,color:"#c4a5f7",fontWeight:700}},"対象銘柄"),
+              ce("span",{style:{fontSize:10,color:"#888"}},selCount+"/"+sortedTickerList.length+" 選択中"),
+              ce("span",{style:{flex:1}}),
+              ce("button",{onClick:function(){
+                var s={};
+                sortedTickerList.forEach(function(t){s[t]=true;});
+                setSelectedTickers(s);
+              },style:Object.assign({},BT,{fontSize:10,padding:"3px 8px",background:"#1a1029",
+                color:"#c4a5f7",borderRadius:4,border:"1px solid #4a1e5f",fontWeight:600})},"全選択"),
+              ce("button",{onClick:function(){setSelectedTickers({});},
+                style:Object.assign({},BT,{fontSize:10,padding:"3px 8px",background:"#1a1a1a",
+                  color:"#888",borderRadius:4,border:"1px solid #2a2a2a"})},"クリア")
+            ),
+            ce("div",{style:{display:"flex",flexWrap:"wrap",gap:6}},
+              sortedTickerList.map(function(t){
+                var isOn=!!selectedTickers[t];
+                var isQ=(t===queryTicker);
+                return ce("button",{key:t,
+                  onClick:function(){
+                    setSelectedTickers(function(prev){
+                      var n=Object.assign({},prev);
+                      if(n[t]) delete n[t]; else n[t]=true;
+                      return n;
+                    });
+                  },
+                  style:Object.assign({},BT,{fontSize:11,padding:"4px 10px",borderRadius:14,
+                    background:isOn?(isQ?"#3a1e5f":"#1e2a3a"):"#1a1a1a",
+                    color:isOn?(isQ?"#c4a5f7":"#a5b4fc"):"#666",
+                    border:isOn?(isQ?"1px solid #6b3e8f":"1px solid #4a5a6a"):"1px solid #2a2a2a",
+                    fontWeight:isOn?600:400})},
+                  (isQ?"⭐ ":"")+t+" ("+localTickerCounts[t]+")");
+              })
             )
           );
         })(),
@@ -8943,7 +9022,7 @@ function DraftLibrary(props){
       ),
       /* 2026-04-30: パターン検索モーダル */
       ce(PatternSearchModal,{
-        open:showPatternSearch, meta:meta, fbCfg:fbCfg,
+        open:showPatternSearch, meta:meta, fbCfg:fbCfg, tickers:tickers,
         onClose:function(){setShowPatternSearch(false);setPatSearchInitQuery(null);},
         onOpenChart:function(id){openChart(id);},
         /* 2026-04-30: C - エディタからの起動時のみ初期クエリ */
