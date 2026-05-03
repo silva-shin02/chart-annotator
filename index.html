@@ -7023,7 +7023,7 @@ function PatternSearchModal(props){
   var labelStyle={fontSize:12, color:"#c4a5f7", minWidth:120, flexShrink:0};
   var rowStyle={display:"flex", alignItems:"center", gap:10, marginBottom:10};
   /* サムネサイズ: 160×100 (旧80×50の2倍) */
-  var THUMB_W=160, THUMB_H=100;
+  var THUMB_W=480, THUMB_H=300;  /* 2026-05-03: 1倍(160x100) → 3倍に拡大 */
 
   /* 2026-05-03: B1 - クエリ選択ピッカー (銘柄一覧 → チャート一覧の2段階)
      pickerView==='tickers' → 銘柄一覧, ===   'charts' → 選択銘柄のチャート一覧, null → 非表示 */
@@ -8431,7 +8431,8 @@ function DraftLibrary(props){
     display:"flex",flexDirection:"column"}},
     /* header */
     ce("div",{style:{background:"#161616",borderBottom:"1px solid #2a2a2a",
-      padding:"14px 16px",display:"flex",alignItems:"center",gap:10,flexShrink:0}},
+      padding:"14px 16px",display:"flex",alignItems:"center",gap:10,flexShrink:0,
+      flexWrap:"wrap",rowGap:8}},
       showTrash&&ce("button",{onClick:function(){setShowTrash(false);},style:Object.assign({},BT,{
         fontSize:22,color:"#888",background:"none",padding:"0 4px",lineHeight:1})},"←"),
       ce("span",{style:{fontSize:16,fontWeight:700,color:"#fff",flex:1}},
@@ -8445,63 +8446,36 @@ function DraftLibrary(props){
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,
           background:showSearch?"#1e3a5f":"#2a2a2a",
           color:showSearch?"#93c5fd":"#888",
-          padding:"7px 12px",borderRadius:8})},"🔍"),
+          padding:"7px 12px",borderRadius:8,whiteSpace:"nowrap"})},"🔍 アノテーション検索"),
       /* 2026-04-30: パターン検索ボタン (Phase 1: 寄り天) */
       !showTrash&&!showImport&&!showSearch&&ce("button",{onClick:function(){setShowPatternSearch(true);},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,
           background:"#2a2a2a",color:"#c4a5f7",
-          padding:"7px 12px",borderRadius:8})},"📈"),
+          padding:"7px 12px",borderRadius:8,whiteSpace:"nowrap"})},"📈 類似チャート検索"),
       /* 2026-04-27: 一括インポートボタン */
       !showTrash&&!showSearch&&ce("button",{onClick:function(){setShowImport(!showImport);setImportLog([]);setShowSearch(false);},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,
           background:showImport?"#1e3a5f":"#2a2a2a",
           color:showImport?"#93c5fd":"#888",
-          padding:"7px 12px",borderRadius:8})},"📥"),
+          padding:"7px 12px",borderRadius:8,whiteSpace:"nowrap"})},"📥 一括インポート"),
       ce("button",{onClick:function(){setShowTrash(function(v){return !v;});setShowSearch(false);setShowImport(false);},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,
           background:showTrash?"#431407":"#2a2a2a",
           color:showTrash?"#fb923c":"#888",
-          padding:"7px 12px",borderRadius:8,position:"relative"})},
-        "🗑",trash.length>0&&ce("span",{style:{
+          padding:"7px 12px",borderRadius:8,position:"relative",whiteSpace:"nowrap"})},
+        "🗑 ゴミ箱",trash.length>0&&ce("span",{style:{
           position:"absolute",top:-4,right:-4,background:"#ef4444",color:"#fff",
           borderRadius:"50%",width:16,height:16,fontSize:10,fontWeight:700,
           display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}},
           trash.length)
       ),
-      !showTrash&&ce("button",{onClick:function(){
-          var filteredMeta=selTicker?meta.filter(function(m){return m.ticker===selTicker;}):meta;
-          if(!filteredMeta.length){window.caToast('対象のdraftがありません','info');return;}
-          var target=selTicker?(selTicker+' の'):'全';
-          window.caConfirm(
-            '【画像mode廃止前の一括退避】\n'+
-            target+' '+filteredMeta.length+'件 を combined PNG として連続DLします。\n\n'+
-            '・画像+strokesを合成 (分析chart/参照画像は含まず)\n'+
-            '・ブラウザがポップアップを多数表示 → 「常に許可」設定推奨\n'+
-            '・処理時間: 約 '+Math.ceil(filteredMeta.length*0.5)+' 秒\n\n'+
-            '実行しますか?',
-            function(){
-              window.caToast('PNG一括DL開始 (0/'+filteredMeta.length+')','info');
-              exportAllDraftsAsPng(filteredMeta, fbCfg,
-                function(i,total,name){
-                  if(i%5===0||i===total)window.caToast('PNG一括DL '+i+'/'+total+' ('+(name||'')+')','info');
-                },
-                function(ok,fail){
-                  window.caToast('PNG一括DL完了: 成功 '+ok+' / 失敗 '+fail, fail>0?'error':'success');
-                }
-              );
-            }
-          );
-        },
-        style:Object.assign({},BT,{fontSize:13,fontWeight:700,background:"#0f766e",
-          color:"#fff",padding:"7px 12px",borderRadius:8})},
-        "📦 全PNG"),
       /* Firebase設定ボタン (App側でモーダル管理) */
       ce("button",{onClick:function(){if(props.onOpenFbSettings)props.onOpenFbSettings();},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,
           background:fbCfg.url?"#431407":"#2a2a2a",
           color:fbCfg.url?"#fb923c":"#888",
-          padding:"7px 12px",borderRadius:8})},
-        "⚙"),
+          padding:"7px 12px",borderRadius:8,whiteSpace:"nowrap"})},
+        "⚙ Firebase設定"),
       /* 2026-04-20: 表示設定ボタン (App側でモーダル管理) */
       ce("button",{onClick:function(){if(props.onOpenDisplaySettings)props.onOpenDisplaySettings();},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,
