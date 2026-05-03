@@ -6849,11 +6849,13 @@ function PatternSearchModal(props){
   var cancelRef=useRef(false);
 
   /* 2026-04-30: C - open 時に親から渡された initial 値を state に反映
-     (エディタからの「似た形検索」起動時のみ initialPattern='template' & initialQueryDraftId=元id) */
+     (エディタからの「似た形検索」起動時のみ initialPattern='template' & initialQueryDraftId=元id)
+     2026-04-30 fix: queryDraftId は open するたびに必ず再設定（前回クエリの引きずり防止）。
+     activePattern は initialPattern 指定時のみ反映（タブ切替の継続性は維持）。 */
   useEffect(function(){
     if(!open)return;
     if(initialPattern){setActivePattern(initialPattern);}
-    if(initialQueryDraftId){setQueryDraftId(initialQueryDraftId);}
+    setQueryDraftId(initialQueryDraftId||null);
   },[open, initialPattern, initialQueryDraftId]);
 
   /* 開いた瞬間に計算開始 (close で cancel) */
@@ -6868,7 +6870,12 @@ function PatternSearchModal(props){
     var i=0;
     function processNext(){
       if(cancelRef.current)return;
-      if(i>=meta.length){setComputing(false); recomputeResults(); return;}
+      /* 2026-04-30 fix: 完了時に recomputeResults() を呼ばない。
+         ここで呼ぶと useEffect 開始時の古いクロージャ (古い activePattern 等) を参照し、
+         エディタ「🔎 似た形」起動時に一瞬寄り天結果がフラッシュする。
+         代わりに setComputing(false) のみ呼び、computing→false の変化を依存配列の useEffect が拾って
+         最新クロージャで recomputeResults を実行する。 */
+      if(i>=meta.length){setComputing(false); return;}
       var m=meta[i]; i++;
       patFeatGet(m.id, function(cached){
         if(cancelRef.current)return;
