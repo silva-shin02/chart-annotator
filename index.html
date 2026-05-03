@@ -6818,45 +6818,39 @@ function exportAllDraftsAsPng(metaList, fbCfg, onProgress, onDone){
    - meta は親 (DraftLibrary) から渡される draft 一覧
    - 開いた瞬間に未計算分を順次計算 → IDB 保存 → 結果表示
    - パラメータ変更時は IDB から特徴量再取得 (data 再読込なし) */
+/* ─── 2026-04-30: PatternSearchModal (チャートパターン類似検索)
+   - 旧: 寄り天 / VWAPジグザグ / テンプレ類似 の3タブ構成
+   - 新 (2026-05-03 簡素化): テンプレ類似のみ。チャート1つ選ぶ→似た形のチャート一覧
+   - クエリ: meta から1件選択 (プルダウン or エディタからの自動指定)
+   - 類似度: コサイン or DTW (アルゴリズム切替UI)
+   - サムネ: 結果リスト・クエリプレビューとも 160×100 (旧80×50の2倍) */
 function PatternSearchModal(props){
   var open=props.open, onClose=props.onClose, meta=props.meta||[], fbCfg=props.fbCfg||{};
   var onOpenChart=props.onOpenChart||function(){};
   /* 2026-04-30: C - エディタから起動時の初期クエリ */
   var initialQueryDraftId=props.initialQueryDraftId||null;
-  var initialPattern=props.initialPattern||null;
-  /* パラメータ state (Phase ごとに分割、tf は共通) */
-  var sP1=useState({maxHodMin:30, minRetrace:0.6, requireBearish:true, threshold:60});
-  var paramsAsagaten=sP1[0], setParamsAsagaten=sP1[1];
-  var sP2=useState({minCrosses:6, maxDevRatioMax:0.4, minRange:30, threshold:60});
-  var paramsVwapZigzag=sP2[0], setParamsVwapZigzag=sP2[1];
-  var sP3=useState({threshold:70, algorithm:'cos'});
-  var paramsTemplate=sP3[0], setParamsTemplate=sP3[1];
-  /* 2026-04-30: Phase 3 クエリ draft id (テンプレート類似度の比較対象) */
+  /* パラメータ state (テンプレ類似のみ) */
+  var sP=useState({threshold:70, algorithm:'cos'});
+  var paramsTemplate=sP[0], setParamsTemplate=sP[1];
+  /* クエリ draft id */
   var sQ=useState(null);   var queryDraftId=sQ[0], setQueryDraftId=sQ[1];
   var sTf=useState('1m');
   var tf=sTf[0], setTf=sTf[1];
-  /* 2026-04-30: アクティブなパターン (asagaten / vwapzigzag / template) */
-  var sAct=useState('asagaten');
-  var activePattern=sAct[0], setActivePattern=sAct[1];
   /* 計算進捗 state */
   var sCing=useState(false);   var computing=sCing[0],setComputing=sCing[1];
   var sCdone=useState(0);      var doneCount=sCdone[0],setDoneCount=sCdone[1];
   var sCtotal=useState(0);     var totalCount=sCtotal[0],setTotalCount=sCtotal[1];
-  /* 結果 state: [{rec, features, scoreObj, type}] (hit のみ score降順) */
+  /* 結果 state: [{rec, features, scoreObj}] (hit のみ score降順) */
   var sRes=useState([]);       var results=sRes[0],setResults=sRes[1];
   /* 特徴量キャッシュ (このモーダルセッション内、IDB から read 済) */
-  var featsRef=useRef({});  /* {id: {features_1m, features_5m, vwap_features_1m, vwap_features_5m, ...}} */
+  var featsRef=useRef({});  /* {id: {vec_features_1m, vec_features_5m, ...}} */
   var cancelRef=useRef(false);
 
-  /* 2026-04-30: C - open 時に親から渡された initial 値を state に反映
-     (エディタからの「似た形検索」起動時のみ initialPattern='template' & initialQueryDraftId=元id)
-     2026-04-30 fix: queryDraftId は open するたびに必ず再設定（前回クエリの引きずり防止）。
-     activePattern は initialPattern 指定時のみ反映（タブ切替の継続性は維持）。 */
+  /* open 時に初期クエリ反映。queryDraftId は open 毎に必ず再設定 (前回引きずり防止) */
   useEffect(function(){
     if(!open)return;
-    if(initialPattern){setActivePattern(initialPattern);}
     setQueryDraftId(initialQueryDraftId||null);
-  },[open, initialPattern, initialQueryDraftId]);
+  },[open, initialQueryDraftId]);
 
   /* 開いた瞬間に計算開始 (close で cancel) */
   useEffect(function(){
@@ -6870,20 +6864,14 @@ function PatternSearchModal(props){
     var i=0;
     function processNext(){
       if(cancelRef.current)return;
-      /* 2026-04-30 fix: 完了時に recomputeResults() を呼ばない。
-         ここで呼ぶと useEffect 開始時の古いクロージャ (古い activePattern 等) を参照し、
-         エディタ「🔎 似た形」起動時に一瞬寄り天結果がフラッシュする。
-         代わりに setComputing(false) のみ呼び、computing→false の変化を依存配列の useEffect が拾って
-         最新クロージャで recomputeResults を実行する。 */
+      /* 完了時は setComputing(false) のみ。recomputeResults は依存配列の useEffect で実行 */
       if(i>=meta.length){setComputing(false); return;}
       var m=meta[i]; i++;
       patFeatGet(m.id, function(cached){
         if(cancelRef.current)return;
-        /* キャッシュ判定: _v 一致 + Phase 2/3 features が全て存在
-           マイグレーション: vwap_features_* or vec_features_* が undefined → 再計算 */
+        /* テンプレ類似のみなので vec_features_* の存在のみ確認すれば十分だが、
+           DraftLibrary 側の自動計算が他 features も保存するため判定は同じに統一 */
         var cacheValid=cached && cached._v===m._v
-                    && cached.vwap_features_1m!==undefined
-                    && cached.vwap_features_5m!==undefined
                     && cached.vec_features_1m!==undefined
                     && cached.vec_features_5m!==undefined;
         if(cacheValid){
@@ -6892,7 +6880,8 @@ function PatternSearchModal(props){
           setTimeout(processNext, 0);
           return;
         }
-        /* 未計算 or _v 不一致 or マイグレーション要 → data 読込 → 全 Phase 計算 → IDB 保存 */
+        /* 未計算 or _v 不一致 → data 読込 → vec_features 計算 → IDB 保存
+           (Phase 1/2 features は DraftLibrary 自動計算と統一するため共に計算) */
         caLoadDataAsync(m.id, function(d){
           if(cancelRef.current)return;
           if(d && d.analysisData){
@@ -6914,7 +6903,7 @@ function PatternSearchModal(props){
             patFeatSet(m.id, rec);
           }
           setDoneCount(i);
-          setTimeout(processNext, 50);  /* 並列度1、50ms間隔 */
+          setTimeout(processNext, 50);
         });
       });
     }
@@ -6922,46 +6911,25 @@ function PatternSearchModal(props){
     return function(){cancelRef.current=true;};
   }, [open, meta.length]);
 
-  /* パラメータ変更時に結果を再計算 (特徴量は featsRef に揃ってる) */
+  /* パラメータ変更時に結果を再計算 */
   function recomputeResults(){
     var arr=[];
-    if(activePattern==='template'){
-      /* Phase 3/4: クエリ未指定なら結果なし */
-      if(!queryDraftId){setResults([]);return;}
-      var queryRec=featsRef.current[queryDraftId];
-      if(!queryRec){setResults([]);return;}
-      var qKey=tf==='5m'?'vec_features_5m':'vec_features_1m';
-      var queryF=queryRec[qKey];
-      if(!queryF){setResults([]);return;}
-      var useDtw=paramsTemplate.algorithm==='dtw';
-      for(var k in featsRef.current){
-        if(k===queryDraftId)continue;  /* クエリ自身は除外 */
-        var rec=featsRef.current[k];
-        if(!rec)continue;
-        var f3=rec[qKey];
-        if(!f3)continue;
-        var s3=useDtw?scorePhase4DTW(f3, queryF, paramsTemplate)
-                     :scorePhase3Template(f3, queryF, paramsTemplate);
-        if(s3.hit)arr.push({rec:rec, features:f3, scoreObj:s3, type:'template'});
-      }
-    } else {
-      for(var k2 in featsRef.current){
-        var rec2=featsRef.current[k2];
-        if(!rec2)continue;
-        if(activePattern==='asagaten'){
-          var fKey=tf==='5m'?'features_5m':'features_1m';
-          var f=rec2[fKey];
-          if(!f)continue;
-          var s=scorePhase1Asagaten(f, paramsAsagaten);
-          if(s.hit)arr.push({rec:rec2, features:f, scoreObj:s, type:'asagaten'});
-        } else if(activePattern==='vwapzigzag'){
-          var fKey2=tf==='5m'?'vwap_features_5m':'vwap_features_1m';
-          var f2=rec2[fKey2];
-          if(!f2)continue;
-          var s2=scorePhase2VwapZigzag(f2, paramsVwapZigzag);
-          if(s2.hit)arr.push({rec:rec2, features:f2, scoreObj:s2, type:'vwapzigzag'});
-        }
-      }
+    if(!queryDraftId){setResults([]);return;}
+    var queryRec=featsRef.current[queryDraftId];
+    if(!queryRec){setResults([]);return;}
+    var qKey=tf==='5m'?'vec_features_5m':'vec_features_1m';
+    var queryF=queryRec[qKey];
+    if(!queryF){setResults([]);return;}
+    var useDtw=paramsTemplate.algorithm==='dtw';
+    for(var k in featsRef.current){
+      if(k===queryDraftId)continue;  /* クエリ自身は除外 */
+      var rec=featsRef.current[k];
+      if(!rec)continue;
+      var f3=rec[qKey];
+      if(!f3)continue;
+      var s=useDtw?scorePhase4DTW(f3, queryF, paramsTemplate)
+                  :scorePhase3Template(f3, queryF, paramsTemplate);
+      if(s.hit)arr.push({rec:rec, features:f3, scoreObj:s});
     }
     arr.sort(function(a,b){return b.scoreObj.score-a.scoreObj.score;});
     setResults(arr);
@@ -6969,16 +6937,10 @@ function PatternSearchModal(props){
   useEffect(function(){
     if(!open || computing)return;
     recomputeResults();
-  }, [activePattern, tf, computing, queryDraftId,
-      paramsAsagaten.maxHodMin, paramsAsagaten.minRetrace, paramsAsagaten.requireBearish, paramsAsagaten.threshold,
-      paramsVwapZigzag.minCrosses, paramsVwapZigzag.maxDevRatioMax, paramsVwapZigzag.minRange, paramsVwapZigzag.threshold,
-      paramsTemplate.threshold, paramsTemplate.algorithm]);
+  }, [tf, computing, queryDraftId, paramsTemplate.threshold, paramsTemplate.algorithm]);
 
   if(!open)return null;
-  function updateP1(k, v){setParamsAsagaten(function(p){var np=Object.assign({},p);np[k]=v;return np;});}
-  function updateP2(k, v){setParamsVwapZigzag(function(p){var np=Object.assign({},p);np[k]=v;return np;});}
-  function updateP3(k, v){setParamsTemplate(function(p){var np=Object.assign({},p);np[k]=v;return np;});}
-  /* サムネ取得: meta から thumbUrl or _thumbMemCache */
+  function updateP(k, v){setParamsTemplate(function(p){var np=Object.assign({},p);np[k]=v;return np;});}
   function getThumbSrc(id){
     var m=meta.find(function(x){return x.id===id;});
     if(!m)return null;
@@ -6987,161 +6949,73 @@ function PatternSearchModal(props){
     return null;
   }
   var BT={border:"none",cursor:"pointer",fontFamily:"inherit"};
-  var inputBoxStyle={background:"#1a1a1a", border:"1px solid #333", color:"#e6edf3",
-    padding:"4px 8px", borderRadius:6, fontSize:12, width:50, textAlign:"right"};
-  var labelStyle={fontSize:12, color:"#c4a5f7", minWidth:140, flexShrink:0};
+  var labelStyle={fontSize:12, color:"#c4a5f7", minWidth:120, flexShrink:0};
   var rowStyle={display:"flex", alignItems:"center", gap:10, marginBottom:10};
+  /* サムネサイズ: 160×100 (旧80×50の2倍) */
+  var THUMB_W=160, THUMB_H=100;
 
   return ce("div",{style:{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:9500,
     display:"flex",alignItems:"center",justifyContent:"center",padding:16}},
     ce("div",{style:{background:"#161616",border:"1px solid #4a1e5f",borderRadius:12,
-      width:"100%",maxWidth:560,maxHeight:"90vh",display:"flex",flexDirection:"column",overflow:"hidden"}},
+      width:"100%",maxWidth:720,maxHeight:"92vh",display:"flex",flexDirection:"column",overflow:"hidden"}},
       /* header */
       ce("div",{style:{padding:"14px 16px",borderBottom:"1px solid #2a2a2a",
         display:"flex",alignItems:"center",gap:10,background:"#1a1029"}},
-        ce("span",{style:{fontSize:16,fontWeight:700,color:"#c4a5f7",flex:1}},"📈 パターン検索"),
+        ce("span",{style:{fontSize:16,fontWeight:700,color:"#c4a5f7",flex:1}},"📈 チャートパターン類似検索"),
         ce("button",{onClick:function(){cancelRef.current=true;onClose();},
           style:Object.assign({},BT,{fontSize:20,color:"#888",background:"none",padding:"0 6px",lineHeight:1})},"×")
       ),
-      /* tabs (Phase 1〜3、全て実装済) */
-      ce("div",{style:{padding:"8px 16px",borderBottom:"1px solid #2a2a2a",display:"flex",gap:6,flexWrap:"wrap"}},
-        ce("button",{onClick:function(){setActivePattern('asagaten');},
-          style:Object.assign({},BT,{padding:"6px 12px",borderRadius:6,
-          background:activePattern==='asagaten'?"#4a1e5f":"#2a2a2a",
-          color:activePattern==='asagaten'?"#fff":"#888",
-          fontSize:13,fontWeight:activePattern==='asagaten'?700:400})},"寄り天"),
-        ce("button",{onClick:function(){setActivePattern('vwapzigzag');},
-          style:Object.assign({},BT,{padding:"6px 12px",borderRadius:6,
-          background:activePattern==='vwapzigzag'?"#4a1e5f":"#2a2a2a",
-          color:activePattern==='vwapzigzag'?"#fff":"#888",
-          fontSize:13,fontWeight:activePattern==='vwapzigzag'?700:400})},"VWAPジグザグ"),
-        ce("button",{onClick:function(){setActivePattern('template');},
-          style:Object.assign({},BT,{padding:"6px 12px",borderRadius:6,
-          background:activePattern==='template'?"#4a1e5f":"#2a2a2a",
-          color:activePattern==='template'?"#fff":"#888",
-          fontSize:13,fontWeight:activePattern==='template'?700:400})},"テンプレ類似")
-      ),
-      /* params (activePattern で出し分け) */
+      /* params */
       ce("div",{style:{padding:"14px 16px",borderBottom:"1px solid #2a2a2a",overflowY:"auto",flexShrink:0}},
-        /* Phase 1: 寄り天パラメータ */
-        activePattern==='asagaten' && ce("div",null,
-          ce("div",{style:rowStyle},
-            ce("span",{style:labelStyle},"HoD最大経過 (分)"),
-            ce("input",{type:"range",min:5,max:120,step:5,value:paramsAsagaten.maxHodMin,
-              onChange:function(e){updateP1('maxHodMin',parseInt(e.target.value,10));},
-              style:{flex:1,accentColor:"#a855f7"}}),
-            ce("span",{style:{fontSize:12,color:"#fff",minWidth:36,textAlign:"right"}},paramsAsagaten.maxHodMin+"分")
-          ),
-          ce("div",{style:rowStyle},
-            ce("span",{style:labelStyle},"終値後退率 (最小)"),
-            ce("input",{type:"range",min:0,max:1,step:0.05,value:paramsAsagaten.minRetrace,
-              onChange:function(e){updateP1('minRetrace',parseFloat(e.target.value));},
-              style:{flex:1,accentColor:"#a855f7"}}),
-            ce("span",{style:{fontSize:12,color:"#fff",minWidth:36,textAlign:"right"}},Math.round(paramsAsagaten.minRetrace*100)+"%")
-          ),
-          ce("div",{style:rowStyle},
-            ce("span",{style:labelStyle},"スコア閾値"),
-            ce("input",{type:"range",min:0,max:100,step:5,value:paramsAsagaten.threshold,
-              onChange:function(e){updateP1('threshold',parseInt(e.target.value,10));},
-              style:{flex:1,accentColor:"#a855f7"}}),
-            ce("span",{style:{fontSize:12,color:"#fff",minWidth:36,textAlign:"right"}},paramsAsagaten.threshold+"点")
-          ),
-          ce("div",{style:rowStyle},
-            ce("span",{style:labelStyle},"陰線終了"),
-            ce("label",{style:{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12,color:"#e6edf3"}},
-              ce("input",{type:"checkbox",checked:paramsAsagaten.requireBearish,
-                onChange:function(e){updateP1('requireBearish',e.target.checked);},
-                style:{accentColor:"#a855f7"}}),
-              "必須にする"
-            )
+        ce("div",{style:rowStyle},
+          ce("span",{style:labelStyle},"クエリチャート"),
+          ce("select",{value:queryDraftId||'',
+            onChange:function(e){setQueryDraftId(e.target.value||null);},
+            style:{flex:1,background:"#1a1a1a",border:"1px solid #4a1e5f",
+              color:"#e6edf3",padding:"6px 8px",borderRadius:6,fontSize:12,fontFamily:"inherit"}},
+            ce("option",{value:''}, "-- 選択してください --"),
+            meta.slice().sort(function(a,b){
+              var tc=(a.ticker||'').localeCompare(b.ticker||'','ja');
+              if(tc!==0)return tc;
+              return (b.savedAt||0)-(a.savedAt||0);
+            }).map(function(m){
+              return ce("option",{key:m.id,value:m.id},
+                (m.ticker||'?')+' / '+(m.analysisDate||m.name||'(無題)'));
+            })
           )
         ),
-        /* Phase 2: VWAPジグザグパラメータ */
-        activePattern==='vwapzigzag' && ce("div",null,
-          ce("div",{style:rowStyle},
-            ce("span",{style:labelStyle},"最小交差回数"),
-            ce("input",{type:"range",min:1,max:20,step:1,value:paramsVwapZigzag.minCrosses,
-              onChange:function(e){updateP2('minCrosses',parseInt(e.target.value,10));},
-              style:{flex:1,accentColor:"#a855f7"}}),
-            ce("span",{style:{fontSize:12,color:"#fff",minWidth:36,textAlign:"right"}},paramsVwapZigzag.minCrosses+"回")
-          ),
-          ce("div",{style:rowStyle},
-            ce("span",{style:labelStyle},"最大乖離率 (vs range)"),
-            ce("input",{type:"range",min:0.1,max:1,step:0.05,value:paramsVwapZigzag.maxDevRatioMax,
-              onChange:function(e){updateP2('maxDevRatioMax',parseFloat(e.target.value));},
-              style:{flex:1,accentColor:"#a855f7"}}),
-            ce("span",{style:{fontSize:12,color:"#fff",minWidth:36,textAlign:"right"}},Math.round(paramsVwapZigzag.maxDevRatioMax*100)+"%")
-          ),
-          ce("div",{style:rowStyle},
-            ce("span",{style:labelStyle},"最小レンジ幅 (円)"),
-            ce("input",{type:"range",min:0,max:500,step:10,value:paramsVwapZigzag.minRange,
-              onChange:function(e){updateP2('minRange',parseInt(e.target.value,10));},
-              style:{flex:1,accentColor:"#a855f7"}}),
-            ce("span",{style:{fontSize:12,color:"#fff",minWidth:42,textAlign:"right"}},paramsVwapZigzag.minRange+"円")
-          ),
-          ce("div",{style:rowStyle},
-            ce("span",{style:labelStyle},"スコア閾値"),
-            ce("input",{type:"range",min:0,max:100,step:5,value:paramsVwapZigzag.threshold,
-              onChange:function(e){updateP2('threshold',parseInt(e.target.value,10));},
-              style:{flex:1,accentColor:"#a855f7"}}),
-            ce("span",{style:{fontSize:12,color:"#fff",minWidth:36,textAlign:"right"}},paramsVwapZigzag.threshold+"点")
-          )
-        ),
-        /* Phase 3: テンプレート類似度パラメータ */
-        activePattern==='template' && ce("div",null,
-          ce("div",{style:rowStyle},
-            ce("span",{style:labelStyle},"クエリチャート"),
-            ce("select",{value:queryDraftId||'',
-              onChange:function(e){setQueryDraftId(e.target.value||null);},
-              style:{flex:1,background:"#1a1a1a",border:"1px solid #4a1e5f",
-                color:"#e6edf3",padding:"6px 8px",borderRadius:6,fontSize:12,fontFamily:"inherit"}},
-              ce("option",{value:''}, "-- 選択してください --"),
-              meta.slice().sort(function(a,b){
-                var tc=(a.ticker||'').localeCompare(b.ticker||'','ja');
-                if(tc!==0)return tc;
-                return (b.savedAt||0)-(a.savedAt||0);
-              }).map(function(m){
-                return ce("option",{key:m.id,value:m.id},
-                  (m.ticker||'?')+' / '+(m.analysisDate||m.name||'(無題)'));
-              })
+        /* クエリプレビュー (サムネ大 160×100) */
+        queryDraftId && (function(){
+          var qm=meta.find(function(x){return x.id===queryDraftId;});
+          var qThumb=getThumbSrc(queryDraftId);
+          return ce("div",{style:{display:"flex",gap:12,marginBottom:10,marginLeft:130,
+            padding:"8px 10px",background:"#1a1029",borderRadius:8,border:"1px solid #4a1e5f",alignItems:"center"}},
+            qThumb?ce("img",{src:qThumb,style:{width:THUMB_W,height:THUMB_H,objectFit:"cover",borderRadius:6,background:"#000",flexShrink:0},
+              onError:function(){try{caClearBrokenThumbUrl(queryDraftId);}catch(e){}}})
+              :ce("div",{style:{width:THUMB_W,height:THUMB_H,background:"#0a0a0a",borderRadius:6,flexShrink:0,
+                display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"#444"}},"no thumb"),
+            ce("div",{style:{flex:1,minWidth:0,fontSize:12,color:"#c4a5f7"}},
+              ce("div",{style:{fontWeight:700,fontSize:14}},"クエリ: "+(qm?(qm.ticker||'?'):'?')),
+              ce("div",{style:{color:"#888",marginTop:4}},qm?(qm.analysisDate||qm.name||''):'')
             )
-          ),
-          /* 2026-04-30: D - クエリプレビュー (サムネ + ticker/date) */
-          queryDraftId && (function(){
-            var qm=meta.find(function(x){return x.id===queryDraftId;});
-            var qThumb=getThumbSrc(queryDraftId);
-            return ce("div",{style:{display:"flex",gap:10,marginBottom:10,marginLeft:140,
-              padding:"6px 8px",background:"#1a1029",borderRadius:6,border:"1px solid #4a1e5f",alignItems:"center"}},
-              qThumb?ce("img",{src:qThumb,style:{width:80,height:50,objectFit:"cover",borderRadius:4,background:"#000",flexShrink:0},
-                onError:function(){try{caClearBrokenThumbUrl(queryDraftId);}catch(e){}}})
-                :ce("div",{style:{width:80,height:50,background:"#0a0a0a",borderRadius:4,flexShrink:0,
-                  display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#444"}},"no thumb"),
-              ce("div",{style:{flex:1,minWidth:0,fontSize:11,color:"#c4a5f7"}},
-                ce("div",{style:{fontWeight:700}},"クエリ: "+(qm?(qm.ticker||'?'):'?')),
-                ce("div",{style:{color:"#888",marginTop:2}},qm?(qm.analysisDate||qm.name||''):'')
-              )
-            );
-          })(),
-          ce("div",{style:rowStyle},
-            ce("span",{style:labelStyle},"類似度アルゴ"),
-            ce("label",{style:{display:"flex",alignItems:"center",gap:4,cursor:"pointer",fontSize:12,color:"#e6edf3",marginRight:12}},
-              ce("input",{type:"radio",name:"pat-algo",checked:paramsTemplate.algorithm==='cos',
-                onChange:function(){updateP3('algorithm','cos');},style:{accentColor:"#a855f7"}}),"コサイン"),
-            ce("label",{style:{display:"flex",alignItems:"center",gap:4,cursor:"pointer",fontSize:12,color:"#e6edf3"}},
-              ce("input",{type:"radio",name:"pat-algo",checked:paramsTemplate.algorithm==='dtw',
-                onChange:function(){updateP3('algorithm','dtw');},style:{accentColor:"#a855f7"}}),"DTW (速度違い対応)")
-          ),
-          ce("div",{style:rowStyle},
-            ce("span",{style:labelStyle},"類似度閾値"),
-            ce("input",{type:"range",min:0,max:100,step:5,value:paramsTemplate.threshold,
-              onChange:function(e){updateP3('threshold',parseInt(e.target.value,10));},
-              style:{flex:1,accentColor:"#a855f7"}}),
-            ce("span",{style:{fontSize:12,color:"#fff",minWidth:36,textAlign:"right"}},paramsTemplate.threshold+"点")
-          ),
-          !queryDraftId && ce("div",{style:{fontSize:11,color:"#c4a5f7",padding:"6px 0"}},
-            "↑ プルダウンからテンプレートにするチャートを選んでください")
+          );
+        })(),
+        ce("div",{style:rowStyle},
+          ce("span",{style:labelStyle},"類似度アルゴ"),
+          ce("label",{style:{display:"flex",alignItems:"center",gap:4,cursor:"pointer",fontSize:12,color:"#e6edf3",marginRight:12}},
+            ce("input",{type:"radio",name:"pat-algo",checked:paramsTemplate.algorithm==='cos',
+              onChange:function(){updateP('algorithm','cos');},style:{accentColor:"#a855f7"}}),"コサイン"),
+          ce("label",{style:{display:"flex",alignItems:"center",gap:4,cursor:"pointer",fontSize:12,color:"#e6edf3"}},
+            ce("input",{type:"radio",name:"pat-algo",checked:paramsTemplate.algorithm==='dtw',
+              onChange:function(){updateP('algorithm','dtw');},style:{accentColor:"#a855f7"}}),"DTW (速度違い対応)")
         ),
-        /* 時間足 (全 Phase 共通) */
+        ce("div",{style:rowStyle},
+          ce("span",{style:labelStyle},"類似度閾値"),
+          ce("input",{type:"range",min:0,max:100,step:5,value:paramsTemplate.threshold,
+            onChange:function(e){updateP('threshold',parseInt(e.target.value,10));},
+            style:{flex:1,accentColor:"#a855f7"}}),
+          ce("span",{style:{fontSize:12,color:"#fff",minWidth:36,textAlign:"right"}},paramsTemplate.threshold+"点")
+        ),
         ce("div",{style:rowStyle},
           ce("span",{style:labelStyle},"時間足"),
           ce("label",{style:{display:"flex",alignItems:"center",gap:4,cursor:"pointer",fontSize:12,color:"#e6edf3",marginRight:12}},
@@ -7150,7 +7024,9 @@ function PatternSearchModal(props){
           ce("label",{style:{display:"flex",alignItems:"center",gap:4,cursor:"pointer",fontSize:12,color:"#e6edf3"}},
             ce("input",{type:"radio",name:"pat-tf",checked:tf==='5m',
               onChange:function(){setTf('5m');},style:{accentColor:"#a855f7"}}),"5分")
-        )
+        ),
+        !queryDraftId && ce("div",{style:{fontSize:11,color:"#c4a5f7",padding:"6px 0"}},
+          "↑ プルダウンからテンプレートにするチャートを選んでください")
       ),
       /* progress */
       computing&&ce("div",{style:{padding:"10px 16px",borderBottom:"1px solid #2a2a2a",background:"#0d0d0d"}},
@@ -7160,11 +7036,11 @@ function PatternSearchModal(props){
           ce("div",{style:{height:"100%",width:(totalCount>0?Math.round(doneCount/totalCount*100):0)+"%",
             background:"#a855f7",transition:"width 0.2s"}}))
       ),
-      /* results */
+      /* results (サムネ大 160×100) */
       ce("div",{style:{flex:1,overflowY:"auto",padding:"10px 16px"}},
         !computing && results.length===0 && ce("div",{style:{fontSize:13,color:"#6e7681",textAlign:"center",padding:"30px 0"}},
           totalCount===0?"チャートがありません":
-          (activePattern==='template' && !queryDraftId)?"クエリチャートを選択してください":
+          !queryDraftId?"クエリチャートを選択してください":
           "該当するチャートがありません"),
         results.length>0 && ce("div",{style:{fontSize:11,color:"#888",marginBottom:8}},
           "結果: "+results.length+"件 (スコア降順)"),
@@ -7172,25 +7048,21 @@ function PatternSearchModal(props){
           var thumbSrc=getThumbSrc(r.rec.id);
           return ce("div",{key:r.rec.id,
             onClick:function(){cancelRef.current=true;onOpenChart(r.rec.id);onClose();},
-            style:{display:"flex",gap:10,padding:"8px",borderRadius:8,
-              background:"#1a1a1a",border:"1px solid #2a2a2a",marginBottom:6,cursor:"pointer",alignItems:"center"}},
-            thumbSrc?ce("img",{src:thumbSrc,style:{width:80,height:50,objectFit:"cover",borderRadius:4,background:"#000",flexShrink:0},
+            style:{display:"flex",gap:12,padding:"10px",borderRadius:8,
+              background:"#1a1a1a",border:"1px solid #2a2a2a",marginBottom:8,cursor:"pointer",alignItems:"center"}},
+            thumbSrc?ce("img",{src:thumbSrc,style:{width:THUMB_W,height:THUMB_H,objectFit:"cover",borderRadius:6,background:"#000",flexShrink:0},
               onError:function(){try{caClearBrokenThumbUrl(r.rec.id);}catch(e){}}})
-              :ce("div",{style:{width:80,height:50,background:"#0a0a0a",borderRadius:4,flexShrink:0,
-                display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#444"}},"no thumb"),
+              :ce("div",{style:{width:THUMB_W,height:THUMB_H,background:"#0a0a0a",borderRadius:6,flexShrink:0,
+                display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"#444"}},"no thumb"),
             ce("div",{style:{flex:1,minWidth:0}},
-              ce("div",{style:{fontSize:13,color:"#e6edf3",fontWeight:700}},r.rec.ticker||"(銘柄なし)"),
-              ce("div",{style:{fontSize:11,color:"#8b949e",marginTop:2}},r.rec.date||""),
-              ce("div",{style:{fontSize:10,color:"#6e7681",marginTop:2}},
-                r.type==='asagaten'
-                  ? "HoD "+r.features.hodMin+"分 / 後退 "+Math.round(r.features.closeRetraceRatio*100)+"% / "+(r.features.isBearish?"陰線":"陽線")
-                  : r.type==='vwapzigzag'
-                    ? "交差 "+r.features.vwapCrossCount+"回 / 乖離 "+Math.round(r.features.maxDevRatio*100)+"% / 上"+r.features.aboveBarCount+"・下"+r.features.belowBarCount
-                    : (r.scoreObj.dtw!=null
-                        ? "DTW "+r.scoreObj.dtw.toFixed(2)+" / "+r.features.barCount+"本"
-                        : "cos "+(r.scoreObj.cos!=null?r.scoreObj.cos.toFixed(3):'?')+" / "+r.features.barCount+"本"))
+              ce("div",{style:{fontSize:14,color:"#e6edf3",fontWeight:700}},r.rec.ticker||"(銘柄なし)"),
+              ce("div",{style:{fontSize:12,color:"#8b949e",marginTop:3}},r.rec.date||""),
+              ce("div",{style:{fontSize:11,color:"#6e7681",marginTop:3}},
+                r.scoreObj.dtw!=null
+                  ? "DTW "+r.scoreObj.dtw.toFixed(2)+" / "+r.features.barCount+"本"
+                  : "cos "+(r.scoreObj.cos!=null?r.scoreObj.cos.toFixed(3):'?')+" / "+r.features.barCount+"本")
             ),
-            ce("div",{style:{fontSize:18,fontWeight:700,color:"#c4a5f7",minWidth:50,textAlign:"right"}},
+            ce("div",{style:{fontSize:22,fontWeight:700,color:"#c4a5f7",minWidth:60,textAlign:"right"}},
               r.scoreObj.score+"点")
           );
         })
@@ -8735,9 +8607,8 @@ function DraftLibrary(props){
         open:showPatternSearch, meta:meta, fbCfg:fbCfg,
         onClose:function(){setShowPatternSearch(false);setPatSearchInitQuery(null);},
         onOpenChart:function(id){openChart(id);},
-        /* 2026-04-30: C - エディタからの起動時のみ初期クエリ + テンプレタブで起動 */
-        initialQueryDraftId:patSearchInitQuery,
-        initialPattern:patSearchInitQuery?'template':null
+        /* 2026-04-30: C - エディタからの起動時のみ初期クエリ */
+        initialQueryDraftId:patSearchInitQuery
       })
     )
   );
