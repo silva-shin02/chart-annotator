@@ -8429,40 +8429,54 @@ function DraftLibrary(props){
 
   return ce("div",{style:{position:"fixed",inset:0,background:"#111",zIndex:9000,
     display:"flex",flexDirection:"column"}},
-    /* header */
-    ce("div",{style:{background:"#161616",borderBottom:"1px solid #2a2a2a",
-      padding:"14px 16px",display:"flex",alignItems:"center",gap:10,flexShrink:0,
-      flexWrap:"wrap",rowGap:8}},
-      showTrash&&ce("button",{onClick:function(){setShowTrash(false);},style:Object.assign({},BT,{
-        fontSize:22,color:"#888",background:"none",padding:"0 4px",lineHeight:1})},"←"),
-      ce("span",{style:{fontSize:16,fontWeight:700,color:"#fff",flex:1}},
-        showTrash?"🗑 ゴミ箱":"📋 チャート一覧"),
+    /* header (2026-05-03: 2段構成 - 段1:タイトル中央 / 段2:ボタン群横スクロール) */
+    ce("div",{style:{background:"#161616",borderBottom:"1px solid #2a2a2a",flexShrink:0,
+      display:"flex",flexDirection:"column"}},
+      /* 段1: タイトル中央 (showTrash時は戻るボタンを左に absolute) */
+      ce("div",{style:{padding:"10px 16px 4px",position:"relative",fontSize:16,fontWeight:700,
+        color:"#fff",textAlign:"center"}},
+        showTrash&&ce("button",{onClick:function(){setShowTrash(false);},
+          style:Object.assign({},BT,{position:"absolute",left:16,top:"50%",transform:"translateY(-50%)",
+            fontSize:22,color:"#888",background:"none",padding:"0 4px",lineHeight:1})},"←"),
+        showTrash?"🗑 ゴミ箱":"📋 チャート分析"
+      ),
+      /* 段2: ボタン群 (横スクロール、ホイールで横スクロール) */
+      ce("div",{
+        onWheel:function(e){
+          var el=e.currentTarget;
+          if(el && el.scrollWidth>el.clientWidth && (e.deltaY!==0 || e.deltaX!==0)){
+            el.scrollLeft += (e.deltaY||e.deltaX);
+          }
+        },
+        style:{padding:"4px 16px 12px",display:"flex",alignItems:"center",gap:10,
+          overflowX:"auto",overflowY:"hidden"}
+      },
       fbCfg.url&&ce("span",{style:{fontSize:10,padding:"3px 7px",borderRadius:5,
         background:_fbIsPaused(fbCfg)?"#7f1d1d":"#431407",
-        color:_fbIsPaused(fbCfg)?"#f87171":"#fb923c",fontWeight:700,flexShrink:0}},
+        color:_fbIsPaused(fbCfg)?"#f87171":"#fb923c",fontWeight:700,flexShrink:0,whiteSpace:"nowrap"}},
         _fbIsPaused(fbCfg)?'⏸ 同期停止中':syncStatus==='loading'?'⏳ 同期中':'🔥 同期有効'),
       /* 2026-04-26: 横断検索ボタン */
       !showTrash&&!showImport&&ce("button",{onClick:function(){setShowSearch(!showSearch);if(!showSearch){setSearchQuery('');setSearchResults([]);}setShowImport(false);},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,
           background:showSearch?"#1e3a5f":"#2a2a2a",
           color:showSearch?"#93c5fd":"#888",
-          padding:"7px 12px",borderRadius:8,whiteSpace:"nowrap"})},"🔍 アノテーション検索"),
+          padding:"7px 12px",borderRadius:8,whiteSpace:"nowrap",flexShrink:0})},"🔍 アノテーション検索"),
       /* 2026-04-30: パターン検索ボタン (Phase 1: 寄り天) */
       !showTrash&&!showImport&&!showSearch&&ce("button",{onClick:function(){setShowPatternSearch(true);},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,
           background:"#2a2a2a",color:"#c4a5f7",
-          padding:"7px 12px",borderRadius:8,whiteSpace:"nowrap"})},"📈 類似チャート検索"),
+          padding:"7px 12px",borderRadius:8,whiteSpace:"nowrap",flexShrink:0})},"📈 類似チャート検索"),
       /* 2026-04-27: 一括インポートボタン */
       !showTrash&&!showSearch&&ce("button",{onClick:function(){setShowImport(!showImport);setImportLog([]);setShowSearch(false);},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,
           background:showImport?"#1e3a5f":"#2a2a2a",
           color:showImport?"#93c5fd":"#888",
-          padding:"7px 12px",borderRadius:8,whiteSpace:"nowrap"})},"📥 一括インポート"),
+          padding:"7px 12px",borderRadius:8,whiteSpace:"nowrap",flexShrink:0})},"📥 一括インポート"),
       ce("button",{onClick:function(){setShowTrash(function(v){return !v;});setShowSearch(false);setShowImport(false);},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,
           background:showTrash?"#431407":"#2a2a2a",
           color:showTrash?"#fb923c":"#888",
-          padding:"7px 12px",borderRadius:8,position:"relative",whiteSpace:"nowrap"})},
+          padding:"7px 12px",borderRadius:8,position:"relative",whiteSpace:"nowrap",flexShrink:0})},
         "🗑 ゴミ箱",trash.length>0&&ce("span",{style:{
           position:"absolute",top:-4,right:-4,background:"#ef4444",color:"#fff",
           borderRadius:"50%",width:16,height:16,fontSize:10,fontWeight:700,
@@ -8474,18 +8488,19 @@ function DraftLibrary(props){
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,
           background:fbCfg.url?"#431407":"#2a2a2a",
           color:fbCfg.url?"#fb923c":"#888",
-          padding:"7px 12px",borderRadius:8,whiteSpace:"nowrap"})},
+          padding:"7px 12px",borderRadius:8,whiteSpace:"nowrap",flexShrink:0})},
         "⚙ Firebase設定"),
       /* 2026-04-20: 表示設定ボタン (App側でモーダル管理) */
       ce("button",{onClick:function(){if(props.onOpenDisplaySettings)props.onOpenDisplaySettings();},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,
           background:"#2a2a2a",color:"#a5b4fc",
-          padding:"7px 12px",borderRadius:8})},
+          padding:"7px 12px",borderRadius:8,whiteSpace:"nowrap",flexShrink:0})},
         "📊 各種設定"),
       !showTrash&&ce("button",{onClick:function(){setAdding(true);setTimeout(function(){inputRef.current&&inputRef.current.focus();},50);},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,background:"#2563eb",
-          color:"#fff",padding:"7px 14px",borderRadius:8})},
+          color:"#fff",padding:"7px 14px",borderRadius:8,whiteSpace:"nowrap",flexShrink:0})},
         "+ 銘柄を追加")
+      )
     ),
     /* add ticker input */
     !showTrash&&adding&&ce("div",{style:{padding:"10px 16px",background:"#1a1a1a",borderBottom:"1px solid #222",
