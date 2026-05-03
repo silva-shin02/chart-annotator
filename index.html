@@ -7156,7 +7156,7 @@ function PatternSearchModal(props){
     ce("div",{style:{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:9500,
     display:"flex",alignItems:"center",justifyContent:"center",padding:16}},
     ce("div",{style:{background:"#161616",border:"1px solid #4a1e5f",borderRadius:12,
-      width:"100%",maxWidth:720,maxHeight:"92vh",display:"flex",flexDirection:"column",overflow:"hidden"}},
+      width:"100%",maxWidth:"min(1200px, 95vw)",maxHeight:"92vh",display:"flex",flexDirection:"column",overflow:"hidden"}},
       /* header */
       ce("div",{style:{padding:"14px 16px",borderBottom:"1px solid #2a2a2a",
         display:"flex",alignItems:"center",gap:10,background:"#1a1029"}},
@@ -7186,17 +7186,18 @@ function PatternSearchModal(props){
             title:"クエリをクリア",
             style:Object.assign({},BT,{background:"#2a2a2a",color:"#888",padding:"8px 10px",borderRadius:6,fontSize:12,marginLeft:6})},"×")
         ),
-        /* クエリプレビュー (サムネ大、説明文はサムネ下に配置 - 2026-05-03: 縦積みに変更) */
+        /* クエリプレビュー (2026-05-03: モーダル幅拡大に伴い横並びに、上下padding詰めて縦幅圧縮) */
         queryDraftId && (function(){
           var qm=meta.find(function(x){return x.id===queryDraftId;});
           var qThumb=getThumbSrc(queryDraftId);
-          return ce("div",{style:{display:"flex",flexDirection:"column",gap:8,marginBottom:10,marginLeft:130,
-            padding:"10px",background:"#1a1029",borderRadius:8,border:"1px solid #4a1e5f"}},
-            qThumb?ce("img",{src:qThumb,style:{width:THUMB_W,height:THUMB_H,objectFit:"cover",borderRadius:6,background:"#000"},
+          return ce("div",{style:{display:"flex",gap:12,marginBottom:8,marginLeft:130,
+            padding:"6px 10px",background:"#1a1029",borderRadius:8,border:"1px solid #4a1e5f",
+            alignItems:"center"}},
+            qThumb?ce("img",{src:qThumb,style:{width:THUMB_W,height:THUMB_H,objectFit:"cover",borderRadius:6,background:"#000",flexShrink:0},
               onError:function(){try{caClearBrokenThumbUrl(queryDraftId);}catch(e){}}})
-              :ce("div",{style:{width:THUMB_W,height:THUMB_H,background:"#0a0a0a",borderRadius:6,
+              :ce("div",{style:{width:THUMB_W,height:THUMB_H,background:"#0a0a0a",borderRadius:6,flexShrink:0,
                 display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"#444"}},"no thumb"),
-            ce("div",{style:{fontSize:12,color:"#c4a5f7"}},
+            ce("div",{style:{flex:1,minWidth:0,fontSize:12,color:"#c4a5f7"}},
               ce("div",{style:{fontWeight:700,fontSize:14}},"クエリ: "+(qm?(qm.ticker||'?'):'?')),
               ce("div",{style:{color:"#888",marginTop:4}},qm?(qm.analysisDate||qm.name||''):'')
             )
@@ -7239,7 +7240,14 @@ function PatternSearchModal(props){
                 style:Object.assign({},BT,{fontSize:10,padding:"3px 8px",background:"#1a1a1a",
                   color:"#888",borderRadius:4,border:"1px solid #2a2a2a"})},"クリア")
             ),
-            ce("div",{style:{display:"flex",flexWrap:"wrap",gap:6}},
+            ce("div",{
+              onWheel:function(e){
+                var el=e.currentTarget;
+                if(el && el.scrollWidth>el.clientWidth && (e.deltaY!==0 || e.deltaX!==0)){
+                  el.scrollLeft += (e.deltaY||e.deltaX);
+                }
+              },
+              style:{display:"flex",flexWrap:"nowrap",gap:6,overflowX:"auto",overflowY:"hidden",paddingBottom:4}},
               sortedTickerList.map(function(t){
                 var isOn=!!selectedTickers[t];
                 var isQ=(t===queryTicker);
@@ -7255,7 +7263,7 @@ function PatternSearchModal(props){
                     background:isOn?(isQ?"#3a1e5f":"#1e2a3a"):"#1a1a1a",
                     color:isOn?(isQ?"#c4a5f7":"#a5b4fc"):"#666",
                     border:isOn?(isQ?"1px solid #6b3e8f":"1px solid #4a5a6a"):"1px solid #2a2a2a",
-                    fontWeight:isOn?600:400})},
+                    fontWeight:isOn?600:400,flexShrink:0,whiteSpace:"nowrap"})},
                   (isQ?"⭐ ":"")+t+" ("+localTickerCounts[t]+")");
               })
             )
