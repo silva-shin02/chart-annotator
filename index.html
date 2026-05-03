@@ -7000,7 +7000,8 @@ function PatternSearchModal(props){
       if(!f3)continue;
       var s=useDtw?scorePhase4DTW(f3, queryF, paramsTemplate)
                   :scorePhase3Template(f3, queryF, paramsTemplate);
-      if(s.hit)arr.push({rec:rec, features:f3, scoreObj:s});
+      /* 2026-05-03: 閾値撤廃、全件をスコア降順で表示 */
+      arr.push({rec:rec, features:f3, scoreObj:s});
     }
     arr.sort(function(a,b){return b.scoreObj.score-a.scoreObj.score;});
     setResults(arr);
@@ -7162,8 +7163,8 @@ function PatternSearchModal(props){
         ce("button",{onClick:function(){cancelRef.current=true;onClose();},
           style:Object.assign({},BT,{fontSize:20,color:"#888",background:"none",padding:"0 6px",lineHeight:1})},"×")
       ),
-      /* params */
-      ce("div",{style:{padding:"14px 16px",borderBottom:"1px solid #2a2a2a",overflowY:"auto",flexShrink:0}},
+      /* params (2026-05-03: 上下paddingを縮めて結果エリアを広く) */
+      ce("div",{style:{padding:"10px 16px",borderBottom:"1px solid #2a2a2a",overflowY:"auto",flexShrink:0}},
         /* 2026-05-03: B1 - クエリ選択ボタン (タップで pickerView='tickers') */
         ce("div",{style:rowStyle},
           ce("span",{style:labelStyle},"クエリチャート"),
@@ -7259,31 +7260,8 @@ function PatternSearchModal(props){
             )
           );
         })(),
-        ce("div",{style:rowStyle},
-          ce("span",{style:labelStyle},"類似度アルゴ"),
-          ce("label",{style:{display:"flex",alignItems:"center",gap:4,cursor:"pointer",fontSize:12,color:"#e6edf3",marginRight:12}},
-            ce("input",{type:"radio",name:"pat-algo",checked:paramsTemplate.algorithm==='cos',
-              onChange:function(){updateP('algorithm','cos');},style:{accentColor:"#a855f7"}}),"コサイン"),
-          ce("label",{style:{display:"flex",alignItems:"center",gap:4,cursor:"pointer",fontSize:12,color:"#e6edf3"}},
-            ce("input",{type:"radio",name:"pat-algo",checked:paramsTemplate.algorithm==='dtw',
-              onChange:function(){updateP('algorithm','dtw');},style:{accentColor:"#a855f7"}}),"DTW (速度違い対応)")
-        ),
-        ce("div",{style:rowStyle},
-          ce("span",{style:labelStyle},"類似度閾値"),
-          ce("input",{type:"range",min:0,max:100,step:5,value:paramsTemplate.threshold,
-            onChange:function(e){updateP('threshold',parseInt(e.target.value,10));},
-            style:{flex:1,accentColor:"#a855f7"}}),
-          ce("span",{style:{fontSize:12,color:"#fff",minWidth:36,textAlign:"right"}},paramsTemplate.threshold+"点")
-        ),
-        ce("div",{style:rowStyle},
-          ce("span",{style:labelStyle},"時間足"),
-          ce("label",{style:{display:"flex",alignItems:"center",gap:4,cursor:"pointer",fontSize:12,color:"#e6edf3",marginRight:12}},
-            ce("input",{type:"radio",name:"pat-tf",checked:tf==='1m',
-              onChange:function(){setTf('1m');},style:{accentColor:"#a855f7"}}),"1分"),
-          ce("label",{style:{display:"flex",alignItems:"center",gap:4,cursor:"pointer",fontSize:12,color:"#e6edf3"}},
-            ce("input",{type:"radio",name:"pat-tf",checked:tf==='5m',
-              onChange:function(){setTf('5m');},style:{accentColor:"#a855f7"}}),"5分")
-        ),
+        /* 2026-05-03: 類似度アルゴ・閾値・時間足の選択UIは削除 (コサイン/閾値なし全件/1分 で固定)
+           → 結果表示エリアの上下幅を確保 */
         !queryDraftId && ce("div",{style:{fontSize:11,color:"#c4a5f7",padding:"6px 0"}},
           "↑ プルダウンからテンプレートにするチャートを選んでください")
       ),
