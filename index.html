@@ -4195,6 +4195,7 @@ function totalAnalysisStrokes(v){
 
 function ImageAnnotator(props){
   var img=props.img, onSave=props.onSave, onClose=props.onClose;
+  var onSearchSimilar=props.onSearchSimilar||null;  /* 2026-04-30: C - 現在チャートをクエリに */
 
   /* 2026-04-20 Step3: 画像mode canvasRef 撤去 */
   /* B1: モードタブ — 2026-04-20: 画像mode完全撤去、常時 'analysis' */
@@ -5047,6 +5048,12 @@ function ImageAnnotator(props){
             background:showCrosshair?"#4a9de3":"#2a2a2a",
             color:showCrosshair?"#fff":"#aaa"})
         },"✛ 十字線"),
+        /* 2026-04-30: C - 現在チャートをクエリにしてテンプレ類似検索 (保存済みのみ) */
+        analysisData && img && img._draftId && onSearchSimilar && ce("button",{
+          onClick:function(){onSearchSimilar(img._draftId);},
+          title:"このチャートに似た過去チャートを検索",
+          style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#4a1e5f",color:"#c4a5f7"})
+        },"🔎 似た形"),
         analysisData && ce("div",{style:{display:"flex",gap:2,flexShrink:0}},
           ['1m','5m'].map(function(t){
             return ce("button",{key:t,onClick:function(){setAnalysisTf(t);},
@@ -6370,6 +6377,271 @@ function caDeleteData(id){
   idbDel('data_'+id);
   /* C8a: 旧localStorageエントリが残ってる可能性があるのでクリーンアップ */
   try{localStorage.removeItem(CA_DATA_PFX+id);}catch(e){}
+  /* 2026-04-30: パターン検索特徴量キャッシュも削除 */
+  try{patFeatDel(id);}catch(e){}
+}
+
+/* ─── 2026-04-30: チャートパターン検索 Phase 1 (寄り天検出) ───────
+   - 純粋関数: extractPhase1Features(analysisData, tf) → features
+   - スコア化: scorePhase1Asagaten(features, params) → {score, hit, ...}
+   - IDB キャッシュ: patFeatGet/Set/Del (key='pat_features_v1:'+id)
+   - 自動計算: DraftLibrary マウント時に未計算分を順次計算
+   - 設計: bar = {t:"HH:MM", o, h, l, c, v, ema9, ema22, ema50, ema200, vwap}
+   - 昼休み 11:30-12:30 (60分) を経過分計算から除外 */
+function _patElapsedMinExclLunch(tStart, tEnd){
+  /* "HH:MM" 形式の2時刻間の経過分（昼休み60分を除外） */
+  function _toMin(t){var p=t.split(':');return parseInt(p[0],10)*60+parseInt(p[1],10);}
+  var s=_toMin(tStart), e=_toMin(tEnd);
+  if(e<s)return 0;
+  var elapsed=e-s;
+  var lunchStart=11*60+30;  /* 690 */
+  var lunchEnd=12*60+30;    /* 750 */
+  if(s<lunchEnd && e>lunchStart){
+    var overlap=Math.min(e,lunchEnd)-Math.max(s,lunchStart);
+    if(overlap>0)elapsed-=overlap;
+  }
+  return Math.max(0,elapsed);
+}
+function extractPhase1Features(analysisData, tf){
+  /* 寄り天検出に必要な8つの特徴量を抽出。null返却 = データ不足 */
+  if(!analysisData)return null;
+  var barsKey=tf==='5m'?'bars_5m':'bars_1m';
+  var bars=analysisData[barsKey]||[];
+  if(bars.length<5)return null;
+  var b0=bars[0]; if(!b0||typeof b0.o!=='number'||!b0.t)return null;
+  var open0=b0.o;
+  var bLast=bars[bars.length-1]; if(!bLast||typeof bLast.c!=='number')return null;
+  var close=bLast.c;
+  var hod=-Infinity, lod=Infinity, hodIdx=0;
+  for(var i=0;i<bars.length;i++){
+    var b=bars[i];
+    if(typeof b.h!=='number'||typeof b.l!=='number')continue;
+    if(b.h>hod){hod=b.h; hodIdx=i;}
+    if(b.l<lod)lod=b.l;
+  }
+  if(!isFinite(hod)||!isFinite(lod))return null;
+  var hodMin=_patElapsedMinExclLunch(b0.t, bars[hodIdx].t||b0.t);
+  var range=hod-lod;
+  var closeRetraceRatio=range>0?(hod-close)/range:0;
+  var isBearish=close<open0;
+  return {
+    open0:open0, close:close, hod:hod, lod:lod, hodIdx:hodIdx, hodMin:hodMin,
+    range:range, closeRetraceRatio:closeRetraceRatio, isBearish:isBearish,
+    tf:tf, barCount:bars.length
+  };
+}
+function scorePhase1Asagaten(f, params){
+  /* 寄り天スコア計算 (0-100点)
+     params: {maxHodMin, minRetrace, requireBearish, threshold} */
+  if(!f)return {score:0, hit:false};
+  var maxHodMin=(params&&params.maxHodMin!=null)?params.maxHodMin:30;
+  var minRetrace=(params&&params.minRetrace!=null)?params.minRetrace:0.6;
+  var requireBearish=(params&&params.requireBearish!==false);
+  var threshold=(params&&params.threshold!=null)?params.threshold:60;
+  /* S_hodEarly: HoDが早いほど高 (60分超で0) */
+  var sHodEarly=Math.max(0, 1-f.hodMin/60)*100;
+  /* S_retrace: 終値後退率（線形、1.0でcap） */
+  var sRetrace=Math.min(1, Math.max(0, f.closeRetraceRatio))*100;
+  /* S_bearClose: 陰線終了 */
+  var sBear=f.isBearish?100:0;
+  /* 加重平均 (0.4/0.4/0.2) */
+  var total=sHodEarly*0.4 + sRetrace*0.4 + sBear*0.2;
+  var hit=(f.hodMin<=maxHodMin)
+       && (f.closeRetraceRatio>=minRetrace)
+       && (!requireBearish || f.isBearish)
+       && (total>=threshold);
+  return {
+    score:Math.round(total), hit:hit,
+    sHodEarly:Math.round(sHodEarly), sRetrace:Math.round(sRetrace), sBear:sBear
+  };
+}
+/* IDB ラッパー: 既存 idbGet/Set/Del を 'pat_features_v1:' prefix で利用 */
+var PAT_FEAT_KEY_PFX='pat_features_v1:';
+function patFeatGet(id, cb){idbGet(PAT_FEAT_KEY_PFX+id, cb);}
+function patFeatSet(id, val){idbSet(PAT_FEAT_KEY_PFX+id, val);}
+function patFeatDel(id){idbDel(PAT_FEAT_KEY_PFX+id);}
+
+/* ─── 2026-04-30: Phase 2 (VWAPジグザグ検出) 純粋関数 ─────────
+   - 特徴量: vwapCrossCount, maxDevRatio, symmetry 等
+   - 設計: bar.c が VWAP の上下を跨いだ回数で「ジグザグ強度」を測る
+   - 乖離は range 相対値で算出 (銘柄価格非依存) */
+function extractPhase2VwapFeatures(analysisData, tf){
+  if(!analysisData)return null;
+  var barsKey=tf==='5m'?'bars_5m':'bars_1m';
+  var bars=analysisData[barsKey]||[];
+  if(bars.length<5)return null;
+  var hod=-Infinity, lod=Infinity;
+  var crosses=0;
+  var maxDevYen=0;
+  var sumDevYen=0, devCount=0;
+  var aboveCount=0, belowCount=0;
+  var lastSide=null;  /* 'above' | 'below' | null */
+  for(var i=0;i<bars.length;i++){
+    var b=bars[i];
+    if(typeof b.h!=='number'||typeof b.l!=='number'||typeof b.c!=='number')continue;
+    if(b.h>hod)hod=b.h;
+    if(b.l<lod)lod=b.l;
+    if(typeof b.vwap!=='number')continue;
+    var dev=b.c-b.vwap;
+    var absDev=Math.abs(dev);
+    if(absDev>maxDevYen)maxDevYen=absDev;
+    sumDevYen+=absDev; devCount++;
+    var side=dev>0?'above':(dev<0?'below':null);
+    if(side==='above')aboveCount++;
+    else if(side==='below')belowCount++;
+    if(side && lastSide && side!==lastSide)crosses++;
+    if(side)lastSide=side;
+  }
+  if(!isFinite(hod)||!isFinite(lod)||devCount===0)return null;
+  var range=hod-lod;
+  var maxDevRatio=range>0?maxDevYen/range:0;
+  var avgDevYen=sumDevYen/devCount;
+  var totalSided=aboveCount+belowCount;
+  var symmetry=totalSided>0?(1-Math.abs(aboveCount-belowCount)/totalSided):0;
+  return {
+    vwapCrossCount:crosses, maxDevYen:maxDevYen, maxDevRatio:maxDevRatio,
+    avgDevYen:avgDevYen, aboveBarCount:aboveCount, belowBarCount:belowCount,
+    symmetry:symmetry, range:range, tf:tf, barCount:bars.length
+  };
+}
+function scorePhase2VwapZigzag(f, params){
+  /* VWAPジグザグスコア計算 (0-100点)
+     params: {minCrosses, maxDevRatioMax, minRange, threshold} */
+  if(!f)return {score:0, hit:false};
+  var minCrosses=(params&&params.minCrosses!=null)?params.minCrosses:6;
+  var maxDevRatioMax=(params&&params.maxDevRatioMax!=null)?params.maxDevRatioMax:0.4;
+  var minRange=(params&&params.minRange!=null)?params.minRange:30;
+  var threshold=(params&&params.threshold!=null)?params.threshold:60;
+  /* S_crosses: 12回以上で満点 */
+  var sCrosses=Math.min(f.vwapCrossCount/12, 1)*100;
+  /* S_compact: 乖離小さいほど高 */
+  var sCompact=(1-Math.min(Math.max(f.maxDevRatio, 0), 1))*100;
+  /* S_symmetry: 上下対称 */
+  var sSym=f.symmetry*100;
+  /* 加重平均 (0.4/0.4/0.2) */
+  var total=sCrosses*0.4 + sCompact*0.4 + sSym*0.2;
+  var hit=(f.vwapCrossCount>=minCrosses)
+       && (f.maxDevRatio<=maxDevRatioMax)
+       && (f.range>=minRange)
+       && (total>=threshold);
+  return {
+    score:Math.round(total), hit:hit,
+    sCrosses:Math.round(sCrosses), sCompact:Math.round(sCompact), sSym:Math.round(sSym)
+  };
+}
+
+/* ─── 2026-04-30: Phase 3 (テンプレート類似度検索) 純粋関数 ─────
+   - ベクトル化: 終値を z-score 正規化 → 60点リサンプリング
+   - 類似度: コサイン類似度 (z-score 済なので実質ピアソン相関)
+   - スコア化: (cos+1)/2 × 100 で 0〜100点 (cos=1→100, cos=0→50, cos=-1→0)
+   - クエリは過去 draft 1件、その normVec と全 draft の normVec を比較 */
+function _patLinearResample(arr, targetLen){
+  if(!arr || arr.length===0 || targetLen<=0)return [];
+  if(arr.length===1){var o=new Array(targetLen);for(var i=0;i<targetLen;i++)o[i]=arr[0];return o;}
+  var out=new Array(targetLen);
+  var srcLen=arr.length;
+  for(var j=0;j<targetLen;j++){
+    var pos=(j/(targetLen-1))*(srcLen-1);
+    var lo=Math.floor(pos);
+    var hi=Math.ceil(pos);
+    if(lo===hi){out[j]=arr[lo];}
+    else{var t=pos-lo; out[j]=arr[lo]*(1-t)+arr[hi]*t;}
+  }
+  return out;
+}
+function _patZscore(vec){
+  if(!vec || vec.length===0)return {normalized:[], mean:0, std:0};
+  var sum=0;
+  for(var i=0;i<vec.length;i++)sum+=vec[i];
+  var mean=sum/vec.length;
+  var sqSum=0;
+  for(var i2=0;i2<vec.length;i2++){var d=vec[i2]-mean; sqSum+=d*d;}
+  var std=Math.sqrt(sqSum/vec.length);
+  if(std===0){var z=new Array(vec.length);for(var i3=0;i3<vec.length;i3++)z[i3]=0;return {normalized:z, mean:mean, std:0};}
+  var n=new Array(vec.length);
+  for(var i4=0;i4<vec.length;i4++)n[i4]=(vec[i4]-mean)/std;
+  return {normalized:n, mean:mean, std:std};
+}
+function extractPhase3VectorFeatures(analysisData, tf, vecLen){
+  if(!analysisData)return null;
+  vecLen=vecLen||60;
+  var barsKey=tf==='5m'?'bars_5m':'bars_1m';
+  var bars=analysisData[barsKey]||[];
+  if(bars.length<5)return null;
+  var closes=[];
+  for(var i=0;i<bars.length;i++){
+    var b=bars[i];
+    if(typeof b.c==='number')closes.push(b.c);
+  }
+  if(closes.length<5)return null;
+  var resampled=_patLinearResample(closes, vecLen);
+  var z=_patZscore(resampled);
+  return {
+    normVec:z.normalized, mean:z.mean, std:z.std,
+    tf:tf, barCount:bars.length, vecLen:vecLen
+  };
+}
+function cosineSimilarity(a, b){
+  if(!a || !b || a.length!==b.length || a.length===0)return 0;
+  var dot=0, na=0, nb=0;
+  for(var i=0;i<a.length;i++){dot+=a[i]*b[i]; na+=a[i]*a[i]; nb+=b[i]*b[i];}
+  var denom=Math.sqrt(na)*Math.sqrt(nb);
+  if(denom===0)return 0;
+  return dot/denom;
+}
+function scorePhase3Template(f, queryF, params){
+  /* テンプレート類似度スコア (0-100点)
+     params: {threshold} */
+  if(!f || !queryF || !f.normVec || !queryF.normVec){
+    return {score:0, hit:false, cos:0};
+  }
+  var threshold=(params&&params.threshold!=null)?params.threshold:70;
+  var cos=cosineSimilarity(f.normVec, queryF.normVec);
+  var score=Math.round((cos+1)/2*100);
+  var hit=score>=threshold;
+  return {score:score, hit:hit, cos:cos};
+}
+
+/* ─── 2026-04-30: Phase 4 (DTW: 動的時間伸縮) 純粋関数 ─────────
+   - DTW = Dynamic Time Warping
+   - コサインの上位互換: 「形は同じだが速度が違う」パターンも検出可能
+   - 計算量: O(N*M) — 60×60 = 3600 ops/比較 (コサインの約60倍だが実用範囲)
+   - メモリ: O(M) — 2行ずつ swap で削減
+   - スコア化: dtw=0→100, dtw=33→50, dtw=66→0 (z-score 60点ベクトルの想定値域) */
+function dtwDistance(a, b){
+  if(!a || !b || a.length===0 || b.length===0)return Infinity;
+  var n=a.length, m=b.length;
+  var prev=new Array(m+1);
+  var k;
+  for(k=0;k<=m;k++)prev[k]=Infinity;
+  prev[0]=0;
+  for(var i=1;i<=n;i++){
+    var curr=new Array(m+1);
+    for(k=0;k<=m;k++)curr[k]=Infinity;
+    for(var j=1;j<=m;j++){
+      var cost=Math.abs(a[i-1]-b[j-1]);
+      var minPrev=prev[j-1];
+      if(prev[j]<minPrev)minPrev=prev[j];
+      if(curr[j-1]<minPrev)minPrev=curr[j-1];
+      curr[j]=cost+minPrev;
+    }
+    prev=curr;
+  }
+  return prev[m];
+}
+function scorePhase4DTW(f, queryF, params){
+  /* DTW スコア (0-100点)
+     params: {threshold} */
+  if(!f || !queryF || !f.normVec || !queryF.normVec){
+    return {score:0, hit:false, dtw:Infinity};
+  }
+  var threshold=(params&&params.threshold!=null)?params.threshold:70;
+  var dtw=dtwDistance(f.normVec, queryF.normVec);
+  /* z-score 60点ベクトルでの距離→スコア変換
+     経験的: dtw=0→100, dtw=33→50, dtw=66→0 (1.5倍の係数) */
+  var score=Math.max(0, Math.round(100-dtw*1.5));
+  var hit=score>=threshold;
+  return {score:score, hit:hit, dtw:dtw};
 }
 /* C8a: 起動時に旧 ca_data_* localStorageエントリを一括削除 (容量解放) */
 (function _cleanupLegacyCaData(){
@@ -6541,10 +6813,392 @@ function exportAllDraftsAsPng(metaList, fbCfg, onProgress, onDone){
   next();
 }
 
+/* ─── 2026-04-30: PatternSearchModal (Phase 1: 寄り天検出) ──────
+   props: open, onClose, meta, fbCfg, onOpenChart
+   - meta は親 (DraftLibrary) から渡される draft 一覧
+   - 開いた瞬間に未計算分を順次計算 → IDB 保存 → 結果表示
+   - パラメータ変更時は IDB から特徴量再取得 (data 再読込なし) */
+function PatternSearchModal(props){
+  var open=props.open, onClose=props.onClose, meta=props.meta||[], fbCfg=props.fbCfg||{};
+  var onOpenChart=props.onOpenChart||function(){};
+  /* 2026-04-30: C - エディタから起動時の初期クエリ */
+  var initialQueryDraftId=props.initialQueryDraftId||null;
+  var initialPattern=props.initialPattern||null;
+  /* パラメータ state (Phase ごとに分割、tf は共通) */
+  var sP1=useState({maxHodMin:30, minRetrace:0.6, requireBearish:true, threshold:60});
+  var paramsAsagaten=sP1[0], setParamsAsagaten=sP1[1];
+  var sP2=useState({minCrosses:6, maxDevRatioMax:0.4, minRange:30, threshold:60});
+  var paramsVwapZigzag=sP2[0], setParamsVwapZigzag=sP2[1];
+  var sP3=useState({threshold:70, algorithm:'cos'});
+  var paramsTemplate=sP3[0], setParamsTemplate=sP3[1];
+  /* 2026-04-30: Phase 3 クエリ draft id (テンプレート類似度の比較対象) */
+  var sQ=useState(null);   var queryDraftId=sQ[0], setQueryDraftId=sQ[1];
+  var sTf=useState('1m');
+  var tf=sTf[0], setTf=sTf[1];
+  /* 2026-04-30: アクティブなパターン (asagaten / vwapzigzag / template) */
+  var sAct=useState('asagaten');
+  var activePattern=sAct[0], setActivePattern=sAct[1];
+  /* 計算進捗 state */
+  var sCing=useState(false);   var computing=sCing[0],setComputing=sCing[1];
+  var sCdone=useState(0);      var doneCount=sCdone[0],setDoneCount=sCdone[1];
+  var sCtotal=useState(0);     var totalCount=sCtotal[0],setTotalCount=sCtotal[1];
+  /* 結果 state: [{rec, features, scoreObj, type}] (hit のみ score降順) */
+  var sRes=useState([]);       var results=sRes[0],setResults=sRes[1];
+  /* 特徴量キャッシュ (このモーダルセッション内、IDB から read 済) */
+  var featsRef=useRef({});  /* {id: {features_1m, features_5m, vwap_features_1m, vwap_features_5m, ...}} */
+  var cancelRef=useRef(false);
+
+  /* 2026-04-30: C - open 時に親から渡された initial 値を state に反映
+     (エディタからの「似た形検索」起動時のみ initialPattern='template' & initialQueryDraftId=元id) */
+  useEffect(function(){
+    if(!open)return;
+    if(initialPattern){setActivePattern(initialPattern);}
+    if(initialQueryDraftId){setQueryDraftId(initialQueryDraftId);}
+  },[open, initialPattern, initialQueryDraftId]);
+
+  /* 開いた瞬間に計算開始 (close で cancel) */
+  useEffect(function(){
+    if(!open)return;
+    cancelRef.current=false;
+    featsRef.current={};
+    setResults([]);
+    setDoneCount(0);
+    setTotalCount(meta.length);
+    setComputing(true);
+    var i=0;
+    function processNext(){
+      if(cancelRef.current)return;
+      if(i>=meta.length){setComputing(false); recomputeResults(); return;}
+      var m=meta[i]; i++;
+      patFeatGet(m.id, function(cached){
+        if(cancelRef.current)return;
+        /* キャッシュ判定: _v 一致 + Phase 2/3 features が全て存在
+           マイグレーション: vwap_features_* or vec_features_* が undefined → 再計算 */
+        var cacheValid=cached && cached._v===m._v
+                    && cached.vwap_features_1m!==undefined
+                    && cached.vwap_features_5m!==undefined
+                    && cached.vec_features_1m!==undefined
+                    && cached.vec_features_5m!==undefined;
+        if(cacheValid){
+          featsRef.current[m.id]=cached;
+          setDoneCount(i);
+          setTimeout(processNext, 0);
+          return;
+        }
+        /* 未計算 or _v 不一致 or マイグレーション要 → data 読込 → 全 Phase 計算 → IDB 保存 */
+        caLoadDataAsync(m.id, function(d){
+          if(cancelRef.current)return;
+          if(d && d.analysisData){
+            var f1m=extractPhase1Features(d.analysisData, '1m');
+            var f5m=extractPhase1Features(d.analysisData, '5m');
+            var v1m=extractPhase2VwapFeatures(d.analysisData, '1m');
+            var v5m=extractPhase2VwapFeatures(d.analysisData, '5m');
+            var c1m=extractPhase3VectorFeatures(d.analysisData, '1m');
+            var c5m=extractPhase3VectorFeatures(d.analysisData, '5m');
+            var rec={
+              id:m.id, ticker:m.ticker||'', date:m.analysisDate||m.name||'',
+              savedAt:m.savedAt||0, _v:m._v||0,
+              features_1m:f1m, features_5m:f5m,
+              vwap_features_1m:v1m, vwap_features_5m:v5m,
+              vec_features_1m:c1m, vec_features_5m:c5m,
+              computedAt:Date.now()
+            };
+            featsRef.current[m.id]=rec;
+            patFeatSet(m.id, rec);
+          }
+          setDoneCount(i);
+          setTimeout(processNext, 50);  /* 並列度1、50ms間隔 */
+        });
+      });
+    }
+    processNext();
+    return function(){cancelRef.current=true;};
+  }, [open, meta.length]);
+
+  /* パラメータ変更時に結果を再計算 (特徴量は featsRef に揃ってる) */
+  function recomputeResults(){
+    var arr=[];
+    if(activePattern==='template'){
+      /* Phase 3/4: クエリ未指定なら結果なし */
+      if(!queryDraftId){setResults([]);return;}
+      var queryRec=featsRef.current[queryDraftId];
+      if(!queryRec){setResults([]);return;}
+      var qKey=tf==='5m'?'vec_features_5m':'vec_features_1m';
+      var queryF=queryRec[qKey];
+      if(!queryF){setResults([]);return;}
+      var useDtw=paramsTemplate.algorithm==='dtw';
+      for(var k in featsRef.current){
+        if(k===queryDraftId)continue;  /* クエリ自身は除外 */
+        var rec=featsRef.current[k];
+        if(!rec)continue;
+        var f3=rec[qKey];
+        if(!f3)continue;
+        var s3=useDtw?scorePhase4DTW(f3, queryF, paramsTemplate)
+                     :scorePhase3Template(f3, queryF, paramsTemplate);
+        if(s3.hit)arr.push({rec:rec, features:f3, scoreObj:s3, type:'template'});
+      }
+    } else {
+      for(var k2 in featsRef.current){
+        var rec2=featsRef.current[k2];
+        if(!rec2)continue;
+        if(activePattern==='asagaten'){
+          var fKey=tf==='5m'?'features_5m':'features_1m';
+          var f=rec2[fKey];
+          if(!f)continue;
+          var s=scorePhase1Asagaten(f, paramsAsagaten);
+          if(s.hit)arr.push({rec:rec2, features:f, scoreObj:s, type:'asagaten'});
+        } else if(activePattern==='vwapzigzag'){
+          var fKey2=tf==='5m'?'vwap_features_5m':'vwap_features_1m';
+          var f2=rec2[fKey2];
+          if(!f2)continue;
+          var s2=scorePhase2VwapZigzag(f2, paramsVwapZigzag);
+          if(s2.hit)arr.push({rec:rec2, features:f2, scoreObj:s2, type:'vwapzigzag'});
+        }
+      }
+    }
+    arr.sort(function(a,b){return b.scoreObj.score-a.scoreObj.score;});
+    setResults(arr);
+  }
+  useEffect(function(){
+    if(!open || computing)return;
+    recomputeResults();
+  }, [activePattern, tf, computing, queryDraftId,
+      paramsAsagaten.maxHodMin, paramsAsagaten.minRetrace, paramsAsagaten.requireBearish, paramsAsagaten.threshold,
+      paramsVwapZigzag.minCrosses, paramsVwapZigzag.maxDevRatioMax, paramsVwapZigzag.minRange, paramsVwapZigzag.threshold,
+      paramsTemplate.threshold, paramsTemplate.algorithm]);
+
+  if(!open)return null;
+  function updateP1(k, v){setParamsAsagaten(function(p){var np=Object.assign({},p);np[k]=v;return np;});}
+  function updateP2(k, v){setParamsVwapZigzag(function(p){var np=Object.assign({},p);np[k]=v;return np;});}
+  function updateP3(k, v){setParamsTemplate(function(p){var np=Object.assign({},p);np[k]=v;return np;});}
+  /* サムネ取得: meta から thumbUrl or _thumbMemCache */
+  function getThumbSrc(id){
+    var m=meta.find(function(x){return x.id===id;});
+    if(!m)return null;
+    if(_thumbMemCache[id])return _thumbMemCache[id];
+    if(m.thumbUrl)return m.thumbUrl;
+    return null;
+  }
+  var BT={border:"none",cursor:"pointer",fontFamily:"inherit"};
+  var inputBoxStyle={background:"#1a1a1a", border:"1px solid #333", color:"#e6edf3",
+    padding:"4px 8px", borderRadius:6, fontSize:12, width:50, textAlign:"right"};
+  var labelStyle={fontSize:12, color:"#c4a5f7", minWidth:140, flexShrink:0};
+  var rowStyle={display:"flex", alignItems:"center", gap:10, marginBottom:10};
+
+  return ce("div",{style:{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:9500,
+    display:"flex",alignItems:"center",justifyContent:"center",padding:16}},
+    ce("div",{style:{background:"#161616",border:"1px solid #4a1e5f",borderRadius:12,
+      width:"100%",maxWidth:560,maxHeight:"90vh",display:"flex",flexDirection:"column",overflow:"hidden"}},
+      /* header */
+      ce("div",{style:{padding:"14px 16px",borderBottom:"1px solid #2a2a2a",
+        display:"flex",alignItems:"center",gap:10,background:"#1a1029"}},
+        ce("span",{style:{fontSize:16,fontWeight:700,color:"#c4a5f7",flex:1}},"📈 パターン検索"),
+        ce("button",{onClick:function(){cancelRef.current=true;onClose();},
+          style:Object.assign({},BT,{fontSize:20,color:"#888",background:"none",padding:"0 6px",lineHeight:1})},"×")
+      ),
+      /* tabs (Phase 1〜3、全て実装済) */
+      ce("div",{style:{padding:"8px 16px",borderBottom:"1px solid #2a2a2a",display:"flex",gap:6,flexWrap:"wrap"}},
+        ce("button",{onClick:function(){setActivePattern('asagaten');},
+          style:Object.assign({},BT,{padding:"6px 12px",borderRadius:6,
+          background:activePattern==='asagaten'?"#4a1e5f":"#2a2a2a",
+          color:activePattern==='asagaten'?"#fff":"#888",
+          fontSize:13,fontWeight:activePattern==='asagaten'?700:400})},"寄り天"),
+        ce("button",{onClick:function(){setActivePattern('vwapzigzag');},
+          style:Object.assign({},BT,{padding:"6px 12px",borderRadius:6,
+          background:activePattern==='vwapzigzag'?"#4a1e5f":"#2a2a2a",
+          color:activePattern==='vwapzigzag'?"#fff":"#888",
+          fontSize:13,fontWeight:activePattern==='vwapzigzag'?700:400})},"VWAPジグザグ"),
+        ce("button",{onClick:function(){setActivePattern('template');},
+          style:Object.assign({},BT,{padding:"6px 12px",borderRadius:6,
+          background:activePattern==='template'?"#4a1e5f":"#2a2a2a",
+          color:activePattern==='template'?"#fff":"#888",
+          fontSize:13,fontWeight:activePattern==='template'?700:400})},"テンプレ類似")
+      ),
+      /* params (activePattern で出し分け) */
+      ce("div",{style:{padding:"14px 16px",borderBottom:"1px solid #2a2a2a",overflowY:"auto",flexShrink:0}},
+        /* Phase 1: 寄り天パラメータ */
+        activePattern==='asagaten' && ce("div",null,
+          ce("div",{style:rowStyle},
+            ce("span",{style:labelStyle},"HoD最大経過 (分)"),
+            ce("input",{type:"range",min:5,max:120,step:5,value:paramsAsagaten.maxHodMin,
+              onChange:function(e){updateP1('maxHodMin',parseInt(e.target.value,10));},
+              style:{flex:1,accentColor:"#a855f7"}}),
+            ce("span",{style:{fontSize:12,color:"#fff",minWidth:36,textAlign:"right"}},paramsAsagaten.maxHodMin+"分")
+          ),
+          ce("div",{style:rowStyle},
+            ce("span",{style:labelStyle},"終値後退率 (最小)"),
+            ce("input",{type:"range",min:0,max:1,step:0.05,value:paramsAsagaten.minRetrace,
+              onChange:function(e){updateP1('minRetrace',parseFloat(e.target.value));},
+              style:{flex:1,accentColor:"#a855f7"}}),
+            ce("span",{style:{fontSize:12,color:"#fff",minWidth:36,textAlign:"right"}},Math.round(paramsAsagaten.minRetrace*100)+"%")
+          ),
+          ce("div",{style:rowStyle},
+            ce("span",{style:labelStyle},"スコア閾値"),
+            ce("input",{type:"range",min:0,max:100,step:5,value:paramsAsagaten.threshold,
+              onChange:function(e){updateP1('threshold',parseInt(e.target.value,10));},
+              style:{flex:1,accentColor:"#a855f7"}}),
+            ce("span",{style:{fontSize:12,color:"#fff",minWidth:36,textAlign:"right"}},paramsAsagaten.threshold+"点")
+          ),
+          ce("div",{style:rowStyle},
+            ce("span",{style:labelStyle},"陰線終了"),
+            ce("label",{style:{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12,color:"#e6edf3"}},
+              ce("input",{type:"checkbox",checked:paramsAsagaten.requireBearish,
+                onChange:function(e){updateP1('requireBearish',e.target.checked);},
+                style:{accentColor:"#a855f7"}}),
+              "必須にする"
+            )
+          )
+        ),
+        /* Phase 2: VWAPジグザグパラメータ */
+        activePattern==='vwapzigzag' && ce("div",null,
+          ce("div",{style:rowStyle},
+            ce("span",{style:labelStyle},"最小交差回数"),
+            ce("input",{type:"range",min:1,max:20,step:1,value:paramsVwapZigzag.minCrosses,
+              onChange:function(e){updateP2('minCrosses',parseInt(e.target.value,10));},
+              style:{flex:1,accentColor:"#a855f7"}}),
+            ce("span",{style:{fontSize:12,color:"#fff",minWidth:36,textAlign:"right"}},paramsVwapZigzag.minCrosses+"回")
+          ),
+          ce("div",{style:rowStyle},
+            ce("span",{style:labelStyle},"最大乖離率 (vs range)"),
+            ce("input",{type:"range",min:0.1,max:1,step:0.05,value:paramsVwapZigzag.maxDevRatioMax,
+              onChange:function(e){updateP2('maxDevRatioMax',parseFloat(e.target.value));},
+              style:{flex:1,accentColor:"#a855f7"}}),
+            ce("span",{style:{fontSize:12,color:"#fff",minWidth:36,textAlign:"right"}},Math.round(paramsVwapZigzag.maxDevRatioMax*100)+"%")
+          ),
+          ce("div",{style:rowStyle},
+            ce("span",{style:labelStyle},"最小レンジ幅 (円)"),
+            ce("input",{type:"range",min:0,max:500,step:10,value:paramsVwapZigzag.minRange,
+              onChange:function(e){updateP2('minRange',parseInt(e.target.value,10));},
+              style:{flex:1,accentColor:"#a855f7"}}),
+            ce("span",{style:{fontSize:12,color:"#fff",minWidth:42,textAlign:"right"}},paramsVwapZigzag.minRange+"円")
+          ),
+          ce("div",{style:rowStyle},
+            ce("span",{style:labelStyle},"スコア閾値"),
+            ce("input",{type:"range",min:0,max:100,step:5,value:paramsVwapZigzag.threshold,
+              onChange:function(e){updateP2('threshold',parseInt(e.target.value,10));},
+              style:{flex:1,accentColor:"#a855f7"}}),
+            ce("span",{style:{fontSize:12,color:"#fff",minWidth:36,textAlign:"right"}},paramsVwapZigzag.threshold+"点")
+          )
+        ),
+        /* Phase 3: テンプレート類似度パラメータ */
+        activePattern==='template' && ce("div",null,
+          ce("div",{style:rowStyle},
+            ce("span",{style:labelStyle},"クエリチャート"),
+            ce("select",{value:queryDraftId||'',
+              onChange:function(e){setQueryDraftId(e.target.value||null);},
+              style:{flex:1,background:"#1a1a1a",border:"1px solid #4a1e5f",
+                color:"#e6edf3",padding:"6px 8px",borderRadius:6,fontSize:12,fontFamily:"inherit"}},
+              ce("option",{value:''}, "-- 選択してください --"),
+              meta.slice().sort(function(a,b){
+                var tc=(a.ticker||'').localeCompare(b.ticker||'','ja');
+                if(tc!==0)return tc;
+                return (b.savedAt||0)-(a.savedAt||0);
+              }).map(function(m){
+                return ce("option",{key:m.id,value:m.id},
+                  (m.ticker||'?')+' / '+(m.analysisDate||m.name||'(無題)'));
+              })
+            )
+          ),
+          /* 2026-04-30: D - クエリプレビュー (サムネ + ticker/date) */
+          queryDraftId && (function(){
+            var qm=meta.find(function(x){return x.id===queryDraftId;});
+            var qThumb=getThumbSrc(queryDraftId);
+            return ce("div",{style:{display:"flex",gap:10,marginBottom:10,marginLeft:140,
+              padding:"6px 8px",background:"#1a1029",borderRadius:6,border:"1px solid #4a1e5f",alignItems:"center"}},
+              qThumb?ce("img",{src:qThumb,style:{width:80,height:50,objectFit:"cover",borderRadius:4,background:"#000",flexShrink:0},
+                onError:function(){try{caClearBrokenThumbUrl(queryDraftId);}catch(e){}}})
+                :ce("div",{style:{width:80,height:50,background:"#0a0a0a",borderRadius:4,flexShrink:0,
+                  display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#444"}},"no thumb"),
+              ce("div",{style:{flex:1,minWidth:0,fontSize:11,color:"#c4a5f7"}},
+                ce("div",{style:{fontWeight:700}},"クエリ: "+(qm?(qm.ticker||'?'):'?')),
+                ce("div",{style:{color:"#888",marginTop:2}},qm?(qm.analysisDate||qm.name||''):'')
+              )
+            );
+          })(),
+          ce("div",{style:rowStyle},
+            ce("span",{style:labelStyle},"類似度アルゴ"),
+            ce("label",{style:{display:"flex",alignItems:"center",gap:4,cursor:"pointer",fontSize:12,color:"#e6edf3",marginRight:12}},
+              ce("input",{type:"radio",name:"pat-algo",checked:paramsTemplate.algorithm==='cos',
+                onChange:function(){updateP3('algorithm','cos');},style:{accentColor:"#a855f7"}}),"コサイン"),
+            ce("label",{style:{display:"flex",alignItems:"center",gap:4,cursor:"pointer",fontSize:12,color:"#e6edf3"}},
+              ce("input",{type:"radio",name:"pat-algo",checked:paramsTemplate.algorithm==='dtw',
+                onChange:function(){updateP3('algorithm','dtw');},style:{accentColor:"#a855f7"}}),"DTW (速度違い対応)")
+          ),
+          ce("div",{style:rowStyle},
+            ce("span",{style:labelStyle},"類似度閾値"),
+            ce("input",{type:"range",min:0,max:100,step:5,value:paramsTemplate.threshold,
+              onChange:function(e){updateP3('threshold',parseInt(e.target.value,10));},
+              style:{flex:1,accentColor:"#a855f7"}}),
+            ce("span",{style:{fontSize:12,color:"#fff",minWidth:36,textAlign:"right"}},paramsTemplate.threshold+"点")
+          ),
+          !queryDraftId && ce("div",{style:{fontSize:11,color:"#c4a5f7",padding:"6px 0"}},
+            "↑ プルダウンからテンプレートにするチャートを選んでください")
+        ),
+        /* 時間足 (全 Phase 共通) */
+        ce("div",{style:rowStyle},
+          ce("span",{style:labelStyle},"時間足"),
+          ce("label",{style:{display:"flex",alignItems:"center",gap:4,cursor:"pointer",fontSize:12,color:"#e6edf3",marginRight:12}},
+            ce("input",{type:"radio",name:"pat-tf",checked:tf==='1m',
+              onChange:function(){setTf('1m');},style:{accentColor:"#a855f7"}}),"1分"),
+          ce("label",{style:{display:"flex",alignItems:"center",gap:4,cursor:"pointer",fontSize:12,color:"#e6edf3"}},
+            ce("input",{type:"radio",name:"pat-tf",checked:tf==='5m',
+              onChange:function(){setTf('5m');},style:{accentColor:"#a855f7"}}),"5分")
+        )
+      ),
+      /* progress */
+      computing&&ce("div",{style:{padding:"10px 16px",borderBottom:"1px solid #2a2a2a",background:"#0d0d0d"}},
+        ce("div",{style:{fontSize:11,color:"#c4a5f7",marginBottom:4}},
+          "計算中: "+doneCount+"/"+totalCount+" 件"),
+        ce("div",{style:{height:4,background:"#1a1a1a",borderRadius:2,overflow:"hidden"}},
+          ce("div",{style:{height:"100%",width:(totalCount>0?Math.round(doneCount/totalCount*100):0)+"%",
+            background:"#a855f7",transition:"width 0.2s"}}))
+      ),
+      /* results */
+      ce("div",{style:{flex:1,overflowY:"auto",padding:"10px 16px"}},
+        !computing && results.length===0 && ce("div",{style:{fontSize:13,color:"#6e7681",textAlign:"center",padding:"30px 0"}},
+          totalCount===0?"チャートがありません":
+          (activePattern==='template' && !queryDraftId)?"クエリチャートを選択してください":
+          "該当するチャートがありません"),
+        results.length>0 && ce("div",{style:{fontSize:11,color:"#888",marginBottom:8}},
+          "結果: "+results.length+"件 (スコア降順)"),
+        results.map(function(r){
+          var thumbSrc=getThumbSrc(r.rec.id);
+          return ce("div",{key:r.rec.id,
+            onClick:function(){cancelRef.current=true;onOpenChart(r.rec.id);onClose();},
+            style:{display:"flex",gap:10,padding:"8px",borderRadius:8,
+              background:"#1a1a1a",border:"1px solid #2a2a2a",marginBottom:6,cursor:"pointer",alignItems:"center"}},
+            thumbSrc?ce("img",{src:thumbSrc,style:{width:80,height:50,objectFit:"cover",borderRadius:4,background:"#000",flexShrink:0},
+              onError:function(){try{caClearBrokenThumbUrl(r.rec.id);}catch(e){}}})
+              :ce("div",{style:{width:80,height:50,background:"#0a0a0a",borderRadius:4,flexShrink:0,
+                display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#444"}},"no thumb"),
+            ce("div",{style:{flex:1,minWidth:0}},
+              ce("div",{style:{fontSize:13,color:"#e6edf3",fontWeight:700}},r.rec.ticker||"(銘柄なし)"),
+              ce("div",{style:{fontSize:11,color:"#8b949e",marginTop:2}},r.rec.date||""),
+              ce("div",{style:{fontSize:10,color:"#6e7681",marginTop:2}},
+                r.type==='asagaten'
+                  ? "HoD "+r.features.hodMin+"分 / 後退 "+Math.round(r.features.closeRetraceRatio*100)+"% / "+(r.features.isBearish?"陰線":"陽線")
+                  : r.type==='vwapzigzag'
+                    ? "交差 "+r.features.vwapCrossCount+"回 / 乖離 "+Math.round(r.features.maxDevRatio*100)+"% / 上"+r.features.aboveBarCount+"・下"+r.features.belowBarCount
+                    : (r.scoreObj.dtw!=null
+                        ? "DTW "+r.scoreObj.dtw.toFixed(2)+" / "+r.features.barCount+"本"
+                        : "cos "+(r.scoreObj.cos!=null?r.scoreObj.cos.toFixed(3):'?')+" / "+r.features.barCount+"本"))
+            ),
+            ce("div",{style:{fontSize:18,fontWeight:700,color:"#c4a5f7",minWidth:50,textAlign:"right"}},
+              r.scoreObj.score+"点")
+          );
+        })
+      )
+    )
+  );
+}
+
 function DraftLibrary(props){
   var onOpen=props.onOpen, onClose=props.onClose, fbCfg=props.fbCfg||{}, initialTicker=props.initialTicker||null;
   var highlightDate=props.highlightDate||null;
   var onClearHighlight=props.onClearHighlight||function(){};
+  /* 2026-04-30: C - AnnotatorMain からのクエリ起動 */
+  var queryFromEditor=props.queryFromEditor||null;
+  var onConsumeQueryFromEditor=props.onConsumeQueryFromEditor||function(){};
   var s0=useState(caLoadTickers);   var tickers=s0[0],setTickers=s0[1];
   var s1=useState(initialTicker);   var selTicker=s1[0],setSelTicker=s1[1];
   var s2=useState(caLoadMeta);      var meta=s2[0],setMeta=s2[1];
@@ -6575,6 +7229,19 @@ function DraftLibrary(props){
   var sQuery=useState('');       var searchQuery=sQuery[0],setSearchQuery=sQuery[1];
   var sResults=useState([]);     var searchResults=sResults[0],setSearchResults=sResults[1];
   var sSearching=useState(false);var searching=sSearching[0],setSearching=sSearching[1];
+  /* 2026-04-30: パターン検索 (Phase 1: 寄り天) */
+  var sPat=useState(false);      var showPatternSearch=sPat[0],setShowPatternSearch=sPat[1];
+  /* 2026-04-30: C - エディタから起動された時の初期クエリ */
+  var sPatQ=useState(null);      var patSearchInitQuery=sPatQ[0],setPatSearchInitQuery=sPatQ[1];
+
+  /* 2026-04-30: C - AnnotatorMain からの queryFromEditor を受け取り、PatternSearchModal を起動 */
+  useEffect(function(){
+    if(queryFromEditor){
+      setPatSearchInitQuery(queryFromEditor);
+      setShowPatternSearch(true);
+      onConsumeQueryFromEditor();  /* 親側 state をクリア (重複起動防止) */
+    }
+  },[queryFromEditor]);
   /* 2026-04-27: 一括インポート画面 */
   var sImport=useState(false);   var showImport=sImport[0],setShowImport=sImport[1];
   var sImportDrag=useState(false);var importDragActive=sImportDrag[0],setImportDragActive=sImportDrag[1];
@@ -7150,6 +7817,59 @@ function DraftLibrary(props){
     };
   },[]);
 
+  /* ── 2026-04-30: パターン検索特徴量の自動計算 (バックグラウンド)
+     meta が揃った後、未計算 or _v 不一致 or マイグレーション要 のものを順次計算 → IDB 保存
+     並列度1、1000ms間隔 (UI 反応性優先で噛みすぎないよう緩め)
+     fetchFullMeta 完了とは独立 (meta state 変化に追従)
+     Phase 2 (vwap_features_*) / Phase 3 (vec_features_*) 追加に伴いマイグレーション判定を強化 */
+  useEffect(function(){
+    if(!meta || meta.length===0)return;
+    var cancelled=false;
+    var i=0;
+    function processNext(){
+      if(cancelled)return;
+      if(i>=meta.length)return;
+      var m=meta[i]; i++;
+      patFeatGet(m.id, function(cached){
+        if(cancelled)return;
+        var cacheValid=cached && cached._v===m._v
+                    && cached.vwap_features_1m!==undefined
+                    && cached.vwap_features_5m!==undefined
+                    && cached.vec_features_1m!==undefined
+                    && cached.vec_features_5m!==undefined;
+        if(cacheValid){
+          /* キャッシュ済 → スキップ */
+          setTimeout(processNext, 0);
+          return;
+        }
+        /* 未計算 or _v 不一致 or マイグレーション要 → 全 Phase 計算 */
+        caLoadDataAsync(m.id, function(d){
+          if(cancelled)return;
+          if(d && d.analysisData){
+            var f1m=extractPhase1Features(d.analysisData, '1m');
+            var f5m=extractPhase1Features(d.analysisData, '5m');
+            var v1m=extractPhase2VwapFeatures(d.analysisData, '1m');
+            var v5m=extractPhase2VwapFeatures(d.analysisData, '5m');
+            var c1m=extractPhase3VectorFeatures(d.analysisData, '1m');
+            var c5m=extractPhase3VectorFeatures(d.analysisData, '5m');
+            patFeatSet(m.id, {
+              id:m.id, ticker:m.ticker||'', date:m.analysisDate||m.name||'',
+              savedAt:m.savedAt||0, _v:m._v||0,
+              features_1m:f1m, features_5m:f5m,
+              vwap_features_1m:v1m, vwap_features_5m:v5m,
+              vec_features_1m:c1m, vec_features_5m:c5m,
+              computedAt:Date.now()
+            });
+          }
+          setTimeout(processNext, 1000);
+        });
+      });
+    }
+    /* マウント後3秒待ってから開始 (UI 初期描画優先) */
+    var startTimer=setTimeout(processNext, 3000);
+    return function(){cancelled=true;clearTimeout(startTimer);};
+  },[meta.length]);
+
   // ── Firebase ヘルパー（meta=旧パス / data=新パス 分離）──
   function fbSaveDraft(id,metaItem,data){
     var base=makeDraftsBase(), dataBase=makeDraftsDataBase();
@@ -7528,6 +8248,11 @@ function DraftLibrary(props){
           background:showSearch?"#1e3a5f":"#2a2a2a",
           color:showSearch?"#93c5fd":"#888",
           padding:"7px 12px",borderRadius:8})},"🔍"),
+      /* 2026-04-30: パターン検索ボタン (Phase 1: 寄り天) */
+      !showTrash&&!showImport&&!showSearch&&ce("button",{onClick:function(){setShowPatternSearch(true);},
+        style:Object.assign({},BT,{fontSize:13,fontWeight:700,
+          background:"#2a2a2a",color:"#c4a5f7",
+          padding:"7px 12px",borderRadius:8})},"📈"),
       /* 2026-04-27: 一括インポートボタン */
       !showTrash&&!showSearch&&ce("button",{onClick:function(){setShowImport(!showImport);setImportLog([]);setShowSearch(false);},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,
@@ -7997,7 +8722,16 @@ function DraftLibrary(props){
               );
             })
       )
-      )
+      ),
+      /* 2026-04-30: パターン検索モーダル */
+      ce(PatternSearchModal,{
+        open:showPatternSearch, meta:meta, fbCfg:fbCfg,
+        onClose:function(){setShowPatternSearch(false);setPatSearchInitQuery(null);},
+        onOpenChart:function(id){openChart(id);},
+        /* 2026-04-30: C - エディタからの起動時のみ初期クエリ + テンプレタブで起動 */
+        initialQueryDraftId:patSearchInitQuery,
+        initialPattern:patSearchInitQuery?'template':null
+      })
     )
   );
 }
@@ -8169,6 +8903,8 @@ function App(){
   var s5=useState(function(){try{return sessionStorage.getItem('ca_draftTicker')||null;}catch(e){return null;}}); var draftInitTicker=s5[0],setDraftInitTicker=s5[1];
   /* 2026-04-20: URLパラメータ経由で指定された日付 (DraftLibrary で該当チャートをハイライト) */
   var s6=useState(null); var highlightDate=s6[0],setHighlightDate=s6[1];
+  /* 2026-04-30: C - エディタから「似た形検索」起動時のクエリ draft id */
+  var s7=useState(null); var queryFromEditor=s7[0],setQueryFromEditor=s7[1];
   var fileRef=useRef(null);
   /* ─── 起動時: URLパラメータ解析 (scalping-notebook連携) ───
      対応: ?{code}_{date}&id={id}
@@ -8274,6 +9010,14 @@ function App(){
         setImg(null);
         setDraftInitTicker(ticker||null);
         setShowDrafts(true);
+      },
+      /* 2026-04-30: C - 「🔎 似た形」ボタンクリック時の処理
+         エディタを閉じてホーム遷移 + queryFromEditor 設定 → DraftLibrary 側で PatternSearchModal 起動 */
+      onSearchSimilar:function(draftId){
+        try{sessionStorage.removeItem('ca_session');}catch(e){}
+        setQueryFromEditor(draftId);
+        setImg(null);
+        setShowDrafts(true);
       }
     });
   }
@@ -8289,7 +9033,10 @@ function App(){
       onClose:function(){/* no-op: DraftLibrary がホームなので戻り先なし */},
       onOpenFbSettings:function(){setShowFbSettings(true);},
       onOpenDisplaySettings:function(){setShowDisplaySettings(true);},
-      onClearHighlight:function(){setHighlightDate(null);}
+      onClearHighlight:function(){setHighlightDate(null);},
+      /* 2026-04-30: C - エディタから「似た形検索」で起動された時のクエリ draft id */
+      queryFromEditor:queryFromEditor,
+      onConsumeQueryFromEditor:function(){setQueryFromEditor(null);}
     }),
     /* Firebase設定モーダル */
     showFbSettings&&ce(FbSettingsModal,{
