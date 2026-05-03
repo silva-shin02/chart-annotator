@@ -7039,7 +7039,8 @@ function PatternSearchModal(props){
     var tickerList=Object.keys(tickerCounts).sort(function(a,b){return a.localeCompare(b,'ja');});
     /* 選択銘柄のチャートを年月でグルーピング */
     var charts=pickerTicker?meta.filter(function(m){return (m.ticker||'(未分類)')===pickerTicker;}):[];
-    charts.sort(function(a,b){return (b.savedAt||0)-(a.savedAt||0);});
+    /* 2026-05-03: チャート選択画面はすべて name 降順 (= 日付降順) で固定 */
+    charts.sort(function(a,b){return (b.name||'').localeCompare(a.name||'','ja');});
     var groupsP={};
     var ymKeysP=[];
     charts.forEach(function(m){
