@@ -1963,9 +1963,15 @@ function DataChart(props){
               }
               return L.priceTop+(1-(pp-L.pmin)/(L.pmax-L.pmin))*L.priceH;
             }
-            var shifted=Object.assign({},sm,{
-              anchors:sm.anchors.map(function(a){return {tm:a.tm+m.dtm, p:a.p+m.dp};})
-            });
+            /* 2026-05: ハンドルドラッグ時は対象anchorのみ移動 (全anchor移動はストローク移動時のみ) */
+            var shifted;
+            if(m.handleId){
+              shifted=applyHandleTransform(sm,m.handleId,m.dtm,m.dp);
+            } else {
+              shifted=Object.assign({},sm,{
+                anchors:sm.anchors.map(function(a){return {tm:a.tm+m.dtm, p:a.p+m.dp};})
+              });
+            }
             var tp2=shifted.type||shifted.tool;
             if(tp2==='freehand'||tp2==='text'){
               drawAnalysisStrokeExt(pctx,shifted,minToXloc2,pToYloc2,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
@@ -2610,9 +2616,21 @@ function DataChart(props){
       drawCrosshair();
       return;
     }
-    /* 2026-04-26: スニペット — ドラッグ式 (mouseDown=矢印先端、mouseUp=テキスト位置) / 既存テキストクリックで選択移動 */
+    /* 2026-05: スニペット — ドラッグ式 (mouseDown=矢じり、mouseUp=テキスト位置)
+       ハンドル編集 / 既存テキスト移動 / 新規貼付けの3段判定 */
     if(drawTool==='snippet'){
-      /* 既存テキストストロークのhit test → 選択+ドラッグ移動 */
+      /* (1) 選択済ストロークのハンドルhit → ハンドルドラッグ (矢じり/テキスト位置の個別移動) */
+      var snipHH=hitTestSelectedHandle(e.clientX,e.clientY);
+      if(snipHH){
+        moveRef.current={
+          side:snipHH.side, idx:snipHH.idx,
+          startTM:tp.tm, startP:tp.p, dtm:0, dp:0,
+          moving:true, handleId:snipHH.handleId
+        };
+        setMoveHint({side:snipHH.side, idx:snipHH.idx});
+        return;
+      }
+      /* (2) 既存テキストストロークのhit test → 選択+全体ドラッグ移動 */
       var gHitSnip=hitTestStroke(e.clientX,e.clientY);
       if(gHitSnip!=null){
         var hitS=getStrokeByHit(gHitSnip);
@@ -2623,9 +2641,14 @@ function DataChart(props){
           return;
         }
       }
+      /* (3) 選択中なら解除のみ (新スタンプ追加しない) */
+      if(selectedIdx){
+        setSelectedIdx(null);
+        return;
+      }
+      /* (4) 新規スタンプ: ドラッグ開始 (Down=矢じり、Up=テキスト位置) */
       var snipObj=props.snippetObj;
       if(snipObj&&snipObj.text){
-        /* 2026-05: ドラッグ開始 — Down 位置=矢印先端、Up 位置=テキスト位置 (短ドラッグなら矢印なし) */
         drawRef.current={on:true, side:tpSide, sTM:tp.tm, sP:tp.p, cTM:tp.tm, cP:tp.p,
           _snippet:true, _snipObj:snipObj};
         drawCrosshair();
@@ -3979,45 +4002,36 @@ function drawAnalysisStrokeExt(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,pric
     displayLines.forEach(function(l){var m=ctx.measureText(l).width; if(m>maxW)maxW=m;});
     if(boxWZ>maxW)maxW=boxWZ;
     var boxH=displayLines.length*fs*1.3;
-    /* 2026-04-21: テキスト背景 透明化 (旧: rgba(0,0,0,0.6) fillRect) */
-    /* 2026-04-27: _snippet フラグ時は枠線描画 (枠色=テキスト色) */
+    /* 2026-05: スタンプ - テキスト中央寄せ + 矢印描画
+       anchors[0]=根元(テキスト中央基準), anchors[1]=矢じり
+       矢印の根元はanchors[0]の生座標そのまま (辺/頂点スナップなし)
+       テキストは根元を水平中央・垂直中央で配置 */
+    var textX=x, textY=y;
     if(s._snippet){
+      ctx.textAlign='center';
+      textY=y-boxH/2;
       var bpad=3*Z;
+      /* 枠線 (中央寄せ) */
       ctx.save();
       ctx.strokeStyle=col;
       ctx.lineWidth=Math.max(1,1.5*Z);
       ctx.setLineDash([]);
       ctx.globalAlpha=op*0.7;
-      ctx.strokeRect(x-bpad,y-bpad,maxW+bpad*2,boxH+bpad*2);
+      ctx.strokeRect(x-maxW/2-bpad, textY-bpad, maxW+bpad*2, boxH+bpad*2);
       ctx.restore();
       ctx.globalAlpha=op;
-      /* 2026-05: スタンプ矢印描画 (スマート起点+デフォルト位置)
-         anchors[1] あれば矢印先端、無ければデフォルト位置 (テキスト下方向 60*Z px) */
+      /* 矢印 (根元=anchors[0]の生座標、先端=anchors[1]) */
       var arrowTipX,arrowTipY;
       if(s.anchors.length>=2&&s.anchors[1]){
         arrowTipX=minToX(s.anchors[1].tm);
         arrowTipY=pToY(s.anchors[1].p);
       } else {
-        /* Q5 b: 既存スタンプ (anchors=1点) もデフォルト矢印先端で表示 */
-        arrowTipX=x+maxW/2;
-        arrowTipY=y+boxH+bpad+60*Z;
+        arrowTipX=x;
+        arrowTipY=y+boxH/2+bpad+60*Z;
       }
-      /* テキスト中心からの方向で起点 (4辺中点のいずれか) を選択 */
-      var centerX=x+maxW/2, centerY=y+boxH/2;
-      var dx=arrowTipX-centerX, dy=arrowTipY-centerY;
-      var halfW=maxW/2+bpad, halfH=boxH/2+bpad;
-      var originX,originY;
-      /* 矢印先端がテキストボックス内部 (両軸内) なら矢印を描画しない */
-      if(Math.abs(dx)<halfW&&Math.abs(dy)<halfH){
-        /* skip */
-      } else {
-        if(Math.abs(dx)/halfW>Math.abs(dy)/halfH){
-          originX=(dx>0)?(x+maxW+bpad):(x-bpad);
-          originY=centerY;
-        } else {
-          originX=centerX;
-          originY=(dy>0)?(y+boxH+bpad):(y-bpad);
-        }
+      var rootX=x, rootY=y;
+      var arrowDist=Math.hypot(arrowTipX-rootX,arrowTipY-rootY);
+      if(arrowDist>=5){
         ctx.save();
         ctx.strokeStyle=col;
         ctx.fillStyle=col;
@@ -4025,13 +4039,11 @@ function drawAnalysisStrokeExt(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,pric
         ctx.setLineDash([]);
         ctx.lineCap='round'; ctx.lineJoin='round';
         ctx.globalAlpha=op*0.85;
-        /* 軸 (起点→先端) */
         ctx.beginPath();
-        ctx.moveTo(originX,originY);
+        ctx.moveTo(rootX,rootY);
         ctx.lineTo(arrowTipX,arrowTipY);
         ctx.stroke();
-        /* 矢尻 (先端で2本の線) */
-        var ang=Math.atan2(arrowTipY-originY,arrowTipX-originX);
+        var ang=Math.atan2(arrowTipY-rootY,arrowTipX-rootX);
         var headLen=Math.max(8,12*Z), headAng=Math.PI/6;
         ctx.beginPath();
         ctx.moveTo(arrowTipX,arrowTipY);
@@ -4045,7 +4057,8 @@ function drawAnalysisStrokeExt(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,pric
       }
     }
     ctx.fillStyle=col;
-    displayLines.forEach(function(l,i){ctx.fillText(l,x,y+i*fs*1.3);});
+    displayLines.forEach(function(l,i){ctx.fillText(l, textX, textY+i*fs*1.3);});
+    if(s._snippet){ctx.textAlign='left';ctx.textBaseline='top';}
   }
   ctx.globalAlpha=1;
 }
@@ -4155,6 +4168,23 @@ function getStrokeScreenBounds(ctx,s,minToX,pToY){
     ctx.restore();
     if(s.boxW&&s.boxW>mW)mW=s.boxW;
     var tH=displayLines.length*fs*1.3;
+    /* 2026-05: _snippet はテキスト中央寄せ (根元=anchors[0]が中心) */
+    if(s._snippet){
+      var bx1=x-mW/2-6, by1=y-tH/2-6, bx2=x+mW/2+6, by2=y+tH/2+6;
+      /* 矢印先端もバウンディングボックスに含める */
+      if(s.anchors.length>=2&&s.anchors[1]){
+        var tipX=minToX(s.anchors[1].tm), tipY=pToY(s.anchors[1].p);
+        if(tipX-6<bx1)bx1=tipX-6;
+        if(tipY-6<by1)by1=tipY-6;
+        if(tipX+6>bx2)bx2=tipX+6;
+        if(tipY+6>by2)by2=tipY+6;
+      } else {
+        /* デフォルト矢印 (下方向 60px) */
+        var defTipY=y+tH/2+66;
+        if(defTipY+6>by2)by2=defTipY+6;
+      }
+      return {x1:bx1, y1:by1, x2:bx2, y2:by2};
+    }
     return {x1:x, y1:y, x2:x+mW, y2:y+tH};
   }
   if(tp==='horizontal'){
@@ -4258,7 +4288,12 @@ function drawSelectionHighlight(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,pri
     if(s.boxW&&s.boxW>mW)mW=s.boxW;
     var tH=displayLines.length*fs*1.3;
     var PAD=4;
-    ctx.strokeRect(x-PAD, y-PAD, mW+PAD*2, tH+PAD*2);
+    /* 2026-05: _snippet はテキスト中央寄せ */
+    if(s._snippet){
+      ctx.strokeRect(x-mW/2-PAD, y-tH/2-PAD, mW+PAD*2, tH+PAD*2);
+    } else {
+      ctx.strokeRect(x-PAD, y-PAD, mW+PAD*2, tH+PAD*2);
+    }
   } else if(s.anchors.length>=2){
     /* 2026-04-22: line/dotted/arrow/ruler/zone は枠線不要 (形状が明瞭で冗長) — ハンドル(○)のみ表示 */
     if(tp!=='line'&&tp!=='dotted'&&tp!=='arrow'&&tp!=='trade'){
