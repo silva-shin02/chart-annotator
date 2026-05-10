@@ -995,19 +995,29 @@ var CA_DEFAULT_SNIPPETS=[
   {text:'9:15前見送り',color:'#ff9500'},{text:'後場見送り',color:'#ff9500'},
   {text:'EMA乖離大',color:'#af52de'},{text:'板薄い',color:'#8e8e93'}
 ];
+/* 2026-05: スタンプ用 id 生成 (案C: id参照型 + text/colorバックアップ) */
+function caUid(){return 'sn_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,7);}
 function caLoadSnippets(){
   try{
     var v=JSON.parse(localStorage.getItem(CA_SNIPPETS_KEY));
     if(v&&v.length){
-      /* migrate: 旧format (string[]) → {text,color}[] */
+      /* migrate: 旧format (string[]) → {id,text,color}[] */
       if(typeof v[0]==='string'){
-        v=v.map(function(s){return {text:s,color:'#ff9500'};});
+        v=v.map(function(s){return {id:caUid(),text:s,color:'#ff9500'};});
         caSaveSnippets(v);
+        return v;
       }
+      /* migrate: id付与 ({text,color} → {id,text,color}) */
+      var changed=false;
+      v=v.map(function(s){
+        if(!s.id){changed=true;return Object.assign({id:caUid()},s);}
+        return s;
+      });
+      if(changed)caSaveSnippets(v);
       return v;
     }
   }catch(e){}
-  return CA_DEFAULT_SNIPPETS.map(function(s){return Object.assign({},s);});
+  return CA_DEFAULT_SNIPPETS.map(function(s){return Object.assign({id:caUid()},s);});
 }
 function caSaveSnippets(arr){
   try{localStorage.setItem(CA_SNIPPETS_KEY,JSON.stringify(arr));}catch(e){}
@@ -1650,7 +1660,7 @@ function DataChart(props){
         }catch(e){}
       }
       try{
-        drawDataChart(canvas,bars,data,dimWithPx,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx,refBars,refData,getCandleGap(tf),refStrokes,moveHint,lassoSel);
+        drawDataChart(canvas,bars,data,dimWithPx,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx,refBars,refData,getCandleGap(tf),refStrokes,moveHint,lassoSel,props.snippetsById);
       } finally {
         if(dprOverridden){
           try{Object.defineProperty(window,'devicePixelRatio',{value:origDPR,configurable:true});}catch(e){}
@@ -1687,6 +1697,8 @@ function DataChart(props){
     /* 2026-04-22: プレビュー描画でも書込みオブジェクトの zoom 連動を適用
        (drawDataChart は本体canvasに _strokeZoom を設定しているが、overlayは別canvasなので明示設定が必要) */
     ctx._strokeZoom=(L&&typeof L.zoom==='number'&&L.zoom>0)?L.zoom:1.0;
+    /* 2026-05: 案C - スタンプID参照ルックアップ (本体canvasと同じ snippetsById を共有) */
+    ctx._snippetsById=props&&props.snippetsById?props.snippetsById:null;
 
     /* 描画中プレビュー (最優先で描く — 背面) */
     if(L&&drawRef.current&&drawRef.current.on){
@@ -1891,6 +1903,8 @@ function DataChart(props){
     if(vctx){vctx.setTransform(dpr,0,0,dpr,0,0);vctx.clearRect(0,0,W,volAreaH);}
     /* 2026-04-22: pctx にも _strokeZoom を適用 (書込オブジェクト zoom 連動) */
     if(pctx)pctx._strokeZoom=(L&&typeof L.zoom==='number'&&L.zoom>0)?L.zoom:1.0;
+    /* 2026-05: 案C - pctx にも スタンプID参照ルックアップ */
+    if(pctx)pctx._snippetsById=props&&props.snippetsById?props.snippetsById:null;
 
     /* ── preview / 移動プレビュー: priceOverlay にのみ描画 (Y は price 座標系そのまま) ── */
     if(pctx){
@@ -2605,7 +2619,9 @@ function DataChart(props){
           text:snipObj.text,
           color:snipObj.color||'#ff9500',width:1,opacity:drawOpacity,
           fontSize:props.drawFontSize||15,fontBold:!!props.drawFontBold,
-          _snippet:true};
+          _snippet:true,
+          /* 2026-05: 案C - スタンプID参照 (snippets配列のid変更で全ストローク自動追従) */
+          snipId:snipObj.id||null};
         onStrokeAdd(snipStroke);
       }
       return;
@@ -3331,7 +3347,7 @@ function computeEnhancedBars(bars, refBars){
    2026-04-21: 地図モデルズーム化 — dim.zoom で X/Y 同倍率
                barW = Z_BASE_BAR_PX * zoom, pxPerYen = (Z_BASE_PRICE_PX/10) * zoom
                uSpan は zoom と chartW から派生 (view.uE は setView で同期されている前提) */
-function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,editingTextIdx,refBars,refData,gapVis,refStrokes,hideHint,lassoSel){
+function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,editingTextIdx,refBars,refData,gapVis,refStrokes,hideHint,lassoSel,snippetsById){
   // B完全版: EMA 前日連続化 (refData ありなら bars の EMA を上書き)
   bars=computeEnhancedBars(bars, refBars);
   var dpr=window.devicePixelRatio||1;
@@ -3658,6 +3674,8 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
                  drawAnalysisStroke/Ext 内で width/fontSize/boxW/dash/矢尻/markerW を zoom 倍する
      2026-04-22: サムネモードは _strokeZoom=1.0 固定 (書込オブジェクト zoom連動OFF) */
   ctx._strokeZoom=isThumbnail?1.0:zoom;
+  /* 2026-05: 案C - スタンプID参照ルックアップ用マップ (引数 snippetsById 経由) */
+  ctx._snippetsById=snippetsById||null;
   function minToXCur(m){return minToX(m,'cur');}
   function minToXRef(m){return minToX(m,'ref');}
   if(strokes&&strokes.length){
@@ -3861,6 +3879,15 @@ function drawAnalysisStrokeExt(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,pric
   /* 2026-04-21: 地図モデルズーム連動 */
   var Z=(ctx&&typeof ctx._strokeZoom==='number'&&ctx._strokeZoom>0)?ctx._strokeZoom:1.0;
   var col=s.color||'#ff3b30';
+  /* 2026-05: 案C - スタンプID参照ルックアップ (id一致あれば snippets[id] の text/color を優先) */
+  var resolvedText=s.text||'';
+  if(s._snippet&&s.snipId&&ctx&&ctx._snippetsById){
+    var _sn=ctx._snippetsById[s.snipId];
+    if(_sn){
+      if(_sn.color)col=_sn.color;
+      if(_sn.text)resolvedText=_sn.text;
+    }
+  }
   var w=(s.width||2)*Z;
   var op=s.opacity!=null?s.opacity:1;
   var tp=s.type||s.tool;
@@ -3894,7 +3921,7 @@ function drawAnalysisStrokeExt(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,pric
        テキストエディット時のtextarea wrap表示と一致させるため
        2026-04-21: boxW も zoom 連動 */
     var boxWZ=(s.boxW&&s.boxW>0)?s.boxW*Z:0;
-    var rawLines=(s.text||'').split('\n');
+    var rawLines=resolvedText.split('\n');
     var displayLines=[];
     if(boxWZ>0){
       rawLines.forEach(function(para){
@@ -4310,6 +4337,10 @@ function ImageAnnotator(props){
   var stSnips=useState(caLoadSnippets); var snippets=stSnips[0],setSnippets=stSnips[1];
   var stSelSnip=useState(0); var selSnipIdx=stSelSnip[0],setSelSnipIdx=stSelSnip[1]; /* 選択中スニペットindex */
   var stSnipEdit=useState(false); var snippetEditing=stSnipEdit[0],setSnippetEditing=stSnipEdit[1];
+  /* 2026-05: 案C - スタンプ編集モードUI 用 state */
+  var stSnipNE=useState({idx:null,value:''}); var snipNameEdit=stSnipNE[0],setSnipNameEdit=stSnipNE[1];
+  var stSnipPI=useState(null); var snipPaletteIdx=stSnipPI[0],setSnipPaletteIdx=stSnipPI[1];
+  var stSnipDrag=useState({drag:null,over:null}); var snipDragSt=stSnipDrag[0],setSnipDragSt=stSnipDrag[1];
   /* 2026-04-27: スタンプ Firebase 同期 (銘柄メモと同じパターン、last-write-wins) */
   var snipSaveTimerRef=useRef(null);
   function updateSnippets(nArr){
@@ -4333,9 +4364,10 @@ function ImageAnnotator(props){
       var url=cfg.url.replace(/\/$/,'')+'/chart-annotator-snippets.json'+auth;
       fetch(url).then(function(r){return r.ok?r.json():null;}).then(function(d){
         if(d&&d.snippets&&Array.isArray(d.snippets)&&d.snippets.length>0){
-          /* 旧形式 (string[]) から救済 */
+          /* 旧形式 (string[]) から救済 + id 付与マイグレーション */
           var arr=d.snippets.map(function(s){
-            return typeof s==='string'?{text:s,color:'#ff9500'}:{text:s.text||'',color:s.color||'#ff9500'};
+            if(typeof s==='string')return {id:caUid(),text:s,color:'#ff9500'};
+            return {id:s.id||caUid(),text:s.text||'',color:s.color||'#ff9500'};
           }).filter(function(s){return s.text;});
           if(arr.length>0){ setSnippets(arr); caSaveSnippets(arr); }
         }
@@ -5226,39 +5258,145 @@ function ImageAnnotator(props){
           snippetEditing?"✓ 完了":"✏ 編集")
       ),
       /* スニペット編集パネル (編集モード時のみ) */
+      /* 2026-05: 案C - 名前編集・ドラッグ並び替え・色パレットインライン展開・削除確認 */
       (analysisData && tool==='snippet' && snippetEditing) && ce("div",{
         style:{display:"flex",flexDirection:"column",gap:4,padding:"6px 10px",
-        borderTop:"1px solid #2a2a2a",background:"#0f0a1a",maxHeight:200,overflowY:"auto",flexShrink:0}},
+        borderTop:"1px solid #2a2a2a",background:"#0f0a1a",maxHeight:280,overflowY:"auto",flexShrink:0}},
         snippets.map(function(sn,si){
-          return ce("div",{key:'snipe_'+si,style:{display:"flex",gap:4,alignItems:"center"}},
-            /* 並べ替え ▲▼ */
-            ce("div",{style:{display:"flex",flexDirection:"column",gap:1,flexShrink:0}},
-              ce("button",{disabled:si===0,onClick:function(){
-                var nArr=snippets.slice();var tmp=nArr[si];nArr[si]=nArr[si-1];nArr[si-1]=tmp;
-                updateSnippets(nArr);
-                if(selSnipIdx===si)setSelSnipIdx(si-1);else if(selSnipIdx===si-1)setSelSnipIdx(si);
-              },style:{padding:"0 4px",fontSize:8,background:"none",border:"none",color:si===0?"#333":"#888",cursor:si===0?"default":"pointer",lineHeight:1}},"▲"),
-              ce("button",{disabled:si===snippets.length-1,onClick:function(){
-                var nArr=snippets.slice();var tmp=nArr[si];nArr[si]=nArr[si+1];nArr[si+1]=tmp;
-                updateSnippets(nArr);
-                if(selSnipIdx===si)setSelSnipIdx(si+1);else if(selSnipIdx===si+1)setSelSnipIdx(si);
-              },style:{padding:"0 4px",fontSize:8,background:"none",border:"none",color:si===snippets.length-1?"#333":"#888",cursor:si===snippets.length-1?"default":"pointer",lineHeight:1}},"▼")
+          var isDrag=snipDragSt.drag===si;
+          var isOver=snipDragSt.over===si&&snipDragSt.drag!==null&&snipDragSt.drag!==si;
+          var isNameEdit=snipNameEdit.idx===si;
+          var isPaletteOpen=snipPaletteIdx===si;
+          var snColor=sn.color||'#ff9500';
+          /* 並び替え reorder ヘルパー */
+          function reorderSnip(from,to){
+            if(from===to)return;
+            var nArr=snippets.slice();
+            var r=nArr.splice(from,1)[0];
+            nArr.splice(to,0,r);
+            updateSnippets(nArr);
+            /* selSnipIdx を追従 */
+            if(selSnipIdx===from)setSelSnipIdx(to);
+            else if(from<selSnipIdx&&to>=selSnipIdx)setSelSnipIdx(selSnipIdx-1);
+            else if(from>selSnipIdx&&to<=selSnipIdx)setSelSnipIdx(selSnipIdx+1);
+          }
+          return ce("div",{key:'snipe_'+(sn.id||si),
+            style:{display:"flex",flexDirection:"column",gap:2,
+              border:isOver?"2px dashed #007AFF":"2px solid transparent",
+              borderRadius:6,opacity:isDrag?0.3:1,padding:isOver?2:4,
+              background:isOver?"rgba(0,122,255,0.08)":"transparent",
+              transition:"background .1s"}},
+            /* === 1行目: ⠿ + ▲▼ + 色ドット + 名前 + × === */
+            ce("div",{style:{display:"flex",gap:6,alignItems:"center"}},
+              /* ⠿ ドラッグハンドル (PC用、編集中はドラッグ無効) */
+              ce("span",{
+                draggable:!isNameEdit,
+                onDragStart:function(e){
+                  if(isNameEdit)return;
+                  try{e.dataTransfer.setData("t","");}catch(err){}
+                  setSnipDragSt({drag:si,over:null});
+                },
+                onDragOver:function(e){
+                  e.preventDefault();
+                  if(snipDragSt.drag!==null&&snipDragSt.drag!==si)setSnipDragSt({drag:snipDragSt.drag,over:si});
+                },
+                onDrop:function(e){
+                  e.preventDefault();
+                  if(snipDragSt.drag!==null)reorderSnip(snipDragSt.drag,si);
+                  setSnipDragSt({drag:null,over:null});
+                },
+                onDragEnd:function(){setSnipDragSt({drag:null,over:null});},
+                style:{width:18,height:18,display:"flex",alignItems:"center",justifyContent:"center",
+                  cursor:isNameEdit?"default":"grab",fontSize:14,color:"#666",
+                  userSelect:"none",flexShrink:0,borderRadius:3,background:"#1a1a2e"}
+              },"⠿"),
+              /* ▲▼ ボタン (iPad/タッチ用、ドラッグ不可環境向け) */
+              ce("div",{style:{display:"flex",flexDirection:"column",gap:1,flexShrink:0}},
+                ce("button",{disabled:si===0,onClick:function(){
+                  reorderSnip(si,si-1);
+                },style:{padding:"0 4px",fontSize:8,background:"none",border:"none",color:si===0?"#333":"#888",cursor:si===0?"default":"pointer",lineHeight:1}},"▲"),
+                ce("button",{disabled:si===snippets.length-1,onClick:function(){
+                  reorderSnip(si,si+1);
+                },style:{padding:"0 4px",fontSize:8,background:"none",border:"none",color:si===snippets.length-1?"#333":"#888",cursor:si===snippets.length-1?"default":"pointer",lineHeight:1}},"▼")
+              ),
+              /* 色ドット (タップで下に色パレット展開) */
+              ce("span",{onClick:function(){
+                setSnipPaletteIdx(isPaletteOpen?null:si);
+              },style:{width:18,height:18,borderRadius:"50%",background:snColor,
+                border:isPaletteOpen?"2px solid #007AFF":"2px solid #444",cursor:"pointer",flexShrink:0,
+                boxSizing:"border-box"}}),
+              /* 名前 (タップで編集モード) or input */
+              isNameEdit
+                ? ce("input",{type:"text",autoFocus:true,
+                    value:snipNameEdit.value,
+                    onChange:function(e){setSnipNameEdit({idx:si,value:e.target.value});},
+                    onKeyDown:function(e){
+                      if(e.key==='Enter'){
+                        var v=snipNameEdit.value.trim();
+                        if(v&&v!==sn.text){
+                          var nArr=snippets.slice();
+                          nArr[si]=Object.assign({},sn,{text:v});
+                          updateSnippets(nArr);
+                        }
+                        setSnipNameEdit({idx:null,value:''});
+                      } else if(e.key==='Escape'){
+                        setSnipNameEdit({idx:null,value:''});
+                      }
+                    },
+                    onBlur:function(){
+                      var v=snipNameEdit.value.trim();
+                      if(v&&v!==sn.text){
+                        var nArr=snippets.slice();
+                        nArr[si]=Object.assign({},sn,{text:v});
+                        updateSnippets(nArr);
+                      }
+                      setSnipNameEdit({idx:null,value:''});
+                    },
+                    style:{flex:1,padding:"3px 6px",fontSize:11,borderRadius:4,
+                      border:"2px solid #007AFF",background:"#000",color:"#fff",outline:"none",
+                      fontFamily:"inherit",fontWeight:600}})
+                : ce("span",{onClick:function(){
+                    setSnipNameEdit({idx:si,value:sn.text});
+                    setSnipPaletteIdx(null); /* 色パレット閉じる */
+                  },
+                  title:"タップで編集",
+                  style:{flex:1,fontSize:11,color:snColor,fontWeight:600,
+                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
+                    cursor:"text",padding:"3px 6px",borderRadius:4,
+                    background:"rgba(255,255,255,0.03)"}},sn.text),
+              /* 削除 (確認ダイアログあり) */
+              ce("button",{onClick:function(){
+                if(window.confirm('「'+sn.text+'」を削除しますか?')){
+                  var nArr=snippets.slice(); nArr.splice(si,1);
+                  updateSnippets(nArr);
+                  if(selSnipIdx>=nArr.length&&nArr.length>0)setSelSnipIdx(nArr.length-1);
+                  /* 編集中index/パレットindexクリア */
+                  if(snipNameEdit.idx===si)setSnipNameEdit({idx:null,value:''});
+                  if(snipPaletteIdx===si)setSnipPaletteIdx(null);
+                }
+              },style:{padding:"2px 8px",fontSize:10,borderRadius:4,border:"none",
+                background:"#7f1d1d",color:"#fca5a5",cursor:"pointer",flexShrink:0}},"✕")
             ),
-            /* 色ドット (クリックで次の色に切替) */
-            ce("span",{onClick:function(){
-              var curIdx=SNIP_COLORS.indexOf(sn.color||'#ff9500');
-              var nextIdx=(curIdx+1)%SNIP_COLORS.length;
-              var nArr=snippets.slice();nArr[si]=Object.assign({},sn,{color:SNIP_COLORS[nextIdx]});
-              updateSnippets(nArr);
-            },style:{width:14,height:14,borderRadius:"50%",background:sn.color||'#ff9500',
-              border:"2px solid #444",cursor:"pointer",flexShrink:0}}),
-            ce("span",{style:{fontSize:11,color:sn.color||'#ff9500',flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontWeight:600}},sn.text),
-            ce("button",{onClick:function(){
-              var nArr=snippets.slice(); nArr.splice(si,1);
-              updateSnippets(nArr);
-              if(selSnipIdx>=nArr.length&&nArr.length>0)setSelSnipIdx(nArr.length-1);
-            },style:{padding:"2px 8px",fontSize:10,borderRadius:4,border:"none",
-              background:"#7f1d1d",color:"#fca5a5",cursor:"pointer",flexShrink:0}},"✕")
+            /* === 2行目: 色パレット (展開時のみ) === */
+            isPaletteOpen && ce("div",{
+              style:{display:"flex",gap:6,padding:"4px 6px 4px 50px",alignItems:"center",
+                background:"rgba(0,0,0,0.2)",borderRadius:4,flexWrap:"wrap"}
+            },
+              SNIP_COLORS.map(function(c){
+                var isSel=snColor===c;
+                return ce("span",{key:'snc_'+c,
+                  onClick:function(){
+                    var nArr=snippets.slice();
+                    nArr[si]=Object.assign({},sn,{color:c});
+                    updateSnippets(nArr);
+                    setSnipPaletteIdx(null);
+                  },
+                  style:{width:20,height:20,borderRadius:"50%",background:c,
+                    border:isSel?"3px solid #007AFF":"1.5px solid rgba(255,255,255,0.3)",
+                    cursor:"pointer",flexShrink:0,boxSizing:"border-box",
+                    boxShadow:isSel?"0 0 0 1px #000":"none"}});
+              })
+            )
           );
         }),
         ce("div",{style:{display:"flex",gap:4,alignItems:"center",marginTop:2}},
@@ -5266,7 +5404,7 @@ function ImageAnnotator(props){
             onKeyDown:function(e){
               if(e.key==='Enter'){
                 var v=e.target.value.trim();
-                if(v){var nArr=snippets.concat([{text:v,color:'#ff9500'}]);updateSnippets(nArr);e.target.value='';}
+                if(v){var nArr=snippets.concat([{id:caUid(),text:v,color:'#ff9500'}]);updateSnippets(nArr);e.target.value='';}
               }
             },
             style:{flex:1,padding:"4px 8px",fontSize:11,borderRadius:6,border:"1px solid #444",
@@ -5274,7 +5412,7 @@ function ImageAnnotator(props){
           ce("button",{onClick:function(){
             var inp=document.getElementById('ca_snip_add_input');
             if(inp&&inp.value.trim()){
-              var nArr=snippets.concat([{text:inp.value.trim(),color:'#ff9500'}]);updateSnippets(nArr);inp.value='';
+              var nArr=snippets.concat([{id:caUid(),text:inp.value.trim(),color:'#ff9500'}]);updateSnippets(nArr);inp.value='';
             }
           },style:{padding:"4px 10px",fontSize:11,borderRadius:6,border:"none",
             background:"#8b5cf6",color:"#fff",cursor:"pointer",fontWeight:700,flexShrink:0}},"+追加")
@@ -5425,6 +5563,8 @@ function ImageAnnotator(props){
               drawTool:tool, drawColor:color, drawWidth:lineW, drawOpacity:opacity,
               drawFontSize:fontSize, drawFontBold:fontBold,
               snippetObj:(tool==='snippet'&&snippets.length)?snippets[selSnipIdx%snippets.length]:null,
+              /* 2026-05: 案C - スタンプID参照ルックアップマップ (描画時に id→{text,color} を解決) */
+              snippetsById:(function(){var m={};snippets.forEach(function(sn){if(sn&&sn.id)m[sn.id]=sn;});return m;})(),
               tradeDir:tradeDir,
               horiz:horiz,
               /* F2: 時間軸ビュー / pShift controlled、2026-04-21: zoom も追加 */
