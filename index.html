@@ -1713,7 +1713,21 @@ function DataChart(props){
         }
         return L.priceTop+(1-(p-L.pmin)/(L.pmax-L.pmin))*L.priceH;
       }
-      if(d.freehand&&d.pts&&d.pts.length){
+      if(d._snippet&&d._snipObj){
+        /* 2026-05: スニペット プレビュー — ドラッグ中表示 (overlayに描画) */
+        var sObjPv=d._snipObj;
+        var sxPv=minToXloc(d.sTM), syPv=pToYloc(d.sP);
+        var cxPv=minToXloc(d.cTM), cyPv=pToYloc(d.cP);
+        var distPv=Math.hypot(cxPv-sxPv,cyPv-syPv);
+        var pvAnchors=distPv>=5
+          ? [{tm:d.cTM,p:d.cP},{tm:d.sTM,p:d.sP}]
+          : [{tm:d.cTM,p:d.cP}];
+        var pvSnip={type:'text',anchors:pvAnchors,
+          text:sObjPv.text,color:sObjPv.color||'#ff9500',width:1,opacity:drawOpacity,
+          fontSize:props.drawFontSize||15,fontBold:!!props.drawFontBold,
+          _snippet:true,snipId:sObjPv.id||null};
+        drawAnalysisStrokeExt(ctx,pvSnip,minToXloc,pToYloc,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
+      } else if(d.freehand&&d.pts&&d.pts.length){
         // freehand: 多点プレビュー
         var preview={type:'freehand',anchors:d.pts,
           color:drawColor,width:drawWidth,opacity:drawOpacity};
@@ -4032,6 +4046,13 @@ function drawAnalysisStrokeExt(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,pric
       var rootX=x, rootY=y;
       var arrowDist=Math.hypot(arrowTipX-rootX,arrowTipY-rootY);
       if(arrowDist>=5){
+        /* 根元を枠辺の交差点に移動 (枠内に入り込まない) */
+        var halfW=maxW/2+bpad, halfH=boxH/2+bpad;
+        var adx=arrowTipX-x, ady=arrowTipY-y;
+        var tx=adx!==0?halfW/Math.abs(adx):Infinity;
+        var ty=ady!==0?halfH/Math.abs(ady):Infinity;
+        var te=Math.min(tx,ty);
+        if(te<1){rootX=x+adx*te; rootY=y+ady*te;}
         ctx.save();
         ctx.strokeStyle=col;
         ctx.fillStyle=col;
