@@ -2592,14 +2592,21 @@ function DataChart(props){
     }
     /* 2026-04-26: スニペット — 選択中テキストを即配置 / 既存テキストクリックで選択移動 */
     if(drawTool==='snippet'){
-      /* 既存テキストストロークのhit test → 選択+ドラッグ移動 */
+      /* 既存テキストストロークのhit test → 選択+ドラッグ移動 / クリックで編集 */
       var gHitSnip=hitTestStroke(e.clientX,e.clientY);
       if(gHitSnip!=null){
         var hitS=getStrokeByHit(gHitSnip);
         if(hitS&&(hitS.type||hitS.tool)==='text'){
           setSelectedIdx(gHitSnip);
+          var snScr=anchorToScreen(hitS,gHitSnip.side);
           moveRef.current={side:gHitSnip.side, idx:gHitSnip.idx,
-            startTM:tp.tm, startP:tp.p, dtm:0, dp:0, moving:false};
+            startTM:tp.tm, startP:tp.p, dtm:0, dp:0, moving:false,
+            _isTextTool:true,
+            _editReq:{
+              tm:(snScr?snScr.tm:tp.tm), p:(snScr?snScr.p:tp.p),
+              screenX:(snScr?snScr.screenX:e.clientX), screenY:(snScr?snScr.screenY:e.clientY),
+              editIdx:gHitSnip.idx, side:gHitSnip.side
+            }};
           return;
         }
       }
