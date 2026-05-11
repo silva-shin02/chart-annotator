@@ -3525,20 +3525,24 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   var pStart=Math.ceil(pmin/pStep)*pStep;
   var pEnd=Math.floor(pmax/pStep)*pStep;
   /* 2026-04-21: pStep はラベル密度自動切替で 10/20/50/100/500/1000 から選択済み
-     ラウンドナンバー強調 (1000円=最太、100/50円=中太、それ以外=細) は従来通り */
+     ラウンドナンバー強調 (1000円=最太、100/50円=中太、それ以外=細) */
   for(var p=pStart;p<=pEnd;p+=pStep){
     var y=pToY(p);
-    if(p%1000===0){ ctx.strokeStyle='#3c3c3c'; ctx.lineWidth=1.5; }
-    else if(p%100===0){ ctx.strokeStyle='#323232'; ctx.lineWidth=1.2; }
-    else if(p%50===0){ ctx.strokeStyle='#323232'; ctx.lineWidth=1.2; }
-    else { ctx.strokeStyle='#262626'; ctx.lineWidth=1; }
+    var _isR1000=(p%1000===0), _isR100=(p%100===0), _isR50=(p%50===0);
+    if(_isR1000){      ctx.strokeStyle='rgba(255,255,255,0.18)'; ctx.lineWidth=1.8; ctx.setLineDash([]); }
+    else if(_isR100){  ctx.strokeStyle='rgba(255,255,255,0.09)'; ctx.lineWidth=1.2; ctx.setLineDash([]); }
+    else if(_isR50){   ctx.strokeStyle='rgba(255,255,255,0.06)'; ctx.lineWidth=1.0; ctx.setLineDash([3,3]); }
+    else {             ctx.strokeStyle='#262626';                 ctx.lineWidth=0.8; ctx.setLineDash([]); }
     ctx.beginPath(); ctx.moveTo(padL,Math.round(y)+0.5); ctx.lineTo(padL+chartW,Math.round(y)+0.5); ctx.stroke();
-    ctx.fillStyle='#888';
+    ctx.setLineDash([]);
+    ctx.fillStyle=_isR1000?'#bbb':_isR100?'#999':'#777';
+    ctx.font=_isR1000?'bold 11px -apple-system,Helvetica,sans-serif':_isR100?'bold 10px -apple-system,Helvetica,sans-serif':'10px -apple-system,Helvetica,sans-serif';
     // 右側ラベル (textAlign='right' 前提、末端より4px内側)
     ctx.fillText(p.toFixed(0),padL+chartW+padR-4,y);
     // 左側ラベル (左padLの右端より4px内側、textAlign='right' 継承)
     ctx.fillText(p.toFixed(0),padL-4,y);
   }
+  ctx.font='10px -apple-system,Helvetica,sans-serif';
 
   // 時間グリッド: uSpan 密度でステップ可変 — 両side描画
   ctx.textBaseline='top'; ctx.textAlign='center';
