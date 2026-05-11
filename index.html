@@ -3885,8 +3885,8 @@ function drawAnalysisStrokeExt(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,pric
   if(s._snippet&&s.snipId&&ctx&&ctx._snippetsById){
     var _sn=ctx._snippetsById[s.snipId];
     if(_sn){
-      if(_sn.color)col=_sn.color;
-      if(_sn.text)resolvedText=_sn.text;
+      if(_sn.color&&!s._editedColor)col=_sn.color;
+      if(_sn.text&&!s._editedText)resolvedText=_sn.text;
     }
   }
   var w=(s.width||2)*Z;
@@ -5953,6 +5953,7 @@ function ImageAnnotator(props){
                 /* C9後-fix: boxW (幅変更ハンドルで調整された場合のみ) */
                 boxW:ati.boxW||es0.boxW||null
               });
+              if(es0._snippet){updated._editedText=true;updated._editedColor=true;}
               curArr[ati.editIdx]=updated;
               setTfArrCommit(curArr);
             }
