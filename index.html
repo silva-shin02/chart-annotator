@@ -1001,13 +1001,11 @@ function caLoadSnippets(){
   try{
     var v=JSON.parse(localStorage.getItem(CA_SNIPPETS_KEY));
     if(v&&v.length){
-      /* migrate: 旧format (string[]) → {id,text,color}[] */
       if(typeof v[0]==='string'){
         v=v.map(function(s){return {id:caUid(),text:s,color:'#ff9500'};});
         caSaveSnippets(v);
         return v;
       }
-      /* migrate: id付与 ({text,color} → {id,text,color}) */
       var changed=false;
       v=v.map(function(s){
         if(!s.id){changed=true;return Object.assign({id:caUid()},s);}
@@ -1697,7 +1695,6 @@ function DataChart(props){
     /* 2026-04-22: プレビュー描画でも書込みオブジェクトの zoom 連動を適用
        (drawDataChart は本体canvasに _strokeZoom を設定しているが、overlayは別canvasなので明示設定が必要) */
     ctx._strokeZoom=(L&&typeof L.zoom==='number'&&L.zoom>0)?L.zoom:1.0;
-    /* 2026-05: 案C - スタンプID参照ルックアップ (本体canvasと同じ snippetsById を共有) */
     ctx._snippetsById=props&&props.snippetsById?props.snippetsById:null;
 
     /* 描画中プレビュー (最優先で描く — 背面) */
@@ -1713,21 +1710,7 @@ function DataChart(props){
         }
         return L.priceTop+(1-(p-L.pmin)/(L.pmax-L.pmin))*L.priceH;
       }
-      if(d._snippet&&d._snipObj){
-        /* 2026-05: スニペット プレビュー — ドラッグ中表示 (overlayに描画) */
-        var sObjPv=d._snipObj;
-        var sxPv=minToXloc(d.sTM), syPv=pToYloc(d.sP);
-        var cxPv=minToXloc(d.cTM), cyPv=pToYloc(d.cP);
-        var distPv=Math.hypot(cxPv-sxPv,cyPv-syPv);
-        var pvAnchors=distPv>=5
-          ? [{tm:d.cTM,p:d.cP},{tm:d.sTM,p:d.sP}]
-          : [{tm:d.cTM,p:d.cP}];
-        var pvSnip={type:'text',anchors:pvAnchors,
-          text:sObjPv.text,color:sObjPv.color||'#ff9500',width:1,opacity:drawOpacity,
-          fontSize:props.drawFontSize||15,fontBold:!!props.drawFontBold,
-          _snippet:true,snipId:sObjPv.id||null};
-        drawAnalysisStrokeExt(ctx,pvSnip,minToXloc,pToYloc,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
-      } else if(d.freehand&&d.pts&&d.pts.length){
+      if(d.freehand&&d.pts&&d.pts.length){
         // freehand: 多点プレビュー
         var preview={type:'freehand',anchors:d.pts,
           color:drawColor,width:drawWidth,opacity:drawOpacity};
@@ -1917,7 +1900,6 @@ function DataChart(props){
     if(vctx){vctx.setTransform(dpr,0,0,dpr,0,0);vctx.clearRect(0,0,W,volAreaH);}
     /* 2026-04-22: pctx にも _strokeZoom を適用 (書込オブジェクト zoom 連動) */
     if(pctx)pctx._strokeZoom=(L&&typeof L.zoom==='number'&&L.zoom>0)?L.zoom:1.0;
-    /* 2026-05: 案C - pctx にも スタンプID参照ルックアップ */
     if(pctx)pctx._snippetsById=props&&props.snippetsById?props.snippetsById:null;
 
     /* ── preview / 移動プレビュー: priceOverlay にのみ描画 (Y は price 座標系そのまま) ── */
@@ -1934,23 +1916,7 @@ function DataChart(props){
             }
             return L.priceTop+(1-(p-L.pmin)/(L.pmax-L.pmin))*L.priceH;
           }
-          if(d._snippet&&d._snipObj){
-            /* 2026-05: スニペット プレビュー (テキスト+矢印) */
-            var sObjP=d._snipObj;
-            var sxP=minToXloc(d.sTM), syP=pToYloc(d.sP);
-            var cxP=minToXloc(d.cTM), cyP=pToYloc(d.cP);
-            var distP=Math.hypot(cxP-sxP,cyP-syP);
-            var prevSnipAnchors=distP>=5
-              ? [{tm:d.cTM,p:d.cP},{tm:d.sTM,p:d.sP}]
-              : [{tm:d.sTM,p:d.sP}];
-            var prevSnip={type:'text',
-              anchors:prevSnipAnchors,
-              text:sObjP.text,
-              color:sObjP.color||'#ff9500',width:1,opacity:drawOpacity,
-              fontSize:props.drawFontSize||15,fontBold:!!props.drawFontBold,
-              _snippet:true,snipId:sObjP.id||null};
-            drawAnalysisStrokeExt(pctx,prevSnip,minToXloc,pToYloc,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
-          } else if(d.freehand&&d.pts&&d.pts.length){
+          if(d.freehand&&d.pts&&d.pts.length){
             var preview={type:'freehand',anchors:d.pts,
               color:drawColor,width:drawWidth,opacity:drawOpacity};
             drawAnalysisStrokeExt(pctx,preview,minToXloc,pToYloc,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
@@ -1977,15 +1943,9 @@ function DataChart(props){
               }
               return L.priceTop+(1-(pp-L.pmin)/(L.pmax-L.pmin))*L.priceH;
             }
-            /* 2026-05: ハンドルドラッグ時は対象anchorのみ移動 (全anchor移動はストローク移動時のみ) */
-            var shifted;
-            if(m.handleId){
-              shifted=applyHandleTransform(sm,m.handleId,m.dtm,m.dp);
-            } else {
-              shifted=Object.assign({},sm,{
-                anchors:sm.anchors.map(function(a){return {tm:a.tm+m.dtm, p:a.p+m.dp};})
-              });
-            }
+            var shifted=Object.assign({},sm,{
+              anchors:sm.anchors.map(function(a){return {tm:a.tm+m.dtm, p:a.p+m.dp};})
+            });
             var tp2=shifted.type||shifted.tool;
             if(tp2==='freehand'||tp2==='text'){
               drawAnalysisStrokeExt(pctx,shifted,minToXloc2,pToYloc2,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
@@ -2630,21 +2590,9 @@ function DataChart(props){
       drawCrosshair();
       return;
     }
-    /* 2026-05: スニペット — ドラッグ式 (mouseDown=矢じり、mouseUp=テキスト位置)
-       ハンドル編集 / 既存テキスト移動 / 新規貼付けの3段判定 */
+    /* 2026-04-26: スニペット — 選択中テキストを即配置 / 既存テキストクリックで選択移動 */
     if(drawTool==='snippet'){
-      /* (1) 選択済ストロークのハンドルhit → ハンドルドラッグ (矢じり/テキスト位置の個別移動) */
-      var snipHH=hitTestSelectedHandle(e.clientX,e.clientY);
-      if(snipHH){
-        moveRef.current={
-          side:snipHH.side, idx:snipHH.idx,
-          startTM:tp.tm, startP:tp.p, dtm:0, dp:0,
-          moving:true, handleId:snipHH.handleId
-        };
-        setMoveHint({side:snipHH.side, idx:snipHH.idx});
-        return;
-      }
-      /* (2) 既存テキストストロークのhit test → 選択+全体ドラッグ移動 */
+      /* 既存テキストストロークのhit test → 選択+ドラッグ移動 */
       var gHitSnip=hitTestStroke(e.clientX,e.clientY);
       if(gHitSnip!=null){
         var hitS=getStrokeByHit(gHitSnip);
@@ -2655,17 +2603,21 @@ function DataChart(props){
           return;
         }
       }
-      /* (3) 選択中なら解除のみ (新スタンプ追加しない) */
-      if(selectedIdx){
-        setSelectedIdx(null);
-        return;
-      }
-      /* (4) 新規スタンプ: ドラッグ開始 (Down=矢じり、Up=テキスト位置) */
       var snipObj=props.snippetObj;
-      if(snipObj&&snipObj.text){
-        drawRef.current={on:true, side:tpSide, sTM:tp.tm, sP:tp.p, cTM:tp.tm, cP:tp.p,
-          _snippet:true, _snipObj:snipObj};
-        drawCrosshair();
+      if(snipObj&&snipObj.text&&onStrokeAdd){
+        /* 重複追加防止 (200msデバウンス) */
+        var now=Date.now();
+        if(drawRef.current._lastSnipTs&&now-drawRef.current._lastSnipTs<200)return;
+        drawRef.current._lastSnipTs=now;
+        var snipStroke={id:'s_'+now+'_'+Math.random().toString(36).slice(2,6),
+          type:'text',side:tpSide,
+          anchors:[{tm:tp.tm,p:tp.p}],
+          text:snipObj.text,
+          color:snipObj.color||'#ff9500',width:1,opacity:drawOpacity,
+          fontSize:props.drawFontSize||15,fontBold:!!props.drawFontBold,
+          _snippet:true,
+          snipId:snipObj.id||null};
+        onStrokeAdd(snipStroke);
       }
       return;
     }
@@ -2920,35 +2872,7 @@ function DataChart(props){
     if(drawRef.current.on){
       var d=drawRef.current;
       var commitSide=d.side||'cur';
-      if(d._snippet&&d._snipObj){
-        /* 2026-05: スニペット (矢印付き対応)
-           移動距離 >= 5px なら矢印あり、それ未満ならクリック扱いで矢印なし */
-        var sObj=d._snipObj;
-        var L0=layoutRef.current;
-        var hasArrow=false;
-        if(L0){
-          var sx0=minToXWithSide(d.sTM,commitSide);
-          var sy0=L0.priceTop+(1-(d.sP-L0.pmin)/(L0.pmax-L0.pmin))*L0.priceH;
-          var cx0=minToXWithSide(d.cTM,commitSide);
-          var cy0=L0.priceTop+(1-(d.cP-L0.pmin)/(L0.pmax-L0.pmin))*L0.priceH;
-          hasArrow=Math.hypot(cx0-sx0,cy0-sy0)>=5;
-        }
-        /* anchors[0]=テキスト位置 (mouseUp), anchors[1]=矢印先端 (mouseDown) */
-        var snipAnchors=hasArrow
-          ? [{tm:d.cTM,p:d.cP},{tm:d.sTM,p:d.sP}]
-          : [{tm:d.sTM,p:d.sP}];
-        if(onStrokeAdd){
-          var snipStroke={id:'s_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),
-            type:'text',side:commitSide,
-            anchors:snipAnchors,
-            text:sObj.text,
-            color:sObj.color||'#ff9500',width:1,opacity:drawOpacity,
-            fontSize:props.drawFontSize||15,fontBold:!!props.drawFontBold,
-            _snippet:true,
-            snipId:sObj.id||null};
-          onStrokeAdd(snipStroke);
-        }
-      } else if(d.freehand){
+      if(d.freehand){
         // freehand: 2点以上あれば確定
         if(d.pts&&d.pts.length>=2){
           var stroke={id:'s_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),
@@ -3745,7 +3669,6 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
                  drawAnalysisStroke/Ext 内で width/fontSize/boxW/dash/矢尻/markerW を zoom 倍する
      2026-04-22: サムネモードは _strokeZoom=1.0 固定 (書込オブジェクト zoom連動OFF) */
   ctx._strokeZoom=isThumbnail?1.0:zoom;
-  /* 2026-05: 案C - スタンプID参照ルックアップ用マップ (引数 snippetsById 経由) */
   ctx._snippetsById=snippetsById||null;
   function minToXCur(m){return minToX(m,'cur');}
   function minToXRef(m){return minToX(m,'ref');}
@@ -3950,7 +3873,7 @@ function drawAnalysisStrokeExt(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,pric
   /* 2026-04-21: 地図モデルズーム連動 */
   var Z=(ctx&&typeof ctx._strokeZoom==='number'&&ctx._strokeZoom>0)?ctx._strokeZoom:1.0;
   var col=s.color||'#ff3b30';
-  /* 2026-05: 案C - スタンプID参照ルックアップ (id一致あれば snippets[id] の text/color を優先) */
+  /* 2026-05: 案C - スタンプID参照ルックアップ */
   var resolvedText=s.text||'';
   if(s._snippet&&s.snipId&&ctx&&ctx._snippetsById){
     var _sn=ctx._snippetsById[s.snipId];
@@ -4016,70 +3939,21 @@ function drawAnalysisStrokeExt(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,pric
     displayLines.forEach(function(l){var m=ctx.measureText(l).width; if(m>maxW)maxW=m;});
     if(boxWZ>maxW)maxW=boxWZ;
     var boxH=displayLines.length*fs*1.3;
-    /* 2026-05: スタンプ - テキスト中央寄せ + 矢印描画
-       anchors[0]=根元(テキスト中央基準), anchors[1]=矢じり
-       矢印の根元はanchors[0]の生座標そのまま (辺/頂点スナップなし)
-       テキストは根元を水平中央・垂直中央で配置 */
-    var textX=x, textY=y;
+    /* 2026-04-21: テキスト背景 透明化 (旧: rgba(0,0,0,0.6) fillRect) */
+    /* 2026-04-27: _snippet フラグ時は枠線描画 (枠色=テキスト色) */
     if(s._snippet){
-      ctx.textAlign='center';
-      textY=y-boxH/2;
       var bpad=3*Z;
-      /* 枠線 (中央寄せ) */
       ctx.save();
       ctx.strokeStyle=col;
       ctx.lineWidth=Math.max(1,1.5*Z);
       ctx.setLineDash([]);
       ctx.globalAlpha=op*0.7;
-      ctx.strokeRect(x-maxW/2-bpad, textY-bpad, maxW+bpad*2, boxH+bpad*2);
+      ctx.strokeRect(x-bpad,y-bpad,maxW+bpad*2,boxH+bpad*2);
       ctx.restore();
       ctx.globalAlpha=op;
-      /* 矢印 (根元=anchors[0]の生座標、先端=anchors[1]) */
-      var arrowTipX,arrowTipY;
-      if(s.anchors.length>=2&&s.anchors[1]){
-        arrowTipX=minToX(s.anchors[1].tm);
-        arrowTipY=pToY(s.anchors[1].p);
-      } else {
-        arrowTipX=x;
-        arrowTipY=y+boxH/2+bpad+60*Z;
-      }
-      var rootX=x, rootY=y;
-      var arrowDist=Math.hypot(arrowTipX-rootX,arrowTipY-rootY);
-      if(arrowDist>=5){
-        /* 根元を枠辺の交差点に移動 (枠内に入り込まない) */
-        var halfW=maxW/2+bpad, halfH=boxH/2+bpad;
-        var adx=arrowTipX-x, ady=arrowTipY-y;
-        var tx=adx!==0?halfW/Math.abs(adx):Infinity;
-        var ty=ady!==0?halfH/Math.abs(ady):Infinity;
-        var te=Math.min(tx,ty);
-        if(te<1){rootX=x+adx*te; rootY=y+ady*te;}
-        ctx.save();
-        ctx.strokeStyle=col;
-        ctx.fillStyle=col;
-        ctx.lineWidth=Math.max(1.5,2*Z);
-        ctx.setLineDash([]);
-        ctx.lineCap='round'; ctx.lineJoin='round';
-        ctx.globalAlpha=op*0.85;
-        ctx.beginPath();
-        ctx.moveTo(rootX,rootY);
-        ctx.lineTo(arrowTipX,arrowTipY);
-        ctx.stroke();
-        var ang=Math.atan2(arrowTipY-rootY,arrowTipX-rootX);
-        var headLen=Math.max(8,12*Z), headAng=Math.PI/6;
-        ctx.beginPath();
-        ctx.moveTo(arrowTipX,arrowTipY);
-        ctx.lineTo(arrowTipX-headLen*Math.cos(ang-headAng),arrowTipY-headLen*Math.sin(ang-headAng));
-        ctx.moveTo(arrowTipX,arrowTipY);
-        ctx.lineTo(arrowTipX-headLen*Math.cos(ang+headAng),arrowTipY-headLen*Math.sin(ang+headAng));
-        ctx.stroke();
-        ctx.restore();
-        ctx.globalAlpha=op;
-        ctx.lineCap='butt'; ctx.lineJoin='miter';
-      }
     }
     ctx.fillStyle=col;
-    displayLines.forEach(function(l,i){ctx.fillText(l, textX, textY+i*fs*1.3);});
-    if(s._snippet){ctx.textAlign='left';ctx.textBaseline='top';}
+    displayLines.forEach(function(l,i){ctx.fillText(l,x,y+i*fs*1.3);});
   }
   ctx.globalAlpha=1;
 }
@@ -4094,13 +3968,6 @@ function getHandleAnchors(s){
   if(!s||!s.anchors||s.anchors.length<2)return [];
   var tp=s.type||s.tool;
   var a1=s.anchors[0], a2=s.anchors[1];
-  /* 2026-05: 矢印付きスニペット (anchors=2点) — テキスト位置 + 矢印先端 */
-  if(tp==='text'&&s._snippet){
-    return [
-      {id:'p1', tm:a1.tm, p:a1.p, cur:'move'},  /* テキスト位置 */
-      {id:'p2', tm:a2.tm, p:a2.p, cur:'move'}   /* 矢印先端 */
-    ];
-  }
   if(tp==='line'||tp==='dotted'||tp==='arrow'||tp==='marker'||tp==='trade'){
     return [
       {id:'p1', tm:a1.tm, p:a1.p, cur:'move'},
@@ -4130,12 +3997,6 @@ function applyHandleTransform(s, handleId, dtm, dp){
   if(!s||!s.anchors||s.anchors.length<2)return s;
   var a1=s.anchors[0], a2=s.anchors[1];
   var tp=s.type||s.tool;
-  /* 2026-05: 矢印付きスニペット — p1=テキスト位置、p2=矢印先端 */
-  if(tp==='text'&&s._snippet){
-    if(handleId==='p1')return Object.assign({},s,{anchors:[{tm:a1.tm+dtm,p:a1.p+dp},a2]});
-    if(handleId==='p2')return Object.assign({},s,{anchors:[a1,{tm:a2.tm+dtm,p:a2.p+dp}]});
-    return s;
-  }
   if(tp==='line'||tp==='dotted'||tp==='arrow'||tp==='marker'||tp==='trade'){
     if(handleId==='p1')return Object.assign({},s,{anchors:[{tm:a1.tm+dtm,p:a1.p+dp},a2]});
     if(handleId==='p2')return Object.assign({},s,{anchors:[a1,{tm:a2.tm+dtm,p:a2.p+dp}]});
@@ -4189,23 +4050,6 @@ function getStrokeScreenBounds(ctx,s,minToX,pToY){
     ctx.restore();
     if(s.boxW&&s.boxW>mW)mW=s.boxW;
     var tH=displayLines.length*fs*1.3;
-    /* 2026-05: _snippet はテキスト中央寄せ (根元=anchors[0]が中心) */
-    if(s._snippet){
-      var bx1=x-mW/2-6, by1=y-tH/2-6, bx2=x+mW/2+6, by2=y+tH/2+6;
-      /* 矢印先端もバウンディングボックスに含める */
-      if(s.anchors.length>=2&&s.anchors[1]){
-        var tipX=minToX(s.anchors[1].tm), tipY=pToY(s.anchors[1].p);
-        if(tipX-6<bx1)bx1=tipX-6;
-        if(tipY-6<by1)by1=tipY-6;
-        if(tipX+6>bx2)bx2=tipX+6;
-        if(tipY+6>by2)by2=tipY+6;
-      } else {
-        /* デフォルト矢印 (下方向 60px) */
-        var defTipY=y+tH/2+66;
-        if(defTipY+6>by2)by2=defTipY+6;
-      }
-      return {x1:bx1, y1:by1, x2:bx2, y2:by2};
-    }
     return {x1:x, y1:y, x2:x+mW, y2:y+tH};
   }
   if(tp==='horizontal'){
@@ -4309,12 +4153,7 @@ function drawSelectionHighlight(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,pri
     if(s.boxW&&s.boxW>mW)mW=s.boxW;
     var tH=displayLines.length*fs*1.3;
     var PAD=4;
-    /* 2026-05: _snippet はテキスト中央寄せ */
-    if(s._snippet){
-      ctx.strokeRect(x-mW/2-PAD, y-tH/2-PAD, mW+PAD*2, tH+PAD*2);
-    } else {
-      ctx.strokeRect(x-PAD, y-PAD, mW+PAD*2, tH+PAD*2);
-    }
+    ctx.strokeRect(x-PAD, y-PAD, mW+PAD*2, tH+PAD*2);
   } else if(s.anchors.length>=2){
     /* 2026-04-22: line/dotted/arrow/ruler/zone は枠線不要 (形状が明瞭で冗長) — ハンドル(○)のみ表示 */
     if(tp!=='line'&&tp!=='dotted'&&tp!=='arrow'&&tp!=='trade'){
@@ -4490,9 +4329,8 @@ function ImageAnnotator(props){
   var st9=useState(false);   var fontBold=st9[0],setFontBold=st9[1];
   /* 2026-04-26: スニペット機能 */
   var stSnips=useState(caLoadSnippets); var snippets=stSnips[0],setSnippets=stSnips[1];
-  var stSelSnip=useState(0); var selSnipIdx=stSelSnip[0],setSelSnipIdx=stSelSnip[1]; /* 選択中スニペットindex */
+  var stSelSnip=useState(0); var selSnipIdx=stSelSnip[0],setSelSnipIdx=stSelSnip[1];
   var stSnipEdit=useState(false); var snippetEditing=stSnipEdit[0],setSnippetEditing=stSnipEdit[1];
-  /* 2026-05: 案C - スタンプ編集モードUI 用 state */
   var stSnipNE=useState({idx:null,value:''}); var snipNameEdit=stSnipNE[0],setSnipNameEdit=stSnipNE[1];
   var stSnipPI=useState(null); var snipPaletteIdx=stSnipPI[0],setSnipPaletteIdx=stSnipPI[1];
   var stSnipDrag=useState({drag:null,over:null}); var snipDragSt=stSnipDrag[0],setSnipDragSt=stSnipDrag[1];
@@ -4519,7 +4357,6 @@ function ImageAnnotator(props){
       var url=cfg.url.replace(/\/$/,'')+'/chart-annotator-snippets.json'+auth;
       fetch(url).then(function(r){return r.ok?r.json():null;}).then(function(d){
         if(d&&d.snippets&&Array.isArray(d.snippets)&&d.snippets.length>0){
-          /* 旧形式 (string[]) から救済 + id 付与マイグレーション */
           var arr=d.snippets.map(function(s){
             if(typeof s==='string')return {id:caUid(),text:s,color:'#ff9500'};
             return {id:s.id||caUid(),text:s.text||'',color:s.color||'#ff9500'};
@@ -5413,7 +5250,6 @@ function ImageAnnotator(props){
           snippetEditing?"✓ 完了":"✏ 編集")
       ),
       /* スニペット編集パネル (編集モード時のみ) */
-      /* 2026-05: 案C - 名前編集・ドラッグ並び替え・色パレットインライン展開・削除確認 */
       (analysisData && tool==='snippet' && snippetEditing) && ce("div",{
         style:{display:"flex",flexDirection:"column",gap:4,padding:"6px 10px",
         borderTop:"1px solid #2a2a2a",background:"#0f0a1a",maxHeight:280,overflowY:"auto",flexShrink:0}},
@@ -5423,14 +5259,12 @@ function ImageAnnotator(props){
           var isNameEdit=snipNameEdit.idx===si;
           var isPaletteOpen=snipPaletteIdx===si;
           var snColor=sn.color||'#ff9500';
-          /* 並び替え reorder ヘルパー */
           function reorderSnip(from,to){
             if(from===to)return;
             var nArr=snippets.slice();
             var r=nArr.splice(from,1)[0];
             nArr.splice(to,0,r);
             updateSnippets(nArr);
-            /* selSnipIdx を追従 */
             if(selSnipIdx===from)setSelSnipIdx(to);
             else if(from<selSnipIdx&&to>=selSnipIdx)setSelSnipIdx(selSnipIdx-1);
             else if(from>selSnipIdx&&to<=selSnipIdx)setSelSnipIdx(selSnipIdx+1);
@@ -5441,9 +5275,7 @@ function ImageAnnotator(props){
               borderRadius:6,opacity:isDrag?0.3:1,padding:isOver?2:4,
               background:isOver?"rgba(0,122,255,0.08)":"transparent",
               transition:"background .1s"}},
-            /* === 1行目: ⠿ + ▲▼ + 色ドット + 名前 + × === */
             ce("div",{style:{display:"flex",gap:6,alignItems:"center"}},
-              /* ⠿ ドラッグハンドル (PC用、編集中はドラッグ無効) */
               ce("span",{
                 draggable:!isNameEdit,
                 onDragStart:function(e){
@@ -5465,7 +5297,6 @@ function ImageAnnotator(props){
                   cursor:isNameEdit?"default":"grab",fontSize:14,color:"#666",
                   userSelect:"none",flexShrink:0,borderRadius:3,background:"#1a1a2e"}
               },"⠿"),
-              /* ▲▼ ボタン (iPad/タッチ用、ドラッグ不可環境向け) */
               ce("div",{style:{display:"flex",flexDirection:"column",gap:1,flexShrink:0}},
                 ce("button",{disabled:si===0,onClick:function(){
                   reorderSnip(si,si-1);
@@ -5474,13 +5305,11 @@ function ImageAnnotator(props){
                   reorderSnip(si,si+1);
                 },style:{padding:"0 4px",fontSize:8,background:"none",border:"none",color:si===snippets.length-1?"#333":"#888",cursor:si===snippets.length-1?"default":"pointer",lineHeight:1}},"▼")
               ),
-              /* 色ドット (タップで下に色パレット展開) */
               ce("span",{onClick:function(){
                 setSnipPaletteIdx(isPaletteOpen?null:si);
               },style:{width:18,height:18,borderRadius:"50%",background:snColor,
                 border:isPaletteOpen?"2px solid #007AFF":"2px solid #444",cursor:"pointer",flexShrink:0,
                 boxSizing:"border-box"}}),
-              /* 名前 (タップで編集モード) or input */
               isNameEdit
                 ? ce("input",{type:"text",autoFocus:true,
                     value:snipNameEdit.value,
@@ -5512,27 +5341,24 @@ function ImageAnnotator(props){
                       fontFamily:"inherit",fontWeight:600}})
                 : ce("span",{onClick:function(){
                     setSnipNameEdit({idx:si,value:sn.text});
-                    setSnipPaletteIdx(null); /* 色パレット閉じる */
+                    setSnipPaletteIdx(null);
                   },
                   title:"タップで編集",
                   style:{flex:1,fontSize:11,color:snColor,fontWeight:600,
                     overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
                     cursor:"text",padding:"3px 6px",borderRadius:4,
                     background:"rgba(255,255,255,0.03)"}},sn.text),
-              /* 削除 (確認ダイアログあり) */
               ce("button",{onClick:function(){
                 if(window.confirm('「'+sn.text+'」を削除しますか?')){
                   var nArr=snippets.slice(); nArr.splice(si,1);
                   updateSnippets(nArr);
                   if(selSnipIdx>=nArr.length&&nArr.length>0)setSelSnipIdx(nArr.length-1);
-                  /* 編集中index/パレットindexクリア */
                   if(snipNameEdit.idx===si)setSnipNameEdit({idx:null,value:''});
                   if(snipPaletteIdx===si)setSnipPaletteIdx(null);
                 }
               },style:{padding:"2px 8px",fontSize:10,borderRadius:4,border:"none",
                 background:"#7f1d1d",color:"#fca5a5",cursor:"pointer",flexShrink:0}},"✕")
             ),
-            /* === 2行目: 色パレット (展開時のみ) === */
             isPaletteOpen && ce("div",{
               style:{display:"flex",gap:6,padding:"4px 6px 4px 50px",alignItems:"center",
                 background:"rgba(0,0,0,0.2)",borderRadius:4,flexWrap:"wrap"}
@@ -5718,7 +5544,6 @@ function ImageAnnotator(props){
               drawTool:tool, drawColor:color, drawWidth:lineW, drawOpacity:opacity,
               drawFontSize:fontSize, drawFontBold:fontBold,
               snippetObj:(tool==='snippet'&&snippets.length)?snippets[selSnipIdx%snippets.length]:null,
-              /* 2026-05: 案C - スタンプID参照ルックアップマップ (描画時に id→{text,color} を解決) */
               snippetsById:(function(){var m={};snippets.forEach(function(sn){if(sn&&sn.id)m[sn.id]=sn;});return m;})(),
               tradeDir:tradeDir,
               horiz:horiz,
