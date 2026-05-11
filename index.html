@@ -2794,21 +2794,69 @@ function DataChart(props){
       }
       function _checkStroke(s,idx,side){
         if(!s||!s.anchors)return;
-        var anc=s.anchors;
-        for(var ai=0;ai<anc.length;ai++){
-          var sx=minToXWithSide(anc[ai].tm,side);
-          var L=layoutRef.current;
-          if(!L)continue;
+        var L=layoutRef.current; if(!L)return;
+        var rect=getCanvasRect();
+        function _ancToScr(a){
+          var sx=minToXWithSide(a.tm,side);
           var sy;
           if(typeof L.dpmax==='number'&&typeof L.pxPerYen==='number'&&L.pxPerYen>0){
-            sy=L.priceTop+(L.dpmax-anc[ai].p)*L.pxPerYen;
+            sy=L.priceTop+(L.dpmax-a.p)*L.pxPerYen;
           } else {
-            sy=L.priceTop+(1-(anc[ai].p-L.pmin)/(L.pmax-L.pmin))*L.priceH;
+            sy=L.priceTop+(1-(a.p-L.pmin)/(L.pmax-L.pmin))*L.priceH;
           }
-          /* canvas座標 → screen座標に変換 */
-          var rect=getCanvasRect();
-          var scrX=sx+rect.left, scrY=sy+rect.top;
-          if(_pInPoly(scrX,scrY)){hits.push({side:side,idx:idx});return;}
+          return {x:sx+rect.left, y:sy+rect.top};
+        }
+        var tp=s.type||s.tool;
+        /* テキスト/スタンプ: bboxの四隅+中心のいずれかがパス内なら選択 */
+        if(tp==='text'){
+          var hitZoom=(typeof L.zoom==='number'&&L.zoom>0)?L.zoom:1.0;
+          var tl=_ancToScr(s.anchors[0]);
+          var fsRaw=s.fontSize||15; var fs=fsRaw*hitZoom;
+          var fb=s.fontBold?'bold ':'';
+          var rawLines=(s.text||'').split('\n');
+          var hitBoxW=(s.boxW&&s.boxW>0)?s.boxW*hitZoom:0;
+          var displayLines=[];
+          var cnv=canvasRef.current; var mctx=cnv?cnv.getContext('2d'):null;
+          if(mctx){mctx.save();mctx.font=fb+fs+"px -apple-system,'Helvetica Neue',sans-serif";}
+          if(hitBoxW>0&&mctx){
+            rawLines.forEach(function(para){
+              var cur='';
+              for(var ci=0;ci<para.length;ci++){
+                var test=cur+para[ci];
+                if(mctx.measureText(test).width>hitBoxW&&cur.length>0){displayLines.push(cur);cur=para[ci];}
+                else{cur=test;}
+              }
+              displayLines.push(cur);
+            });
+          }else{ displayLines=rawLines; }
+          var mW=0;
+          if(mctx){
+            displayLines.forEach(function(l){var w=mctx.measureText(l).width;if(w>mW)mW=w;});
+            mctx.restore();
+          }else{ displayLines.forEach(function(l){if(l.length*fs*0.6>mW)mW=l.length*fs*0.6;}); }
+          if(hitBoxW>0&&hitBoxW>mW)mW=hitBoxW;
+          var tH=displayLines.length*fs*1.3;
+          var bx1=tl.x,by1=tl.y,bx2=tl.x+mW,by2=tl.y+tH;
+          /* (A) bbox内の点がパス内にあるか (格子状サンプル) */
+          var step=Math.max(mW,tH,1)/4;
+          for(var gy=by1;gy<=by2;gy+=step){
+            for(var gx=bx1;gx<=bx2;gx+=step){
+              if(_pInPoly(gx,gy)){hits.push({side:side,idx:idx});return;}
+            }
+          }
+          /* (B) パスの頂点がbbox内にあるか */
+          for(var lpi=0;lpi<poly.length;lpi++){
+            if(poly[lpi].x>=bx1&&poly[lpi].x<=bx2&&poly[lpi].y>=by1&&poly[lpi].y<=by2){
+              hits.push({side:side,idx:idx});return;
+            }
+          }
+          return;
+        }
+        /* その他: 各アンカーをチェック */
+        var anc=s.anchors;
+        for(var ai=0;ai<anc.length;ai++){
+          var scr=_ancToScr(anc[ai]);
+          if(_pInPoly(scr.x,scr.y)){hits.push({side:side,idx:idx});return;}
         }
       }
       if(strokes)strokes.forEach(function(s,i){_checkStroke(s,i,'cur');});
