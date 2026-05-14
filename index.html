@@ -7169,7 +7169,7 @@ function _caRenderUnsavedDialog(dlg){
               background:'#2a1a1a',color:'#f87171',border:'1.5px solid #f87171',borderRadius:6,cursor:'pointer'}},'🗑 保存せず終了'),
           ce('button',{onClick:function(){dlg('cancel');},
             style:{padding:'10px 14px',fontSize:13,fontWeight:600,
-              background:'#2a2a2a',color:'#aaa',border:'1px solid #444',borderRadius:6,cursor:'pointer'},
+              background:'#2a2a2a',color:'#aaa',border:'1px solid #444',borderRadius:6,cursor:'pointer'}},
             ce('span',{style:{display:'inline-block',transform:'rotate(-45deg)'}},'✎'),' 編集に戻る')
         )
       )
@@ -7590,7 +7590,7 @@ function CaMemoEditableField(props){
       inlineButtons&&ce('div',{style:{display:'flex',alignItems:'stretch',gap:6,marginBottom:6}},
         ce('div',{style:{padding:'4px 7px',fontSize:10,fontWeight:700,
           background:'#1e1b4b',color:'#a5b4fc',border:'1px solid #4338CA',
-          borderRadius:4,flex:1,display:'flex',alignItems:'center',gap:4},
+          borderRadius:4,flex:1,display:'flex',alignItems:'center',gap:4}},
           ce('span',{style:{display:'inline-block',transform:'rotate(-45deg)'}},'✎'),'編集中 — 「保存」を押すまで変更は反映されません'),
         ce('button',{
           onClick:function(){if(!_isDirty()){exitEdit();return;}if(window.confirm('編集内容を破棄しますか？'))exitEdit();},
@@ -7616,7 +7616,7 @@ function CaMemoEditableField(props){
       ce('button',{onClick:enterEdit,
         style:{padding:'4px 10px',fontSize:11,fontWeight:700,
           background:'#1e1b4b',color:'#a5b4fc',border:'1px solid #4338CA',
-          borderRadius:5,cursor:'pointer',minHeight:IS_TOUCH?36:26},
+          borderRadius:5,cursor:'pointer',minHeight:IS_TOUCH?36:26}},
           ce('span',{style:{display:'inline-block',transform:'rotate(-45deg)'}},'✎'),' 編集')
     ),
     html
