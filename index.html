@@ -7518,6 +7518,7 @@ function CaMemoEditableField(props){
   var autoEdit=!!props.autoEdit;
   var guardOwner=props.guardOwner||null;
   var inlineButtons=props.inlineButtons!==false;
+  var hideEditButton=!!props.hideEditButton; // 編集ボタンを非表示 (クリック直接編集モード用)
 
   var sE=useState(autoEdit); var editing=sE[0],setEditing=sE[1];
   var sD=useState(html); var draft=sD[0],setDraft=sD[1];
@@ -7573,7 +7574,7 @@ function CaMemoEditableField(props){
   // 表示モード
   return ce('div',null,
     zoomImg&&ce(CaZoomLightbox,{src:zoomImg,onClose:function(){setZoomImg(null);}}),
-    ce('div',{style:{display:'flex',justifyContent:'flex-end',marginBottom:4}},
+    !hideEditButton&&ce('div',{style:{display:'flex',justifyContent:'flex-end',marginBottom:4}},
       ce('button',{onClick:enterEdit,
         style:{padding:'4px 10px',fontSize:11,fontWeight:700,
           background:'#1e1b4b',color:'#a5b4fc',border:'1px solid #4338CA',
@@ -7602,6 +7603,105 @@ function CaMemoEditableField(props){
           onMouseLeave:function(e){e.currentTarget.style.background='#111';e.currentTarget.style.borderColor='#333';}
         },placeholder),
     _caRenderUnsavedDialog(unsavedDlg)
+  );
+}
+
+/* ── チャートメモ内容ありチェック ── */
+function _caMemoHasContent(html){
+  if(!html)return false;
+  if(html.indexOf('<img')>=0)return true;
+  return !!(html.replace(/<[^>]*>/g,'').trim());
+}
+
+/* ── CaChartCard: サムネイルカード + メモ折りたたみ ── */
+function CaChartCard(props){
+  var m=props.m;
+  var isHighlight=!!props.isHighlight;
+  var highlightDate=props.highlightDate||null;
+  var onOpen=props.onOpen;
+  var onDelete=props.onDelete;
+  var fbCfg=props.fbCfg||{};
+  var BT2={border:'none',background:'none',cursor:'pointer',fontFamily:'inherit',padding:0};
+
+  var sMO=useState(false); var memoOpen=sMO[0],setMemoOpen=sMO[1];
+  var sMH=useState(function(){return caGetChartMemo(m.id);}); var memoHtml=sMH[0],setMemoHtml=sMH[1];
+  var hasContent=_caMemoHasContent(memoHtml);
+
+  function handleSave(h){
+    caSetChartMemo(m.id,h);
+    setMemoHtml(h);
+    if(fbCfg&&fbCfg.url&&!fbCfg.paused){
+      var a=fbCfg.secret?'?auth='+fbCfg.secret:'';
+      var u=fbCfg.url.replace(/\/$/,'')+'/ca-chart-memos/'+encodeURIComponent(m.id)+'.json'+a;
+      fetch(u,{method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({html:h,updatedAt:Date.now()})}).catch(function(){});
+    }
+  }
+
+  var dateStr=new Date(m.savedAt).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+
+  return ce('div',{
+    'data-ca-highlight':isHighlight?'1':null,
+    style:{width:IS_TOUCH?450:510,background:isHighlight?'#1c2e1a':'#1a1a1a',borderRadius:10,
+      border:isHighlight?'2px solid #4ade80':'1px solid #2a2a2a',overflow:'hidden',
+      flexShrink:0,boxShadow:isHighlight?'0 0 0 3px rgba(74,222,128,0.25)':'none'}},
+
+    /* サムネイル部分 */
+    ce('div',{style:{position:'relative'},onClick:function(){onOpen(m.id);}},
+      isHighlight&&ce('div',{style:{position:'absolute',top:6,left:6,zIndex:2,padding:'3px 8px',
+        background:'#4ade80',color:'#0a1f0a',fontSize:10,fontWeight:700,borderRadius:4,letterSpacing:0.3}},
+        '📅 '+highlightDate),
+      (m.thumbUrl||_thumbMemCache[m.id]||m.thumb)
+        ?ce('img',{src:_thumbMemCache[m.id]||m.thumbUrl||m.thumb,
+            style:{width:'100%',display:'block',height:'auto'},draggable:false,
+            onError:function(e){e.target.style.display='none';caClearBrokenThumbUrl(m.id);}})
+        :ce('div',{style:{width:'100%',height:80,background:'#222',display:'flex',
+            alignItems:'center',justifyContent:'center',color:'#555',fontSize:11}},'no preview'),
+      ce('button',{onClick:function(e){e.stopPropagation();onDelete(m.id);},
+        style:Object.assign({},BT2,{position:'absolute',top:6,right:6,
+          width:28,height:28,borderRadius:'50%',background:'rgba(0,0,0,.75)',
+          color:'#f87171',fontSize:14,display:'flex',alignItems:'center',
+          justifyContent:'center',lineHeight:1,fontWeight:700})},'🗑')
+    ),
+
+    /* タイトル・日付・メモボタン行 */
+    ce('div',{style:{padding:'7px 9px',display:'flex',alignItems:'center',gap:6}},
+      ce('div',{style:{flex:1,minWidth:0},onClick:function(){onOpen(m.id);}},
+        ce('div',{style:{fontSize:12,fontWeight:700,color:'#ddd',
+          overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',cursor:'pointer'}},m.name),
+        ce('div',{style:{fontSize:10,color:isHighlight?'#86efac':'#555',marginTop:2}},
+          m.analysisDate?m.analysisDate+' · ':'',dateStr)
+      ),
+      /* メモ開閉ボタン + 赤丸 */
+      ce('button',{
+        onClick:function(e){e.stopPropagation();setMemoOpen(function(o){return !o;});},
+        style:{position:'relative',padding:'4px 8px',fontSize:11,fontWeight:700,
+          background:memoOpen?'#1e1b4b':'#222',
+          color:memoOpen?'#a5b4fc':'#666',
+          border:memoOpen?'1px solid #4338CA':'1px solid #333',
+          borderRadius:5,cursor:'pointer',flexShrink:0,lineHeight:1.4}},
+        '📝 '+( memoOpen?'閉じる':'メモを開く'),
+        hasContent&&ce('span',{style:{
+          position:'absolute',top:-4,right:-4,
+          width:10,height:10,borderRadius:'50%',
+          background:'#ef4444',border:'2px solid #1a1a1a',
+          display:'block'}})
+      )
+    ),
+
+    /* メモパネル (折りたたみ) */
+    memoOpen&&ce('div',{
+      onClick:function(e){e.stopPropagation();},
+      style:{borderTop:'1px solid #2a2a2a',padding:'8px 10px'}},
+      ce(CaMemoEditableField,{
+        key:'memo_'+m.id,
+        html:memoHtml,
+        placeholder:'クリックしてメモを追加…',
+        guardOwner:'chartMemo_'+m.id,
+        hideEditButton:true,
+        onSave:handleSave
+      })
+    )
   );
 }
 
@@ -9727,66 +9827,16 @@ function DraftLibrary(props){
                 ));
                 if(!open) return;  /* 折り畳み中はチャートカードを描画しない */
                 groups[ym].forEach(function(m){
-                  var dateStr=new Date(m.savedAt).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
                   var isHighlight=highlightDate&&m.analysisDate&&m.analysisDate===highlightDate;
-                  var memoHtml=caGetChartMemo(m.id);
-                  nodes.push(ce("div",{key:m.id,
-                    "data-ca-highlight":isHighlight?"1":null,
-                    style:{width:IS_TOUCH?'calc(100% - 4px)':720,background:isHighlight?"#1c2e1a":"#1a1a1a",borderRadius:10,
-                      border:isHighlight?"2px solid #4ade80":"1px solid #2a2a2a",overflow:"hidden",flexShrink:0,
-                      boxShadow:isHighlight?"0 0 0 3px rgba(74,222,128,0.25)":"none",
-                      display:"flex",flexDirection:"row"}},
-                    /* 左: サムネイル+タイトル */
-                    ce("div",{
-                      style:{width:IS_TOUCH?200:240,flexShrink:0,cursor:"pointer",
-                        borderRight:"1px solid #2a2a2a",display:"flex",flexDirection:"column"},
-                      onClick:function(){openChart(m.id);}},
-                      ce("div",{style:{position:"relative",flexShrink:0}},
-                        isHighlight&&ce("div",{
-                          style:{position:"absolute",top:6,left:6,zIndex:2,padding:"3px 8px",
-                            background:"#4ade80",color:"#0a1f0a",fontSize:10,fontWeight:700,
-                            borderRadius:4,letterSpacing:0.3}
-                        },"📅 "+highlightDate),
-                        (m.thumbUrl||_thumbMemCache[m.id]||m.thumb)?ce("img",{src:_thumbMemCache[m.id]||m.thumbUrl||m.thumb,style:{width:"100%",display:"block",height:"auto"},draggable:false,onError:function(e){e.target.style.display="none";caClearBrokenThumbUrl(m.id);}})
-                          :ce("div",{style:{width:"100%",height:80,background:"#222",display:"flex",
-                            alignItems:"center",justifyContent:"center",color:"#555",fontSize:11}},"no preview"),
-                        ce("button",{onClick:function(e){e.stopPropagation();deleteChart(m.id);},
-                          style:Object.assign({},BT,{position:"absolute",top:6,right:6,
-                            width:28,height:28,borderRadius:"50%",background:"rgba(0,0,0,.75)",
-                            color:"#f87171",fontSize:14,display:"flex",alignItems:"center",
-                            justifyContent:"center",lineHeight:1,fontWeight:700})
-                        },"🗑")
-                      ),
-                      ce("div",{style:{padding:"7px 9px"}},
-                        ce("div",{style:{fontSize:12,fontWeight:700,color:"#ddd",
-                          overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},m.name),
-                        ce("div",{style:{fontSize:10,color:isHighlight?"#86efac":"#555",marginTop:2}},
-                          m.analysisDate?m.analysisDate+" · ":"", dateStr)
-                      )
-                    ),
-                    /* 右: メモ欄 */
-                    ce("div",{
-                      style:{flex:1,minWidth:0,padding:"8px 10px",overflow:"hidden"},
-                      onClick:function(e){e.stopPropagation();}},
-                      ce(CaMemoEditableField,{
-                        key:"memo_"+m.id,
-                        html:memoHtml,
-                        placeholder:"メモを追加…",
-                        guardOwner:"chartMemo_"+m.id,
-                        onSave:function(h){
-                          caSetChartMemo(m.id,h);
-                          // Firebase同期 (設定があれば)
-                          var fbCfgL=typeof fbCfg!=='undefined'?fbCfg:{};
-                          if(fbCfgL&&fbCfgL.url&&!fbCfgL.paused){
-                            var a=fbCfgL.secret?'?auth='+fbCfgL.secret:'';
-                            var u=fbCfgL.url.replace(/\/$/,'')+'/ca-chart-memos/'+encodeURIComponent(m.id)+'.json'+a;
-                            fetch(u,{method:'PUT',headers:{'Content-Type':'application/json'},
-                              body:JSON.stringify({html:h,updatedAt:Date.now()})}).catch(function(){});
-                          }
-                        }
-                      })
-                    )
-                  ));
+                  nodes.push(ce(CaChartCard,{
+                    key:m.id,
+                    m:m,
+                    isHighlight:!!isHighlight,
+                    highlightDate:highlightDate,
+                    onOpen:openChart,
+                    onDelete:deleteChart,
+                    fbCfg:fbCfg
+                  }));
                 });
               });
               return nodes;
