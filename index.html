@@ -5308,7 +5308,7 @@ function ImageAnnotator(props){
           style:{padding:"4px 8px",fontSize:11,borderRadius:8,border:"1px solid #555",
             background:snippetEditing?"#4c1d95":"#2a2a2a",color:snippetEditing?"#c4b5fd":"#aaa",
             cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}},
-          snippetEditing?"✓ 完了":"✏ 編集")
+          snippetEditing?"✓ 完了":ce(Fragment,null,ce('span',{style:{display:'inline-block',transform:'rotate(-45deg)'}},'✏'),' 編集'))
       ),
       /* スニペット編集パネル (編集モード時のみ) */
       (analysisData && tool==='snippet' && snippetEditing) && ce("div",{
@@ -7169,7 +7169,8 @@ function _caRenderUnsavedDialog(dlg){
               background:'#2a1a1a',color:'#f87171',border:'1.5px solid #f87171',borderRadius:6,cursor:'pointer'}},'🗑 保存せず終了'),
           ce('button',{onClick:function(){dlg('cancel');},
             style:{padding:'10px 14px',fontSize:13,fontWeight:600,
-              background:'#2a2a2a',color:'#aaa',border:'1px solid #444',borderRadius:6,cursor:'pointer'}},'✎ 編集に戻る')
+              background:'#2a2a2a',color:'#aaa',border:'1px solid #444',borderRadius:6,cursor:'pointer'},
+            ce('span',{style:{display:'inline-block',transform:'rotate(-45deg)'}},'✎'),' 編集に戻る')
         )
       )
     ),
@@ -7589,7 +7590,8 @@ function CaMemoEditableField(props){
       inlineButtons&&ce('div',{style:{display:'flex',alignItems:'stretch',gap:6,marginBottom:6}},
         ce('div',{style:{padding:'4px 7px',fontSize:10,fontWeight:700,
           background:'#1e1b4b',color:'#a5b4fc',border:'1px solid #4338CA',
-          borderRadius:4,flex:1,display:'flex',alignItems:'center'}},'✎ 編集中 — 「保存」を押すまで変更は反映されません'),
+          borderRadius:4,flex:1,display:'flex',alignItems:'center',gap:4},
+          ce('span',{style:{display:'inline-block',transform:'rotate(-45deg)'}},'✎'),'編集中 — 「保存」を押すまで変更は反映されません'),
         ce('button',{
           onClick:function(){if(!_isDirty()){exitEdit();return;}if(window.confirm('編集内容を破棄しますか？'))exitEdit();},
           style:{padding:'5px 10px',fontSize:11,fontWeight:700,
@@ -7614,7 +7616,8 @@ function CaMemoEditableField(props){
       ce('button',{onClick:enterEdit,
         style:{padding:'4px 10px',fontSize:11,fontWeight:700,
           background:'#1e1b4b',color:'#a5b4fc',border:'1px solid #4338CA',
-          borderRadius:5,cursor:'pointer',minHeight:IS_TOUCH?36:26}},'✎ 編集')
+          borderRadius:5,cursor:'pointer',minHeight:IS_TOUCH?36:26},
+          ce('span',{style:{display:'inline-block',transform:'rotate(-45deg)'}},'✎'),' 編集')
     ),
     html
       ? ce('div',{
@@ -7649,7 +7652,7 @@ function _caMemoHasContent(html){
   return !!(html.replace(/<[^>]*>/g,'').trim());
 }
 
-/* ── CaTagSelector: タグ選択・管理パネル ── */
+/* ── CaTagSelector: タグ選択・管理パネル (カラーピッカー対応) ── */
 function CaTagSelector(props){
   var chartId=props.chartId;
   var selectedIds=props.selectedIds||[];
@@ -7663,7 +7666,30 @@ function CaTagSelector(props){
   var sRenTxt=useState(''); var renTxt=sRenTxt[0],setRenTxt=sRenTxt[1];
   var newInputRef=useRef(null);
 
+  /* カラーピッカー用 state */
+  var sCE=useState(null); var editColorId=sCE[0],setEditColorId=sCE[1];
+  /* タグ用クイックカラー (localStorage 永続) */
+  var sTQC=useState(function(){
+    try{var v=JSON.parse(localStorage.getItem('ca_tag_qc_v1'));if(v&&v.length)return v;}catch(e){}
+    return CA_TAG_COLORS.slice();
+  }); var tagQC=sTQC[0],setTagQC=sTQC[1];
+  function saveTagQC(qc){setTagQC(qc);try{localStorage.setItem('ca_tag_qc_v1',JSON.stringify(qc));}catch(e){}}
+  /* タグ用カラー履歴 */
+  var sTCH=useState(function(){
+    try{var v=JSON.parse(localStorage.getItem('ca_tag_ch_v1'));if(v&&v.length)return v;}catch(e){}
+    return [];
+  }); var tagCH=sTCH[0],setTagCH=sTCH[1];
+  function pushTagCH(c){
+    var nh=[c].concat(tagCH.filter(function(x){return x!==c;})).slice(0,16);
+    setTagCH(nh);try{localStorage.setItem('ca_tag_ch_v1',JSON.stringify(nh));}catch(e){}
+  }
+
   function saveDefs(arr){caSaveTagDefs(arr);setDefs(arr);}
+
+  function changeTagColor(id,c){
+    pushTagCH(c);
+    saveDefs(defs.map(function(d){return d.id===id?Object.assign({},d,{color:c}):d;}));
+  }
 
   function createTag(){
     var n=newName.trim();
@@ -7675,10 +7701,10 @@ function CaTagSelector(props){
   }
 
   function deleteTag(id){
+    if(editColorId===id)setEditColorId(null);
     saveDefs(defs.filter(function(d){return d.id!==id;}));
     var newSel=selectedIds.filter(function(x){return x!==id;});
     if(newSel.length!==selectedIds.length)onChangeTags(newSel);
-    /* 全チャートのマップからも除去 */
     var map=caLoadTagMap();
     Object.keys(map).forEach(function(cid){
       map[cid]=map[cid].filter(function(x){return x!==id;});
@@ -7703,8 +7729,12 @@ function CaTagSelector(props){
 
   var BS3={border:'none',background:'none',cursor:'pointer',fontFamily:'inherit',padding:0};
 
+  /* カラーピッカー表示中のタグ定義 */
+  var editColorDef=editColorId?defs.find(function(d){return d.id===editColorId;})||null:null;
+
   return ce('div',{style:{background:'#1a1a1a',borderRadius:6},
       onClick:function(e){e.stopPropagation();}},
+
     /* ヘッダー */
     ce('div',{style:{display:'flex',justifyContent:'space-between',
         alignItems:'center',marginBottom:8}},
@@ -7712,6 +7742,7 @@ function CaTagSelector(props){
       ce('button',{style:Object.assign({},BS3,{fontSize:13,color:'#555',lineHeight:1}),
         onClick:onClose},'✕')
     ),
+
     /* タグ一覧 */
     defs.length===0
       ?ce('div',{style:{fontSize:11,color:'#555',marginBottom:8,padding:'2px 0'}},
@@ -7719,8 +7750,10 @@ function CaTagSelector(props){
       :null,
     defs.map(function(d){
       var sel=selectedIds.indexOf(d.id)>=0;
+      var isEditingColor=editColorId===d.id;
       return ce('div',{key:d.id,
           style:{display:'flex',alignItems:'center',gap:5,marginBottom:5}},
+
         /* 選択チェック（色付きボックス） */
         ce('div',{
           onClick:function(){toggleTag(d.id);},
@@ -7730,6 +7763,21 @@ function CaTagSelector(props){
             border:'2px solid '+(sel?d.color:'#555'),
             transition:'background .12s,border-color .12s'}
         }),
+
+        /* カラードット (クリックでカラーピッカー開閉) */
+        ce('button',{
+          title:'色を変更',
+          onClick:function(){setEditColorId(isEditingColor?null:d.id);},
+          style:Object.assign({},BS3,{
+            width:16,height:16,borderRadius:'50%',flexShrink:0,
+            background:d.color,
+            outline:isEditingColor?'2px solid #fff':'none',
+            outlineOffset:'1px',
+            boxShadow:'0 1px 3px rgba(0,0,0,.5)',
+            transition:'outline .1s'
+          })
+        }),
+
         /* タグ名 or リネーム入力 */
         renId===d.id
           ?ce('input',{
@@ -7749,18 +7797,16 @@ function CaTagSelector(props){
               title:'ダブルクリックで名前変更',
               style:{flex:1,fontSize:11,color:sel?'#eee':'#888',
                 overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
-                cursor:'default',display:'flex',alignItems:'center',gap:4}},
-            ce('span',{style:{display:'inline-block',width:8,height:8,borderRadius:'50%',
-                background:d.color,flexShrink:0}}),
-            d.name
-          ),
+                cursor:'default'}
+            }, d.name),
+
         /* リネームボタン */
         renId!==d.id&&ce('button',{
           title:'名前変更',
           onClick:function(){startRename(d.id,d.name);},
-          style:Object.assign({},BS3,{fontSize:10,color:'#555',
-            lineHeight:1,opacity:0.7})
-        },'✏'),
+          style:Object.assign({},BS3,{fontSize:10,color:'#555',lineHeight:1,opacity:0.7})
+        },ce('span',{style:{display:'inline-block',transform:'rotate(-45deg)'}},'✏')),
+
         /* 削除ボタン */
         ce('button',{
           title:'削除',
@@ -7769,6 +7815,23 @@ function CaTagSelector(props){
         },'×')
       );
     }),
+
+    /* ── カラーピッカー (選択中のタグの下に展開) ── */
+    editColorDef&&ce('div',{
+        style:{margin:'6px 0',padding:'8px 10px',
+          background:'#111',borderRadius:6,border:'1px solid #2a2a2a'}},
+      ce('div',{style:{fontSize:10,color:'#888',marginBottom:8}},
+        '"'+editColorDef.name+'" の色'),
+      ce(ColorPicker,{
+        value:editColorDef.color,
+        onChange:function(c){changeTagColor(editColorId,c);},
+        history:tagCH,
+        onHistory:pushTagCH,
+        quickColors:tagQC,
+        onQuickColors:saveTagQC
+      })
+    ),
+
     /* 新規タグ作成行 */
     ce('div',{style:{display:'flex',gap:4,marginTop:8,paddingTop:8,
         borderTop:'1px solid #2a2a2a'}},
@@ -7779,8 +7842,7 @@ function CaTagSelector(props){
         onChange:function(e){setNewName(e.target.value);},
         onKeyDown:function(e){if(e.key==='Enter')createTag();},
         style:{flex:1,background:'#111',border:'1px solid #333',color:'#ddd',
-          fontSize:11,borderRadius:4,padding:'4px 7px',outline:'none',
-          minWidth:0}
+          fontSize:11,borderRadius:4,padding:'4px 7px',outline:'none',minWidth:0}
       }),
       ce('button',{
         onClick:createTag,
