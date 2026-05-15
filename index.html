@@ -1819,7 +1819,7 @@ function DataChart(props){
       }
       var mY1=pToYmeas(md2.startP), mY2=pToYmeas(md2.curP);
       var mdiff2=md2.curP-md2.startP;
-      var mcol=mdiff2>=0?'#22c55e':'#ef4444';
+      var mcol=mdiff2>=0?'#4ade80':'#ef4444';
       ctx.save();
       ctx.setLineDash([]);
       /* 縦線 */
@@ -1833,7 +1833,7 @@ function DataChart(props){
       ctx.stroke();
       /* 差分ラベル (中央) */
       var mMidY=(mY1+mY2)/2;
-      var mDiffRnd=Math.round(Math.abs(mdiff2)*10)/10;
+      var mDiffRnd=Math.round(Math.abs(mdiff2));
       var mDiffStr=mDiffRnd+'円';
       ctx.font='bold 13px -apple-system,Helvetica,sans-serif';
       ctx.textAlign='left';
@@ -3482,12 +3482,12 @@ function DataChart(props){
       }
       var mY1R=pToYR(msr.startP), mY2R=pToYR(msr.endP);
       var diffR=msr.endP-msr.startP;
-      var colR=diffR>=0?'#22c55e':'#ef4444';
+      var colR=diffR>=0?'#4ade80':'#ef4444';
       var topYR=Math.min(mY1R,mY2R);
       var hR=Math.max(Math.abs(mY2R-mY1R),2);
       var hhR=Math.floor(msr.startTm/60), mmR=msr.startTm%60;
       var timeStrR=hhR+':'+(mmR<10?'0'+mmR:mmR);
-      var diffRndR=Math.round(Math.abs(diffR)*10)/10;
+      var diffRndR=Math.round(Math.abs(diffR));
       var labelR=diffRndR+'円';
       return ce('div',{
         key:msr.id,
