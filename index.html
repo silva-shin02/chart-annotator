@@ -985,6 +985,7 @@ var TOOLS=[
   {id:"lasso", label:"選択・変形"},
   {id:"lassoFree", label:"投げ縄"},
   {id:"eraser",label:"消しゴム"},
+  {id:"measure",label:"📏 計測"},
 ];
 /* 2026-04-26: スニペット定義 (localStorage永続化) */
 var CA_SNIPPETS_KEY='ca_snippets_v1';
@@ -1377,6 +1378,9 @@ function DataChart(props){
   /* 2026-04-22: 3本指ダブルタップ検出用 — [timestamp, ...]
      (3本指touchstart が 600ms以内に2回 → 移動(pan)ツール切替) */
   var threeTapHistRef=useRef([]);
+  var measureDragRef=useRef(null);
+  var measureTickDragRef=useRef(null); /* {msrId, end:'start'|'end', curP} */
+  var sMeasures=useState([]); var measures=sMeasures[0],setMeasures=sMeasures[1];
   /* 2026-04-20: 出来高下端固定モード用 refs (pricePx>0 時のみ使用)
      - hiddenCanvasRef: 従来通りの単一canvas描画先 (display:none)
      - priceCanvasRef: 上段 (scrollable 内)、hidden の price 部分を drawImage 転写
@@ -1802,6 +1806,55 @@ function DataChart(props){
       ctx.restore();
     }
     }catch(_lassoErr){}
+
+    /* 計測ツール: ドラッグ中プレビュー */
+    if(L&&measureDragRef.current){
+      var md2=measureDragRef.current;
+      var mSide2=md2.startSide||'cur';
+      var mX2=minToXWithSide(md2.startTm,mSide2);
+      function pToYmeas(p){
+        if(typeof L.dpmax==='number'&&typeof L.pxPerYen==='number'&&L.pxPerYen>0)
+          return L.priceTop+(L.dpmax-p)*L.pxPerYen;
+        return L.priceTop+(1-(p-L.pmin)/(L.pmax-L.pmin))*L.priceH;
+      }
+      var mY1=pToYmeas(md2.startP), mY2=pToYmeas(md2.curP);
+      var mdiff2=md2.curP-md2.startP;
+      var mcol=mdiff2>=0?'#22c55e':'#ef4444';
+      ctx.save();
+      ctx.setLineDash([]);
+      /* 縦線 */
+      ctx.strokeStyle=mcol; ctx.lineWidth=2; ctx.globalAlpha=0.9;
+      ctx.beginPath(); ctx.moveTo(mX2,mY1); ctx.lineTo(mX2,mY2); ctx.stroke();
+      /* ティック */
+      ctx.lineWidth=1.5;
+      ctx.beginPath();
+      ctx.moveTo(mX2-8,mY1); ctx.lineTo(mX2+8,mY1);
+      ctx.moveTo(mX2-8,mY2); ctx.lineTo(mX2+8,mY2);
+      ctx.stroke();
+      /* 差分ラベル (中央) */
+      var mMidY=(mY1+mY2)/2;
+      var mDiffRnd=Math.round(Math.abs(mdiff2)*10)/10;
+      var mDiffStr=mDiffRnd+'円';
+      ctx.font='bold 13px -apple-system,Helvetica,sans-serif';
+      ctx.textAlign='left';
+      var mLx=mX2+12;
+      var mTw=ctx.measureText(mDiffStr).width;
+      ctx.globalAlpha=0.8; ctx.fillStyle='rgba(0,0,0,0.82)';
+      ctx.fillRect(mLx-2,mMidY-14,mTw+10,19);
+      ctx.globalAlpha=0.95; ctx.fillStyle=mcol;
+      ctx.fillText(mDiffStr,mLx+3,mMidY+1);
+      /* 開始点: 価格+時刻 */
+      var mHH=Math.floor(md2.startTm/60), mMM=md2.startTm%60;
+      var mTimeStr=mHH+':'+(mMM<10?'0'+mMM:mMM);
+      var mPriceLabel=Math.round(md2.startP*10)/10+'円  '+mTimeStr;
+      ctx.font='11px -apple-system,Helvetica,sans-serif';
+      var mTw2=ctx.measureText(mPriceLabel).width;
+      ctx.globalAlpha=0.7; ctx.fillStyle='rgba(0,0,0,0.8)';
+      ctx.fillRect(mLx-2,mY1-17,mTw2+10,15);
+      ctx.globalAlpha=0.9; ctx.fillStyle='rgba(220,220,220,0.9)';
+      ctx.fillText(mPriceLabel,mLx+3,mY1-5);
+      ctx.restore();
+    }
 
     /* 十字カーソル */
     if(!showCrosshair||!L)return;
@@ -2500,6 +2553,11 @@ function DataChart(props){
     if(!tp||tp.p==null)return;
     /* C8a: xToSideTmでgap帯は近い側に境界clamp済み — gap block不要 */
     var tpSide=tp.side||'cur';
+    if(drawTool==='measure'){
+      measureDragRef.current={startP:tp.p,startTm:tp.tm,startSide:tpSide,curP:tp.p};
+      drawCrosshair();
+      return;
+    }
     if(drawTool==='eraser'){
       // 即時削除: hit を見つけたら silent で消し、ドラッグ中ずっと続ける
       drawRef.current={on:true, eraser:true, didDelete:false};
@@ -2646,6 +2704,35 @@ function DataChart(props){
       var rect=getCanvasRect();
       cursorRef.current={x:e.clientX-rect.left,y:e.clientY-rect.top};
       notifyExternalCursorFromLocal();
+    }
+    /* 計測ティックドラッグ: 端点を個別移動 */
+    if(measureTickDragRef.current){
+      var tpTick=pxToTimePrice(e.clientX,e.clientY);
+      if(tpTick&&tpTick.p!=null)measureTickDragRef.current.curP=tpTick.p;
+      if(!rafRef.current){
+        rafRef.current=requestAnimationFrame(function(){
+          var tdr=measureTickDragRef.current;
+          if(tdr){
+            setMeasures(function(prev){
+              return prev.map(function(m){
+                if(m.id!==tdr.msrId)return m;
+                return Object.assign({},m,tdr.end==='start'?{startP:tdr.curP}:{endP:tdr.curP});
+              });
+            });
+          }
+          rafRef.current=null;
+        });
+      }
+      return;
+    }
+    /* 計測ツール: ドラッグ中の価格更新 */
+    if(measureDragRef.current){
+      var tpMeas=pxToTimePrice(e.clientX,e.clientY);
+      if(tpMeas&&tpMeas.p!=null)measureDragRef.current.curP=tpMeas.p;
+      if(!rafRef.current){
+        rafRef.current=requestAnimationFrame(function(){try{drawCrosshair();}catch(err){}rafRef.current=null;});
+      }
+      return;
     }
     /* 2026-04-23: 投げ縄パス描画中 → ポイント追加 (4px未満は間引き) */
     if(lassoPathRef.current){
@@ -2897,6 +2984,34 @@ function DataChart(props){
       return;
     }
     // lasso/text 移動終了 → 確定 (C6: side対応、C8a: text toolの移動/edit切替)
+    /* 計測ティックドラッグ終了 */
+    if(measureTickDragRef.current){
+      var tdrUp=measureTickDragRef.current;
+      if(tdrUp.curP!=null){
+        setMeasures(function(prev){
+          return prev.map(function(m){
+            if(m.id!==tdrUp.msrId)return m;
+            return Object.assign({},m,tdrUp.end==='start'?{startP:tdrUp.curP}:{endP:tdrUp.curP});
+          });
+        });
+      }
+      measureTickDragRef.current=null;
+      return;
+    }
+    /* 計測ツール: ドラッグ終了 → 確定 */
+    if(measureDragRef.current){
+      var md=measureDragRef.current;
+      var mdiff=md.curP-md.startP;
+      if(Math.abs(mdiff)>=0.5){
+        var newM={id:'meas_'+Date.now(),
+          startP:md.startP,endP:md.curP,
+          startTm:md.startTm,startSide:md.startSide};
+        setMeasures(function(prev){return prev.concat([newM]);});
+      }
+      measureDragRef.current=null;
+      drawCrosshair();
+      return;
+    }
     if(moveRef.current){
       var m=moveRef.current;
       /* 2026-04-21: ハンドルドラッグでdtm=dp=0ならcommitスキップ (タップのみ、Firebase無駄書き回避) */
@@ -3354,7 +3469,88 @@ function DataChart(props){
         style:{marginLeft:2,fontSize:11,cursor:"pointer",color:"#888",fontWeight:600,
           padding:"2px 6px"}
       },"✕")
-    )
+    ),
+    /* ── 計測結果オーバーレイ ── */
+    measures.map(function(msr){
+      var Lm=layoutRef.current; if(!Lm)return null;
+      var mSideR=msr.startSide||'cur';
+      var mXR=minToXWithSide(msr.startTm,mSideR);
+      function pToYR(p){
+        if(typeof Lm.dpmax==='number'&&typeof Lm.pxPerYen==='number'&&Lm.pxPerYen>0)
+          return Lm.priceTop+(Lm.dpmax-p)*Lm.pxPerYen;
+        return Lm.priceTop+(1-(p-Lm.pmin)/(Lm.pmax-Lm.pmin))*Lm.priceH;
+      }
+      var mY1R=pToYR(msr.startP), mY2R=pToYR(msr.endP);
+      var diffR=msr.endP-msr.startP;
+      var colR=diffR>=0?'#22c55e':'#ef4444';
+      var topYR=Math.min(mY1R,mY2R);
+      var hR=Math.max(Math.abs(mY2R-mY1R),2);
+      var hhR=Math.floor(msr.startTm/60), mmR=msr.startTm%60;
+      var timeStrR=hhR+':'+(mmR<10?'0'+mmR:mmR);
+      var diffRndR=Math.round(Math.abs(diffR)*10)/10;
+      var labelR=diffRndR+'円';
+      return ce('div',{
+        key:msr.id,
+        onMouseDown:function(e){e.stopPropagation();},
+        style:{position:'absolute',left:mXR,top:topYR,pointerEvents:'none',zIndex:60}},
+        /* 縦線 */
+        ce('div',{style:{position:'absolute',left:0,top:0,width:2,height:hR,background:colR,opacity:0.85}}),
+        /* 上端ティック (ドラッグハンドル) */
+        ce('div',{
+          onMouseDown:function(e){
+            e.preventDefault();e.stopPropagation();
+            var isStartTop=msr.startP>=msr.endP;
+            measureTickDragRef.current={msrId:msr.id,
+              end:isStartTop?'start':'end',
+              curP:isStartTop?msr.startP:msr.endP};
+          },
+          style:{position:'absolute',left:-10,top:-8,width:22,height:16,
+            cursor:'ns-resize',pointerEvents:'auto',
+            display:'flex',alignItems:'center',justifyContent:'center',zIndex:62}},
+          ce('div',{style:{width:18,height:3,background:colR,borderRadius:2}})
+        ),
+        /* 下端ティック (ドラッグハンドル) */
+        ce('div',{
+          onMouseDown:function(e){
+            e.preventDefault();e.stopPropagation();
+            var isEndBottom=msr.endP<=msr.startP;
+            measureTickDragRef.current={msrId:msr.id,
+              end:isEndBottom?'end':'start',
+              curP:isEndBottom?msr.endP:msr.startP};
+          },
+          style:{position:'absolute',left:-10,top:hR-8,width:22,height:16,
+            cursor:'ns-resize',pointerEvents:'auto',
+            display:'flex',alignItems:'center',justifyContent:'center',zIndex:62}},
+          ce('div',{style:{width:18,height:3,background:colR,borderRadius:2}})
+        ),
+        /* ラベル + × ボタン */
+        ce('div',{
+          onMouseDown:function(e){e.stopPropagation();},
+          style:{position:'absolute',left:14,top:Math.round(hR/2)-13,pointerEvents:'auto',
+            display:'flex',alignItems:'center',gap:5,
+            background:'rgba(18,18,18,0.9)',borderRadius:6,
+            padding:'4px 8px 4px 9px',border:'1px solid '+colR,
+            boxShadow:'0 2px 10px rgba(0,0,0,.6)',whiteSpace:'nowrap',zIndex:61}},
+          ce('span',{style:{fontSize:12,color:colR,fontWeight:700}},labelR),
+          ce('button',{
+            onClick:function(e){
+              e.stopPropagation();
+              setMeasures(function(prev){return prev.filter(function(x){return x.id!==msr.id;});});
+            },
+            style:{border:'none',background:'rgba(255,255,255,0.1)',color:'#888',
+              fontSize:13,cursor:'pointer',padding:'1px 4px',borderRadius:3,lineHeight:1}
+          },'×')
+        ),
+        /* 時刻ラベル (開始点付近) */
+        ce('div',{style:{
+          position:'absolute',left:14,
+          top:diffR>=0?(hR+4):-19,
+          fontSize:10,color:'rgba(180,180,180,0.8)',whiteSpace:'nowrap',
+          background:'rgba(0,0,0,0.55)',borderRadius:3,padding:'1px 5px',
+          pointerEvents:'none'
+        }},timeStrR)
+      );
+    })
   );
 }
 
@@ -5110,7 +5306,7 @@ function ImageAnnotator(props){
         /* 分析モード時: 描画ツール */
         analysisData && ce("div",{style:{display:"flex",gap:IS_TOUCH?3:5,flexWrap:"nowrap",flexShrink:0}},
           TOOLS.map(function(t){
-            var activeBg=t.id==="eraser"?"#E65100":t.id==="lasso"?"#007AFF":t.id==="lassoFree"?"#0ea5e9":t.id==="text"?"#D4AC0D":t.id==="snippet"?"#8b5cf6":t.id==="trade"?"#dc2626":"#6366F1";
+            var activeBg=t.id==="eraser"?"#E65100":t.id==="lasso"?"#007AFF":t.id==="lassoFree"?"#0ea5e9":t.id==="text"?"#D4AC0D":t.id==="snippet"?"#8b5cf6":t.id==="trade"?"#dc2626":t.id==="measure"?"#0891b2":"#6366F1";
             var activeFg=(t.id==="text")?"#1a1a1a":"#fff";
             return ce("button",{key:'ana_'+t.id,onClick:function(){switchTool(t.id);},
               style:Object.assign({},TS,{fontSize:IS_TOUCH?11:12,padding:IS_TOUCH?"5px 7px":"6px 10px",
