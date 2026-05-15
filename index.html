@@ -1819,7 +1819,7 @@ function DataChart(props){
       }
       var mY1=pToYmeas(md2.startP), mY2=pToYmeas(md2.curP);
       var mdiff2=md2.curP-md2.startP;
-      var mcol=mdiff2>=0?'#4ade80':'#ef4444';
+      var mcol='#4ade80';
       ctx.save();
       ctx.setLineDash([]);
       /* 縦線 */
@@ -3482,7 +3482,7 @@ function DataChart(props){
       }
       var mY1R=pToYR(msr.startP), mY2R=pToYR(msr.endP);
       var diffR=msr.endP-msr.startP;
-      var colR=diffR>=0?'#4ade80':'#ef4444';
+      var colR='#4ade80';
       var topYR=Math.min(mY1R,mY2R);
       var hR=Math.max(Math.abs(mY2R-mY1R),2);
       var hhR=Math.floor(msr.startTm/60), mmR=msr.startTm%60;
