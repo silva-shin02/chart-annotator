@@ -8680,6 +8680,187 @@ function PatternSearchModal(props){
   );
 }
 
+/* ─── NotepadPage ────────────────────────────────────────────────
+   localStorage key: ca_notepad_entries_v1
+   エントリ構造: [{id, title, html, createdAt}]  先頭=最新
+   表示: デフォルト折り畳み (見出し行のみ)、▶ タップで展開 */
+var CA_NP_KEY='ca_notepad_entries_v1';
+function npLoadEntries(){
+  try{var s=localStorage.getItem(CA_NP_KEY);if(s){var a=JSON.parse(s);if(Array.isArray(a))return a;}}catch(e){}
+  return [];
+}
+function npSaveEntries(arr){try{localStorage.setItem(CA_NP_KEY,JSON.stringify(arr));}catch(e){}}
+
+/* 見出し入力: blur 時のみ親に通知 (キー入力毎の再レンダリングを避ける) */
+function NpTitleInput(props){
+  var value=props.value||'';
+  var onBlur=props.onBlur;
+  var placeholder=props.placeholder||'';
+  var sV=useState(value); var local=sV[0],setLocal=sV[1];
+  /* 外部 value 変更時 (削除→再追加等) にローカルを同期 */
+  useEffect(function(){setLocal(value);},[value]);
+  return ce('input',{
+    type:'text',
+    value:local,
+    onChange:function(e){setLocal(e.target.value);},
+    onBlur:function(e){if(typeof onBlur==='function')onBlur(e.target.value);},
+    placeholder:placeholder,
+    style:{flex:1,background:'transparent',border:'none',outline:'none',
+      color:'#e0e0e0',fontSize:14,fontWeight:600,
+      padding:'0',minWidth:0,cursor:'text',
+      WebkitUserSelect:'text',userSelect:'text'}
+  });
+}
+
+function NotepadPage(props){
+  var onClose=props.onClose;
+  var sE=useState(npLoadEntries); var entries=sE[0],setEntries=sE[1];
+  /* expanded: {id: bool}  新規エントリのみ true で初期化、他は undefined=折り畳み */
+  var sEx=useState({}); var expanded=sEx[0],setExpanded=sEx[1];
+
+  /* ブラウザバック / ca_back でホームに戻る */
+  useEffect(function(){
+    function onBack(){onClose();}
+    window.addEventListener('ca_back',onBack);
+    return function(){window.removeEventListener('ca_back',onBack);};
+  },[]);
+
+  function addEntry(){
+    var id='np_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
+    var next=[{id:id,title:'',html:'',createdAt:Date.now()}].concat(entries);
+    setEntries(next); npSaveEntries(next);
+    /* 新規エントリは展開状態で表示 */
+    setExpanded(function(prev){var nx=Object.assign({},prev); nx[id]=true; return nx;});
+  }
+  function saveTitle(id,title){
+    var next=entries.map(function(e){return e.id===id?Object.assign({},e,{title:title}):e;});
+    setEntries(next); npSaveEntries(next);
+  }
+  function saveEntry(id,html){
+    var next=entries.map(function(e){return e.id===id?Object.assign({},e,{html:html}):e;});
+    setEntries(next); npSaveEntries(next);
+  }
+  function deleteEntry(id){
+    window.caConfirm('このメモを削除しますか？',function(){
+      var next=entries.filter(function(e){return e.id!==id;});
+      setEntries(next); npSaveEntries(next);
+    },null,{yesLabel:'削除',noLabel:'キャンセル',danger:true});
+  }
+  function toggleExpanded(id){
+    setExpanded(function(prev){
+      var nx=Object.assign({},prev); nx[id]=!prev[id]; return nx;
+    });
+  }
+  function fmtDate(ts){
+    var d=new Date(ts);
+    var mo=String(d.getMonth()+1).padStart(2,'0');
+    var day=String(d.getDate()).padStart(2,'0');
+    var h=String(d.getHours()).padStart(2,'0');
+    var m=String(d.getMinutes()).padStart(2,'0');
+    return d.getFullYear()+'/'+mo+'/'+day+' '+h+':'+m;
+  }
+
+  return ce('div',{style:{position:'fixed',inset:0,background:'#111',color:'#fff',
+    display:'flex',flexDirection:'column',zIndex:100,overflow:'hidden'}},
+    /* ── ページヘッダー ── */
+    ce('div',{style:{display:'flex',alignItems:'center',gap:8,
+      padding:'10px 14px',background:'#1a1a1a',borderBottom:'1px solid #2a2a2a',
+      flexShrink:0}},
+      ce('button',{onClick:onClose,
+        style:{padding:'7px 12px',fontSize:13,fontWeight:700,
+          background:'#2a2a2a',color:'#aaa',border:'1px solid #333',
+          borderRadius:8,cursor:'pointer',minHeight:IS_TOUCH?40:32}},'← 戻る'),
+      ce('div',{style:{flex:1,fontSize:16,fontWeight:700,color:'#fff',textAlign:'center'}},'📝 メモ帳'),
+      ce('button',{onClick:addEntry,
+        style:{padding:'7px 14px',fontSize:13,fontWeight:700,
+          background:'#2563eb',color:'#fff',border:'none',
+          borderRadius:8,cursor:'pointer',minHeight:IS_TOUCH?40:32}},'＋ 追加')
+    ),
+    /* ── エントリ一覧 ── */
+    ce('div',{style:{flex:1,overflowY:'auto',padding:'10px 14px',
+      display:'flex',flexDirection:'column',gap:6}},
+      entries.length===0
+        ?ce('div',{style:{textAlign:'center',color:'#444',fontSize:14,marginTop:80,lineHeight:2.2}},
+            ce('div',{style:{fontSize:44,marginBottom:8}},'📝'),
+            ce('div',null,'まだメモがありません'),
+            ce('div',{style:{fontSize:12,color:'#333'}},'右上の「＋ 追加」ボタンでメモを作成できます')
+          )
+        :entries.map(function(entry){
+            var isOpen=!!expanded[entry.id];
+            var noTitle=!(entry.title||'').trim();
+            return ce('div',{key:entry.id,
+              style:{background:'#1a1a1a',border:'1px solid '+(isOpen?'#3a3a3a':'#2a2a2a'),
+                borderRadius:10,overflow:'hidden',
+                transition:'border-color 0.15s'}},
+
+              /* ── 見出し行 ── */
+              ce('div',{style:{display:'flex',alignItems:'center',gap:6,
+                padding:'10px 12px',
+                borderBottom:isOpen?'1px solid #2a2a2a':'none',
+                background:isOpen?'#202020':'transparent'}},
+
+                /* 見出し入力 */
+                ce(NpTitleInput,{
+                  key:'title_'+entry.id,
+                  value:entry.title||'',
+                  placeholder:'見出しを入力…',
+                  onBlur:function(v){saveTitle(entry.id,v);}
+                }),
+
+                /* 日時 (小さく右寄せ) */
+                ce('span',{style:{fontSize:10,color:'#444',flexShrink:0,whiteSpace:'nowrap'}},
+                  fmtDate(entry.createdAt)),
+
+                /* 展開トグル △▽ */
+                ce('button',{
+                  onClick:function(){toggleExpanded(entry.id);},
+                  title:isOpen?'折り畳む':'展開する',
+                  style:{
+                    width:28,height:28,flexShrink:0,
+                    display:'flex',alignItems:'center',justifyContent:'center',
+                    background:'transparent',border:'1px solid #333',borderRadius:6,
+                    cursor:'pointer',padding:0,
+                    transition:'transform 0.2s'}},
+                  /* SVG 三角形: 右向き→展開時は90°回転で下向き */
+                  ce('svg',{
+                    width:10,height:10,viewBox:'0 0 10 10',
+                    style:{
+                      display:'block',
+                      fill:isOpen?'#a5b4fc':'#666',
+                      transform:isOpen?'rotate(90deg)':'rotate(0deg)',
+                      transition:'transform 0.2s, fill 0.15s'}},
+                    ce('polygon',{points:'2,1 9,5 2,9'})
+                  )
+                ),
+
+                /* 削除 */
+                ce('button',{
+                  onClick:function(){deleteEntry(entry.id);},
+                  style:{width:28,height:28,flexShrink:0,
+                    display:'flex',alignItems:'center',justifyContent:'center',
+                    background:'transparent',color:'#555',border:'1px solid #333',
+                    borderRadius:6,cursor:'pointer',fontSize:13,padding:0}
+                },'🗑')
+              ),
+
+              /* ── 内容 (展開時のみ) ── */
+              isOpen&&ce('div',{style:{padding:'10px 12px'}},
+                ce(CaMemoEditableField,{
+                  key:'npe_'+entry.id,
+                  html:entry.html,
+                  placeholder:'クリックして編集… (テキスト装飾・画像の貼り付け可)',
+                  guardOwner:'np_'+entry.id,
+                  hideEditButton:true,
+                  autoEdit:!entry.html,
+                  onSave:function(h){saveEntry(entry.id,h);}
+                })
+              )
+            );
+          })
+    )
+  );
+}
+
 function DraftLibrary(props){
   var onOpen=props.onOpen, onClose=props.onClose, fbCfg=props.fbCfg||{}, initialTicker=props.initialTicker||null;
   var highlightDate=props.highlightDate||null;
@@ -8687,6 +8868,7 @@ function DraftLibrary(props){
   /* 2026-04-30: C - AnnotatorMain からのクエリ起動 */
   var queryFromEditor=props.queryFromEditor||null;
   var onConsumeQueryFromEditor=props.onConsumeQueryFromEditor||function(){};
+  var onOpenNotepad=props.onOpenNotepad||function(){};
   var s0=useState(caLoadTickers);   var tickers=s0[0],setTickers=s0[1];
   var s1=useState(initialTicker);   var selTicker=s1[0],setSelTicker=s1[1];
   var s2=useState(caLoadMeta);      var meta=s2[0],setMeta=s2[1];
@@ -9859,6 +10041,12 @@ function DraftLibrary(props){
           background:"#2a2a2a",color:"#a5b4fc",
           padding:"7px 12px",borderRadius:8,whiteSpace:"nowrap",flexShrink:0})},
         "📊 各種設定"),
+      /* メモ帳ボタン */
+      ce("button",{onClick:function(){onOpenNotepad();},
+        style:Object.assign({},BT,{fontSize:13,fontWeight:700,
+          background:"#14532d",color:"#86efac",
+          padding:"7px 12px",borderRadius:8,whiteSpace:"nowrap",flexShrink:0})},
+        "📝 メモ帳"),
       !showTrash&&ce("button",{onClick:function(){setAdding(true);setTimeout(function(){inputRef.current&&inputRef.current.focus();},50);},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,background:"#2563eb",
           color:"#fff",padding:"7px 14px",borderRadius:8,whiteSpace:"nowrap",flexShrink:0})},
@@ -10528,6 +10716,7 @@ function App(){
   var s3=useState(false); var showFbSettings=s3[0],setShowFbSettings=s3[1];
   /* 2026-04-20: 表示・動作設定モーダル */
   var sDS=useState(false); var showDisplaySettings=sDS[0],setShowDisplaySettings=sDS[1];
+  var sNP=useState(false); var showNotepad=sNP[0],setShowNotepad=sNP[1];
   var s4=useState(function(){try{return sessionStorage.getItem('ca_screen')==='drafts';}catch(e){return false;}}); var showDrafts=s4[0],setShowDrafts=s4[1];
   var s5=useState(function(){try{return sessionStorage.getItem('ca_draftTicker')||null;}catch(e){return null;}}); var draftInitTicker=s5[0],setDraftInitTicker=s5[1];
   /* 2026-04-20: URLパラメータ経由で指定された日付 (DraftLibrary で該当チャートをハイライト) */
@@ -10629,6 +10818,9 @@ function App(){
     return function(){window.removeEventListener('popstate',onPopState);};
   },[]);
 
+  if(showNotepad){
+    return ce(NotepadPage,{onClose:function(){setShowNotepad(false);}});
+  }
   if(img){
     return ce(ImageAnnotator,{
       img:img,
@@ -10665,7 +10857,8 @@ function App(){
       onClearHighlight:function(){setHighlightDate(null);},
       /* 2026-04-30: C - エディタから「似た形検索」で起動された時のクエリ draft id */
       queryFromEditor:queryFromEditor,
-      onConsumeQueryFromEditor:function(){setQueryFromEditor(null);}
+      onConsumeQueryFromEditor:function(){setQueryFromEditor(null);},
+      onOpenNotepad:function(){setShowNotepad(true);}
     }),
     /* Firebase設定モーダル */
     showFbSettings&&ce(FbSettingsModal,{
