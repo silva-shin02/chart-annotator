@@ -7854,6 +7854,7 @@ function CaTagSelector(props){
   var selectedIds=props.selectedIds||[];
   var onChangeTags=props.onChangeTags;
   var onClose=props.onClose;
+  var fbCfg=props.fbCfg||{};
 
   var sDefs=useState(function(){return caLoadTagDefs();});
   var defs=sDefs[0],setDefs=sDefs[1];
@@ -7880,7 +7881,18 @@ function CaTagSelector(props){
     setTagCH(nh);try{localStorage.setItem('ca_tag_ch_v1',JSON.stringify(nh));}catch(e){}
   }
 
-  function saveDefs(arr){caSaveTagDefs(arr);setDefs(arr);}
+  function saveDefs(arr){
+    caSaveTagDefs(arr);setDefs(arr);
+    if(fbCfg&&fbCfg.url&&!fbCfg.paused){
+      var a=fbCfg.secret?'?auth='+fbCfg.secret:'';
+      var base=fbCfg.url.replace(/\/$/,'');
+      var ut=Date.now();
+      fetch(base+'/ca-tag-defs.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({defs:arr,updatedAt:ut})}).catch(function(){});
+      fetch(base+'/ca-tag-defs-v.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({updatedAt:ut})}).catch(function(){});
+    }
+  }
 
   function changeTagColor(id,c){
     pushTagCH(c);
@@ -8193,7 +8205,8 @@ function CaChartCard(props){
         chartId:m.id,
         selectedIds:tagIds,
         onChangeTags:handleChangeTags,
-        onClose:function(){setTagOpen(false);}
+        onClose:function(){setTagOpen(false);},
+        fbCfg:fbCfg
       })
     ),
 
@@ -8712,11 +8725,51 @@ function NpTitleInput(props){
   });
 }
 
+var CA_NP_UT_KEY='ca_notepad_ut_v1';
+function npLoadUt(){try{var v=parseInt(localStorage.getItem(CA_NP_UT_KEY)||'0',10);return isNaN(v)?0:v;}catch(e){return 0;}}
+function npSaveUt(ut){try{localStorage.setItem(CA_NP_UT_KEY,String(ut));}catch(e){}}
+
 function NotepadPage(props){
   var onClose=props.onClose;
+  var fbCfg=props.fbCfg||{};
   var sE=useState(npLoadEntries); var entries=sE[0],setEntries=sE[1];
   /* expanded: {id: bool}  新規エントリのみ true で初期化、他は undefined=折り畳み */
   var sEx=useState({}); var expanded=sEx[0],setExpanded=sEx[1];
+
+  /* Firebase へ全エントリを書き込む (last-write-wins) */
+  function npPushToFb(arr){
+    if(!fbCfg||!fbCfg.url||fbCfg.paused)return;
+    var a=fbCfg.secret?'?auth='+fbCfg.secret:'';
+    var base=fbCfg.url.replace(/\/$/,'');
+    var ut=Date.now();
+    npSaveUt(ut);
+    fetch(base+'/ca-notepad.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({entries:arr,updatedAt:ut})}).catch(function(){});
+    fetch(base+'/ca-notepad-v.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({updatedAt:ut})}).catch(function(){});
+  }
+
+  /* マウント時: バージョン確認 → リモートが新しければ全件取得 */
+  useEffect(function(){
+    if(!fbCfg||!fbCfg.url||fbCfg.paused)return;
+    var a=fbCfg.secret?'?auth='+fbCfg.secret:'';
+    var base=fbCfg.url.replace(/\/$/,'');
+    var localUt=npLoadUt();
+    fetch(base+'/ca-notepad-v.json'+a)
+      .then(function(r){return r.ok?r.json():null;})
+      .then(function(v){
+        if(!v||typeof v.updatedAt!=='number')return;
+        if(v.updatedAt<=localUt)return;
+        return fetch(base+'/ca-notepad.json'+a)
+          .then(function(r){return r.ok?r.json():null;})
+          .then(function(d){
+            if(!d||!Array.isArray(d.entries))return;
+            npSaveEntries(d.entries);
+            npSaveUt(d.updatedAt||v.updatedAt);
+            setEntries(d.entries);
+          });
+      }).catch(function(){});
+  },[]);
 
   /* ブラウザバック / ca_back でホームに戻る */
   useEffect(function(){
@@ -8728,22 +8781,22 @@ function NotepadPage(props){
   function addEntry(){
     var id='np_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
     var next=[{id:id,title:'',html:'',createdAt:Date.now()}].concat(entries);
-    setEntries(next); npSaveEntries(next);
+    setEntries(next); npSaveEntries(next); npPushToFb(next);
     /* 新規エントリは展開状態で表示 */
     setExpanded(function(prev){var nx=Object.assign({},prev); nx[id]=true; return nx;});
   }
   function saveTitle(id,title){
     var next=entries.map(function(e){return e.id===id?Object.assign({},e,{title:title}):e;});
-    setEntries(next); npSaveEntries(next);
+    setEntries(next); npSaveEntries(next); npPushToFb(next);
   }
   function saveEntry(id,html){
     var next=entries.map(function(e){return e.id===id?Object.assign({},e,{html:html}):e;});
-    setEntries(next); npSaveEntries(next);
+    setEntries(next); npSaveEntries(next); npPushToFb(next);
   }
   function deleteEntry(id){
     window.caConfirm('このメモを削除しますか？',function(){
       var next=entries.filter(function(e){return e.id!==id;});
-      setEntries(next); npSaveEntries(next);
+      setEntries(next); npSaveEntries(next); npPushToFb(next);
     },null,{yesLabel:'削除',noLabel:'キャンセル',danger:true});
   }
   function toggleExpanded(id){
@@ -9022,16 +9075,60 @@ function DraftLibrary(props){
   useEffect(function(){
     if(!fbCfg||!fbCfg.url||fbCfg.paused)return;
     var a=fbCfg.secret?'?auth='+fbCfg.secret:'';
-    var u=fbCfg.url.replace(/\/$/,'')+'/ca-chart-memos.json'+a;
-    fetch(u).then(function(r){return r.ok?r.json():null;}).then(function(d){
-      if(!d||typeof d!=='object')return;
-      var local=caLoadChartMemos();
-      Object.keys(d).forEach(function(id){
-        var v=d[id];
-        if(v&&v.html!=null)local[decodeURIComponent(id)]=v.html;
-      });
-      caSaveChartMemos(local);
-    }).catch(function(){});
+    var base=fbCfg.url.replace(/\/$/,'');
+
+    /* チャートメモ一括取得 */
+    fetch(base+'/ca-chart-memos.json'+a)
+      .then(function(r){return r.ok?r.json():null;})
+      .then(function(d){
+        if(!d||typeof d!=='object')return;
+        var local=caLoadChartMemos();
+        Object.keys(d).forEach(function(id){
+          var v=d[id];
+          if(v&&v.html!=null)local[decodeURIComponent(id)]=v.html;
+        });
+        caSaveChartMemos(local);
+      }).catch(function(){});
+
+    /* タグ定義: バージョン確認 → 差分時のみ全件取得 */
+    var localDefsUt=0;
+    try{var _td=JSON.parse(localStorage.getItem('ca_tag_defs_ut_v1')||'0');if(typeof _td==='number')localDefsUt=_td;}catch(e){}
+    fetch(base+'/ca-tag-defs-v.json'+a)
+      .then(function(r){return r.ok?r.json():null;})
+      .then(function(v){
+        if(!v||typeof v.updatedAt!=='number')return;
+        if(v.updatedAt<=localDefsUt)return;
+        return fetch(base+'/ca-tag-defs.json'+a)
+          .then(function(r){return r.ok?r.json():null;})
+          .then(function(d){
+            if(!d||!Array.isArray(d.defs))return;
+            /* リモートが新しければ上書き */
+            caSaveTagDefs(d.defs);
+            try{localStorage.setItem('ca_tag_defs_ut_v1',JSON.stringify(d.updatedAt||v.updatedAt));}catch(e){}
+          });
+      }).catch(function(){});
+
+    /* チャートタグ割り当て一括取得 */
+    fetch(base+'/ca-chart-tags.json'+a)
+      .then(function(r){return r.ok?r.json():null;})
+      .then(function(d){
+        if(!d||typeof d!=='object')return;
+        var localMap=caLoadTagMap();
+        Object.keys(d).forEach(function(id){
+          var v=d[id];
+          if(v&&Array.isArray(v.tagIds)){
+            var lid=decodeURIComponent(id);
+            /* リモートが新しい場合のみ上書き */
+            var remUt=v.updatedAt||0;
+            var locUt=(localMap['__ut_'+lid])||0;
+            if(remUt>=locUt){
+              if(v.tagIds.length)localMap[lid]=v.tagIds; else delete localMap[lid];
+              localMap['__ut_'+lid]=remUt;
+            }
+          }
+        });
+        caSaveTagMap(localMap);
+      }).catch(function(){});
   },[]);
 
   /* highlightDate がある場合、該当カードまで自動スクロール */
@@ -10819,7 +10916,7 @@ function App(){
   },[]);
 
   if(showNotepad){
-    return ce(NotepadPage,{onClose:function(){setShowNotepad(false);}});
+    return ce(NotepadPage,{onClose:function(){setShowNotepad(false);},fbCfg:fbCfg});
   }
   if(img){
     return ce(ImageAnnotator,{
