@@ -7887,6 +7887,8 @@ function CaTagSelector(props){
       var a=fbCfg.secret?'?auth='+fbCfg.secret:'';
       var base=fbCfg.url.replace(/\/$/,'');
       var ut=Date.now();
+      /* ローカルタイムスタンプを更新 → 次回マウント時の不要な再取得を防ぐ */
+      try{localStorage.setItem('ca_tag_defs_ut_v1',String(ut));}catch(e){}
       fetch(base+'/ca-tag-defs.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({defs:arr,updatedAt:ut})}).catch(function(){});
       fetch(base+'/ca-tag-defs-v.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
@@ -8914,6 +8916,8 @@ function NotepadPage(props){
   );
 }
 
+/* ページロード中に1回だけ Firebase 初期同期を行うためのフラグ */
+var _caFbInitDone=false;
 function DraftLibrary(props){
   var onOpen=props.onOpen, onClose=props.onClose, fbCfg=props.fbCfg||{}, initialTicker=props.initialTicker||null;
   var highlightDate=props.highlightDate||null;
@@ -9071,9 +9075,11 @@ function DraftLibrary(props){
       });
     });
   }
-  /* チャートメモを Firebase から取得 (マウント時1回) */
+  /* チャートメモを Firebase から取得 (ページロード中1回のみ) */
   useEffect(function(){
+    if(_caFbInitDone)return;
     if(!fbCfg||!fbCfg.url||fbCfg.paused)return;
+    _caFbInitDone=true;
     var a=fbCfg.secret?'?auth='+fbCfg.secret:'';
     var base=fbCfg.url.replace(/\/$/,'');
 
