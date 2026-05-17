@@ -8751,25 +8751,36 @@ function NotepadPage(props){
       body:JSON.stringify({updatedAt:ut})}).catch(function(){});
   }
 
-  /* マウント時: バージョン確認 → リモートが新しければ全件取得 */
+  /* マウント時: バージョン確認 → 双方向マージ */
   useEffect(function(){
     if(!fbCfg||!fbCfg.url||fbCfg.paused)return;
     var a=fbCfg.secret?'?auth='+fbCfg.secret:'';
     var base=fbCfg.url.replace(/\/$/,'');
     var localUt=npLoadUt();
+    var localEntries=npLoadEntries();
     fetch(base+'/ca-notepad-v.json'+a)
       .then(function(r){return r.ok?r.json():null;})
       .then(function(v){
-        if(!v||typeof v.updatedAt!=='number')return;
-        if(v.updatedAt<=localUt)return;
-        return fetch(base+'/ca-notepad.json'+a)
-          .then(function(r){return r.ok?r.json():null;})
-          .then(function(d){
-            if(!d||!Array.isArray(d.entries))return;
-            npSaveEntries(d.entries);
-            npSaveUt(d.updatedAt||v.updatedAt);
-            setEntries(d.entries);
-          });
+        var remUt=(v&&typeof v.updatedAt==='number')?v.updatedAt:0;
+        if(remUt>localUt){
+          /* リモートが新しい → ダウンロード */
+          return fetch(base+'/ca-notepad.json'+a)
+            .then(function(r){return r.ok?r.json():null;})
+            .then(function(d){
+              if(!d||!Array.isArray(d.entries))return;
+              npSaveEntries(d.entries);
+              npSaveUt(d.updatedAt||remUt);
+              setEntries(d.entries);
+            });
+        } else if(localEntries.length>0){
+          /* ローカルが同等以上、またはリモートなし → アップロード */
+          var ut=localUt||Date.now();
+          npSaveUt(ut);
+          fetch(base+'/ca-notepad.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({entries:localEntries,updatedAt:ut})}).catch(function(){});
+          fetch(base+'/ca-notepad-v.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({updatedAt:ut})}).catch(function(){});
+        }
       }).catch(function(){});
   },[]);
 
@@ -9096,37 +9107,47 @@ function DraftLibrary(props){
         caSaveChartMemos(local);
       }).catch(function(){});
 
-    /* タグ定義: バージョン確認 → 差分時のみ全件取得 */
+    /* タグ定義: バージョン確認 → 双方向マージ */
     var localDefsUt=0;
-    try{var _td=JSON.parse(localStorage.getItem('ca_tag_defs_ut_v1')||'0');if(typeof _td==='number')localDefsUt=_td;}catch(e){}
+    try{var _td=parseInt(localStorage.getItem('ca_tag_defs_ut_v1')||'0',10);if(!isNaN(_td))localDefsUt=_td;}catch(e){}
+    var localDefs=caLoadTagDefs();
     fetch(base+'/ca-tag-defs-v.json'+a)
       .then(function(r){return r.ok?r.json():null;})
       .then(function(v){
-        if(!v||typeof v.updatedAt!=='number')return;
-        if(v.updatedAt<=localDefsUt)return;
-        return fetch(base+'/ca-tag-defs.json'+a)
-          .then(function(r){return r.ok?r.json():null;})
-          .then(function(d){
-            if(!d||!Array.isArray(d.defs))return;
-            /* リモートが新しければ上書き */
-            caSaveTagDefs(d.defs);
-            try{localStorage.setItem('ca_tag_defs_ut_v1',JSON.stringify(d.updatedAt||v.updatedAt));}catch(e){}
-          });
+        var remUt=(v&&typeof v.updatedAt==='number')?v.updatedAt:0;
+        if(remUt>localDefsUt){
+          /* リモートが新しい → ダウンロード */
+          return fetch(base+'/ca-tag-defs.json'+a)
+            .then(function(r){return r.ok?r.json():null;})
+            .then(function(d){
+              if(!d||!Array.isArray(d.defs))return;
+              caSaveTagDefs(d.defs);
+              try{localStorage.setItem('ca_tag_defs_ut_v1',String(d.updatedAt||remUt));}catch(e){}
+            });
+        } else if(localDefs.length>0){
+          /* ローカルが同等以上、またはリモートなし → アップロード */
+          var ut=localDefsUt||Date.now();
+          try{localStorage.setItem('ca_tag_defs_ut_v1',String(ut));}catch(e){}
+          fetch(base+'/ca-tag-defs.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({defs:localDefs,updatedAt:ut})}).catch(function(){});
+          fetch(base+'/ca-tag-defs-v.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({updatedAt:ut})}).catch(function(){});
+        }
       }).catch(function(){});
 
-    /* チャートタグ割り当て一括取得 */
+    /* チャートタグ割り当て: 双方向マージ */
     fetch(base+'/ca-chart-tags.json'+a)
       .then(function(r){return r.ok?r.json():null;})
       .then(function(d){
-        if(!d||typeof d!=='object')return;
+        var remMap=d&&typeof d==='object'?d:{};
         var localMap=caLoadTagMap();
-        Object.keys(d).forEach(function(id){
-          var v=d[id];
+        /* リモート → ローカル (リモートが新しい場合) */
+        Object.keys(remMap).forEach(function(id){
+          var v=remMap[id];
           if(v&&Array.isArray(v.tagIds)){
             var lid=decodeURIComponent(id);
-            /* リモートが新しい場合のみ上書き */
             var remUt=v.updatedAt||0;
-            var locUt=(localMap['__ut_'+lid])||0;
+            var locUt=localMap['__ut_'+lid]||0;
             if(remUt>=locUt){
               if(v.tagIds.length)localMap[lid]=v.tagIds; else delete localMap[lid];
               localMap['__ut_'+lid]=remUt;
@@ -9134,6 +9155,22 @@ function DraftLibrary(props){
           }
         });
         caSaveTagMap(localMap);
+        /* ローカル → リモート (ローカルのみ or ローカルが新しい) */
+        Object.keys(localMap).forEach(function(lid){
+          if(lid.indexOf('__ut_')===0)return;
+          var tags=localMap[lid];
+          if(!Array.isArray(tags)||!tags.length)return;
+          var locUt=localMap['__ut_'+lid]||0;
+          var remEntry=remMap[encodeURIComponent(lid)]||remMap[lid];
+          var remUt=(remEntry&&remEntry.updatedAt)||0;
+          if(locUt>remUt||!remEntry){
+            var ut=locUt||Date.now();
+            fetch(base+'/ca-chart-tags/'+encodeURIComponent(lid)+'.json'+a,{
+              method:'PUT',headers:{'Content-Type':'application/json'},
+              body:JSON.stringify({tagIds:tags,updatedAt:ut})
+            }).catch(function(){});
+          }
+        });
       }).catch(function(){});
   },[]);
 
