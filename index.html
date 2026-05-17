@@ -7966,10 +7966,8 @@ function CaTagSelector(props){
       var isEditingColor=editColorId===d.id;
       var isDragOver=dragOverIdx===idx;
       return ce('div',{key:d.id,
-          draggable:true,
-          onDragStart:function(e){dragRef.current.src=idx;e.dataTransfer.effectAllowed='move';},
           onDragOver:function(e){e.preventDefault();e.dataTransfer.dropEffect='move';if(dragOverIdx!==idx)setDragOverIdx(idx);},
-          onDragLeave:function(){setDragOverIdx(null);},
+          onDragLeave:function(e){if(!e.currentTarget.contains(e.relatedTarget))setDragOverIdx(null);},
           onDrop:function(e){
             e.preventDefault();
             var src=dragRef.current.src;
@@ -7983,8 +7981,11 @@ function CaTagSelector(props){
             borderTop:isDragOver?'2px solid #6366f1':'2px solid transparent',
             transition:'border-top-color .1s'}},
 
-        /* ドラッグハンドル */
-        ce('span',{title:'ドラッグして並び替え',
+        /* ドラッグハンドル (ここだけ draggable) */
+        ce('span',{
+          draggable:true,
+          onDragStart:function(e){dragRef.current.src=idx;e.dataTransfer.effectAllowed='move';e.stopPropagation();},
+          title:'ドラッグして並び替え',
           style:{cursor:'grab',color:'#555',fontSize:13,flexShrink:0,
             lineHeight:1,userSelect:'none',paddingRight:1}},'☰'),
 
@@ -10181,6 +10182,12 @@ function DraftLibrary(props){
           background:showImport?"#1e3a5f":"#2a2a2a",
           color:showImport?"#93c5fd":"#888",
           padding:"7px 12px",borderRadius:8,whiteSpace:"nowrap",flexShrink:0})},"📥 一括インポート"),
+      /* メモ帳ボタン */
+      ce("button",{onClick:function(){onOpenNotepad();},
+        style:Object.assign({},BT,{fontSize:13,fontWeight:700,
+          background:"#14532d",color:"#86efac",
+          padding:"7px 12px",borderRadius:8,whiteSpace:"nowrap",flexShrink:0})},
+        "📝 メモ帳"),
       ce("button",{onClick:function(){setShowTrash(function(v){return !v;});setShowSearch(false);setShowImport(false);},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,
           background:showTrash?"#431407":"#2a2a2a",
@@ -10205,12 +10212,6 @@ function DraftLibrary(props){
           background:"#2a2a2a",color:"#a5b4fc",
           padding:"7px 12px",borderRadius:8,whiteSpace:"nowrap",flexShrink:0})},
         "📊 各種設定"),
-      /* メモ帳ボタン */
-      ce("button",{onClick:function(){onOpenNotepad();},
-        style:Object.assign({},BT,{fontSize:13,fontWeight:700,
-          background:"#14532d",color:"#86efac",
-          padding:"7px 12px",borderRadius:8,whiteSpace:"nowrap",flexShrink:0})},
-        "📝 メモ帳"),
       !showTrash&&ce("button",{onClick:function(){setAdding(true);setTimeout(function(){inputRef.current&&inputRef.current.focus();},50);},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,background:"#2563eb",
           color:"#fff",padding:"7px 14px",borderRadius:8,whiteSpace:"nowrap",flexShrink:0})},
