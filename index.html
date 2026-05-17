@@ -7849,89 +7849,14 @@ function _caMemoHasContent(html){
 }
 
 /* ── CaTagSelector: タグ選択・管理パネル (カラーピッカー対応) ── */
+/* ─── CaTagSelector: チャートへのタグ付けのみ (管理はTagManagerPageで) ─── */
 function CaTagSelector(props){
-  var chartId=props.chartId;
   var selectedIds=props.selectedIds||[];
   var onChangeTags=props.onChangeTags;
   var onClose=props.onClose;
-  var fbCfg=props.fbCfg||{};
 
   var sDefs=useState(function(){return caLoadTagDefs();});
-  var defs=sDefs[0],setDefs=sDefs[1];
-  var sNewName=useState(''); var newName=sNewName[0],setNewName=sNewName[1];
-  var sRenId=useState(null); var renId=sRenId[0],setRenId=sRenId[1];
-  var sRenTxt=useState(''); var renTxt=sRenTxt[0],setRenTxt=sRenTxt[1];
-  var newInputRef=useRef(null);
-  /* ドラッグ並び替え */
-  var dragRef=useRef({src:null});
-  var sDO=useState(null); var dragOverIdx=sDO[0],setDragOverIdx=sDO[1];
-
-  /* カラーピッカー用 state */
-  var sCE=useState(null); var editColorId=sCE[0],setEditColorId=sCE[1];
-  /* タグ用クイックカラー (localStorage 永続) */
-  var sTQC=useState(function(){
-    try{var v=JSON.parse(localStorage.getItem('ca_tag_qc_v1'));if(v&&v.length)return v;}catch(e){}
-    return CA_TAG_COLORS.slice();
-  }); var tagQC=sTQC[0],setTagQC=sTQC[1];
-  function saveTagQC(qc){setTagQC(qc);try{localStorage.setItem('ca_tag_qc_v1',JSON.stringify(qc));}catch(e){}}
-  /* タグ用カラー履歴 */
-  var sTCH=useState(function(){
-    try{var v=JSON.parse(localStorage.getItem('ca_tag_ch_v1'));if(v&&v.length)return v;}catch(e){}
-    return [];
-  }); var tagCH=sTCH[0],setTagCH=sTCH[1];
-  function pushTagCH(c){
-    var nh=[c].concat(tagCH.filter(function(x){return x!==c;})).slice(0,16);
-    setTagCH(nh);try{localStorage.setItem('ca_tag_ch_v1',JSON.stringify(nh));}catch(e){}
-  }
-
-  function saveDefs(arr){
-    caSaveTagDefs(arr);setDefs(arr);
-    if(fbCfg&&fbCfg.url&&!fbCfg.paused){
-      var a=fbCfg.secret?'?auth='+fbCfg.secret:'';
-      var base=fbCfg.url.replace(/\/$/,'');
-      var ut=Date.now();
-      /* ローカルタイムスタンプを更新 → 次回マウント時の不要な再取得を防ぐ */
-      try{localStorage.setItem('ca_tag_defs_ut_v1',String(ut));}catch(e){}
-      fetch(base+'/ca-tag-defs.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({defs:arr,updatedAt:ut})}).catch(function(){});
-      fetch(base+'/ca-tag-defs-v.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({updatedAt:ut})}).catch(function(){});
-    }
-  }
-
-  function changeTagColor(id,c){
-    pushTagCH(c);
-    saveDefs(defs.map(function(d){return d.id===id?Object.assign({},d,{color:c}):d;}));
-  }
-
-  function createTag(){
-    var n=newName.trim();
-    if(!n)return;
-    var color=CA_TAG_COLORS[defs.length%CA_TAG_COLORS.length];
-    saveDefs(defs.concat([{id:caNewTagId(),name:n,color:color}]));
-    setNewName('');
-    if(newInputRef.current)newInputRef.current.focus();
-  }
-
-  function deleteTag(id){
-    if(editColorId===id)setEditColorId(null);
-    saveDefs(defs.filter(function(d){return d.id!==id;}));
-    var newSel=selectedIds.filter(function(x){return x!==id;});
-    if(newSel.length!==selectedIds.length)onChangeTags(newSel);
-    var map=caLoadTagMap();
-    Object.keys(map).forEach(function(cid){
-      map[cid]=map[cid].filter(function(x){return x!==id;});
-      if(!map[cid].length)delete map[cid];
-    });
-    caSaveTagMap(map);
-  }
-
-  function startRename(id,name){setRenId(id);setRenTxt(name);}
-  function commitRename(id){
-    var n=renTxt.trim();
-    if(n)saveDefs(defs.map(function(d){return d.id===id?Object.assign({},d,{name:n}):d;}));
-    setRenId(null);setRenTxt('');
-  }
+  var defs=sDefs[0];
 
   function toggleTag(id){
     var newSel=selectedIds.indexOf(id)>=0
@@ -7942,150 +7867,203 @@ function CaTagSelector(props){
 
   var BS3={border:'none',background:'none',cursor:'pointer',fontFamily:'inherit',padding:0};
 
-  /* カラーピッカー表示中のタグ定義 */
-  var editColorDef=editColorId?defs.find(function(d){return d.id===editColorId;})||null:null;
-
   return ce('div',{style:{background:'#1a1a1a',borderRadius:6},
       onClick:function(e){e.stopPropagation();}},
-
     /* ヘッダー */
     ce('div',{style:{display:'flex',justifyContent:'space-between',
         alignItems:'center',marginBottom:8}},
-      ce('span',{style:{fontSize:11,fontWeight:700,color:'#aaa'}},'🏷 タグ管理'),
+      ce('span',{style:{fontSize:11,fontWeight:700,color:'#aaa'}},'🏷 タグ'),
       ce('button',{style:Object.assign({},BS3,{fontSize:13,color:'#555',lineHeight:1}),
         onClick:onClose},'✕')
     ),
-
-    /* タグ一覧: コンテナで onDragOver→preventDefault して "禁止マーク" を消す */
-    ce('div',{onDragOver:function(e){e.preventDefault();}},
-      defs.length===0
-        ?ce('div',{style:{fontSize:11,color:'#555',marginBottom:8,padding:'2px 0'}},
-            'タグがまだありません')
-        :null,
-      defs.map(function(d,idx){
-        var sel=selectedIds.indexOf(d.id)>=0;
-        var isEditingColor=editColorId===d.id;
-        var isDragOver=dragOverIdx===idx;
-        return ce('div',{key:d.id,
-            onDragEnter:function(e){e.preventDefault();setDragOverIdx(idx);},
-            onDrop:function(e){
-              e.preventDefault();
-              var src=dragRef.current.src;
-              dragRef.current.src=null;setDragOverIdx(null);
-              if(src===null||src===idx)return;
-              var next=defs.slice();next.splice(idx,0,next.splice(src,1)[0]);
-              saveDefs(next);
-            },
-            style:{display:'flex',alignItems:'center',gap:5,marginBottom:5,
-              borderTop:isDragOver?'2px solid #6366f1':'2px solid transparent',
-              transition:'border-top-color .1s'}},
-
-          /* ドラッグハンドル */
-          ce('span',{
-            draggable:true,
-            onDragStart:function(e){dragRef.current.src=idx;e.dataTransfer.effectAllowed='move';},
-            onDragEnd:function(){dragRef.current.src=null;setDragOverIdx(null);},
-            title:'ドラッグして並び替え',
-            style:{cursor:'grab',color:'#555',fontSize:13,flexShrink:0,
-              lineHeight:1,userSelect:'none',paddingRight:1}},'☰'),
-
-          /* 選択チェック（色付きボックス） */
-          ce('div',{
-            onClick:function(){toggleTag(d.id);},
-            title:sel?'選択解除':'選択',
-            style:{width:14,height:14,borderRadius:3,flexShrink:0,cursor:'pointer',
+    /* タグ一覧 (選択のみ) */
+    defs.length===0
+      ?ce('div',{style:{fontSize:11,color:'#555',padding:'4px 0'}},
+          'タグなし。ホーム画面「タグ管理」から追加できます。')
+      :defs.map(function(d){
+          var sel=selectedIds.indexOf(d.id)>=0;
+          return ce('div',{key:d.id,
+              onClick:function(){toggleTag(d.id);},
+              style:{display:'flex',alignItems:'center',gap:6,marginBottom:6,cursor:'pointer'}},
+            ce('div',{style:{width:13,height:13,borderRadius:3,flexShrink:0,
               background:sel?d.color:'transparent',
               border:'2px solid '+(sel?d.color:'#555'),
-              transition:'background .12s,border-color .12s'}
-          }),
+              transition:'background .12s,border-color .12s'}}),
+            ce('div',{style:{width:9,height:9,borderRadius:'50%',flexShrink:0,
+              background:d.color,boxShadow:'0 1px 3px rgba(0,0,0,.5)'}}),
+            ce('span',{style:{flex:1,fontSize:11,color:sel?'#eee':'#888',
+              overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},
+              d.name)
+          );
+        })
+  );
+}
 
-          /* カラードット (クリックでカラーピッカー開閉) */
-          ce('button',{
-            title:'色を変更',
-            onClick:function(){setEditColorId(isEditingColor?null:d.id);},
-            style:Object.assign({},BS3,{
-              width:16,height:16,borderRadius:'50%',flexShrink:0,
-              background:d.color,
-              outline:isEditingColor?'2px solid #fff':'none',
-              outlineOffset:'1px',
-              boxShadow:'0 1px 3px rgba(0,0,0,.5)',
-              transition:'outline .1s'
+/* ─── TagManagerPage: タグの追加・削除・名前変更・色変更・順番入れ替え ─── */
+function TagManagerPage(props){
+  var onClose=props.onClose;
+  var fbCfg=props.fbCfg||{};
+
+  var sDefs=useState(function(){return caLoadTagDefs();}); var defs=sDefs[0],setDefs=sDefs[1];
+  var sNN=useState(''); var newName=sNN[0],setNewName=sNN[1];
+  var sRenId=useState(null); var renId=sRenId[0],setRenId=sRenId[1];
+  var sRenTxt=useState(''); var renTxt=sRenTxt[0],setRenTxt=sRenTxt[1];
+  var sCE=useState(null); var editColorId=sCE[0],setEditColorId=sCE[1];
+  var sTQC=useState(function(){try{var v=JSON.parse(localStorage.getItem('ca_tag_qc_v1'));if(v&&v.length)return v;}catch(e){}return CA_TAG_COLORS.slice();}); var tagQC=sTQC[0],setTagQC=sTQC[1];
+  var sTCH=useState(function(){try{var v=JSON.parse(localStorage.getItem('ca_tag_ch_v1'));if(v&&v.length)return v;}catch(e){}return [];}); var tagCH=sTCH[0],setTagCH=sTCH[1];
+  var newInputRef=useRef(null);
+  var dragRef=useRef({src:null});
+  var sDO=useState(null); var dragOverIdx=sDO[0],setDragOverIdx=sDO[1];
+
+  useEffect(function(){
+    function onBack(){onClose();}
+    window.addEventListener('ca_back',onBack);
+    return function(){window.removeEventListener('ca_back',onBack);};
+  },[]);
+
+  function saveTagQC(qc){setTagQC(qc);try{localStorage.setItem('ca_tag_qc_v1',JSON.stringify(qc));}catch(e){}}
+  function pushTagCH(c){var nh=[c].concat(tagCH.filter(function(x){return x!==c;})).slice(0,16);setTagCH(nh);try{localStorage.setItem('ca_tag_ch_v1',JSON.stringify(nh));}catch(e){}}
+
+  function saveDefs(arr){
+    caSaveTagDefs(arr);setDefs(arr);
+    if(fbCfg&&fbCfg.url&&!fbCfg.paused){
+      var a=fbCfg.secret?'?auth='+fbCfg.secret:'';
+      var base=fbCfg.url.replace(/\/$/,'');
+      var ut=Date.now();
+      try{localStorage.setItem('ca_tag_defs_ut_v1',String(ut));}catch(e){}
+      fetch(base+'/ca-tag-defs.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({defs:arr,updatedAt:ut})}).catch(function(){});
+      fetch(base+'/ca-tag-defs-v.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({updatedAt:ut})}).catch(function(){});
+    }
+  }
+
+  function createTag(){
+    var n=newName.trim();if(!n)return;
+    var color=CA_TAG_COLORS[defs.length%CA_TAG_COLORS.length];
+    saveDefs(defs.concat([{id:caNewTagId(),name:n,color:color}]));
+    setNewName('');if(newInputRef.current)newInputRef.current.focus();
+  }
+  function deleteTag(id){
+    window.caConfirm('タグ「'+((defs.find(function(d){return d.id===id;})||{}).name||'')+'」を削除しますか？',function(){
+      saveDefs(defs.filter(function(d){return d.id!==id;}));
+      var map=caLoadTagMap();
+      Object.keys(map).forEach(function(cid){
+        if(cid.indexOf('__ut_')===0)return;
+        map[cid]=(map[cid]||[]).filter(function(x){return x!==id;});
+        if(!map[cid].length)delete map[cid];
+      });
+      caSaveTagMap(map);
+    },null,{yesLabel:'削除',noLabel:'キャンセル',danger:true});
+  }
+  function changeTagColor(id,c){pushTagCH(c);saveDefs(defs.map(function(d){return d.id===id?Object.assign({},d,{color:c}):d;}));}
+  function startRename(id,name){setRenId(id);setRenTxt(name);}
+  function commitRename(id){
+    var n=renTxt.trim();
+    if(n)saveDefs(defs.map(function(d){return d.id===id?Object.assign({},d,{name:n}):d;}));
+    setRenId(null);setRenTxt('');
+  }
+
+  var BS3={border:'none',background:'none',cursor:'pointer',fontFamily:'inherit',padding:0};
+  var editColorDef=editColorId?defs.find(function(d){return d.id===editColorId;})||null:null;
+
+  return ce('div',{style:{position:'fixed',inset:0,background:'#111',color:'#fff',
+    display:'flex',flexDirection:'column',zIndex:100,overflow:'hidden'}},
+    /* ヘッダー */
+    ce('div',{style:{display:'flex',alignItems:'center',gap:8,
+      padding:'10px 14px',background:'#1a1a1a',borderBottom:'1px solid #2a2a2a',flexShrink:0}},
+      ce('button',{onClick:onClose,
+        style:{padding:'7px 12px',fontSize:13,fontWeight:700,
+          background:'#2a2a2a',color:'#aaa',border:'1px solid #333',
+          borderRadius:8,cursor:'pointer',minHeight:IS_TOUCH?40:32}},'← 戻る'),
+      ce('div',{style:{flex:1,fontSize:16,fontWeight:700,color:'#fff',textAlign:'center'}},'🏷 タグ管理')
+    ),
+    /* タグ一覧 + 入力欄 */
+    ce('div',{style:{flex:1,overflowY:'auto',padding:'12px 14px',display:'flex',flexDirection:'column',gap:0}},
+      /* ドラッグ対応コンテナ */
+      ce('div',{onDragOver:function(e){e.preventDefault();}},
+        defs.length===0
+          ?ce('div',{style:{textAlign:'center',color:'#444',fontSize:14,marginTop:60,lineHeight:2.2}},
+              ce('div',{style:{fontSize:40,marginBottom:8}},'🏷'),
+              ce('div',null,'タグがありません'),
+              ce('div',{style:{fontSize:12,color:'#333'}},'下の入力欄から追加できます'))
+          :defs.map(function(d,idx){
+              var isEditingColor=editColorId===d.id;
+              var isDragOver=dragOverIdx===idx;
+              return ce('div',{key:d.id,
+                  onDragEnter:function(e){e.preventDefault();setDragOverIdx(idx);},
+                  onDrop:function(e){
+                    e.preventDefault();
+                    var src=dragRef.current.src;
+                    dragRef.current.src=null;setDragOverIdx(null);
+                    if(src===null||src===idx)return;
+                    var next=defs.slice();next.splice(idx,0,next.splice(src,1)[0]);
+                    saveDefs(next);
+                  },
+                  style:{background:'#1a1a1a',
+                    border:'1px solid '+(isDragOver?'#6366f1':'#2a2a2a'),
+                    borderRadius:8,marginBottom:6,padding:'9px 12px',
+                    display:'flex',alignItems:'center',gap:8,
+                    transition:'border-color .1s'}},
+                /* ドラッグハンドル */
+                ce('span',{draggable:true,
+                  onDragStart:function(e){dragRef.current.src=idx;e.dataTransfer.effectAllowed='move';},
+                  onDragEnd:function(){dragRef.current.src=null;setDragOverIdx(null);},
+                  title:'ドラッグして並び替え',
+                  style:{cursor:'grab',color:'#555',fontSize:15,userSelect:'none',flexShrink:0}},'☰'),
+                /* カラードット */
+                ce('button',{onClick:function(){setEditColorId(isEditingColor?null:d.id);},
+                  title:'色を変更',
+                  style:Object.assign({},BS3,{width:20,height:20,borderRadius:'50%',flexShrink:0,
+                    background:d.color,
+                    outline:isEditingColor?'2px solid #fff':'none',outlineOffset:'2px',
+                    boxShadow:'0 1px 4px rgba(0,0,0,.5)'})
+                }),
+                /* タグ名 or リネーム入力 */
+                renId===d.id
+                  ?ce('input',{ref:function(el){if(el)el.focus();},value:renTxt,
+                      onChange:function(e){setRenTxt(e.target.value);},
+                      onKeyDown:function(e){if(e.key==='Enter')commitRename(d.id);if(e.key==='Escape'){setRenId(null);setRenTxt('');}},
+                      onBlur:function(){commitRename(d.id);},
+                      style:{flex:1,background:'#222',border:'1px solid #555',color:'#ddd',
+                        fontSize:13,borderRadius:5,padding:'4px 8px',outline:'none'}})
+                  :ce('span',{onDoubleClick:function(){startRename(d.id,d.name);},
+                      title:'ダブルクリックで名前変更',
+                      style:{flex:1,fontSize:13,color:'#ddd',cursor:'default',
+                        overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},d.name),
+                /* リネームボタン */
+                renId!==d.id&&ce('button',{onClick:function(){startRename(d.id,d.name);},title:'名前変更',
+                  style:Object.assign({},BS3,{fontSize:11,color:'#555',lineHeight:1,flexShrink:0})},
+                  ce('span',{style:{display:'inline-block',transform:'rotate(-45deg)'}},'✏')),
+                /* 削除ボタン */
+                ce('button',{onClick:function(){deleteTag(d.id);},title:'削除',
+                  style:Object.assign({},BS3,{color:'#ef4444',fontSize:16,lineHeight:1,flexShrink:0,marginLeft:2})},'×')
+              );
             })
-          }),
-
-          /* タグ名 or リネーム入力 */
-          renId===d.id
-            ?ce('input',{
-                ref:function(el){if(el)el.focus();},
-                value:renTxt,
-                onChange:function(e){setRenTxt(e.target.value);},
-                onKeyDown:function(e){
-                  if(e.key==='Enter')commitRename(d.id);
-                  if(e.key==='Escape'){setRenId(null);setRenTxt('');}
-                },
-                onBlur:function(){commitRename(d.id);},
-                style:{flex:1,background:'#111',border:'1px solid #555',color:'#ddd',
-                  fontSize:11,borderRadius:3,padding:'2px 5px',outline:'none'}
-              })
-            :ce('span',{
-                onDoubleClick:function(){startRename(d.id,d.name);},
-                title:'ダブルクリックで名前変更',
-                style:{flex:1,fontSize:11,color:sel?'#eee':'#888',
-                  overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
-                  cursor:'default'}
-              }, d.name),
-
-          /* リネームボタン */
-          renId!==d.id&&ce('button',{
-            title:'名前変更',
-            onClick:function(){startRename(d.id,d.name);},
-            style:Object.assign({},BS3,{fontSize:10,color:'#555',lineHeight:1,opacity:0.7})
-          },ce('span',{style:{display:'inline-block',transform:'rotate(-45deg)'}},'✏')),
-
-          /* 削除ボタン */
-          ce('button',{
-            title:'削除',
-            onClick:function(){deleteTag(d.id);},
-            style:Object.assign({},BS3,{color:'#ef4444',fontSize:13,lineHeight:1})
-          },'×')
-        );
-      })
-    ),
-
-    /* ── カラーピッカー (選択中のタグの下に展開) ── */
-    editColorDef&&ce('div',{
-        style:{margin:'6px 0',padding:'8px 10px',
-          background:'#111',borderRadius:6,border:'1px solid #2a2a2a'}},
-      ce('div',{style:{fontSize:10,color:'#888',marginBottom:8}},
-        '"'+editColorDef.name+'" の色'),
-      ce(ColorPicker,{
-        value:editColorDef.color,
-        onChange:function(c){changeTagColor(editColorId,c);},
-        history:tagCH,
-        onHistory:pushTagCH,
-        quickColors:tagQC,
-        onQuickColors:saveTagQC
-      })
-    ),
-
-    /* 新規タグ作成行 */
-    ce('div',{style:{display:'flex',gap:4,marginTop:8,paddingTop:8,
+      ),
+      /* カラーピッカー */
+      editColorDef&&ce('div',{style:{margin:'4px 0 8px',padding:'10px 12px',
+        background:'#1a1a1a',borderRadius:8,border:'1px solid #2a2a2a'}},
+        ce('div',{style:{fontSize:11,color:'#888',marginBottom:8}},'"'+editColorDef.name+'" の色'),
+        ce(ColorPicker,{value:editColorDef.color,
+          onChange:function(c){changeTagColor(editColorId,c);},
+          history:tagCH,onHistory:pushTagCH,quickColors:tagQC,onQuickColors:saveTagQC})
+      ),
+      /* 新規タグ追加 */
+      ce('div',{style:{display:'flex',gap:6,marginTop:'auto',paddingTop:12,
         borderTop:'1px solid #2a2a2a'}},
-      ce('input',{
-        ref:newInputRef,
-        type:'text',placeholder:'新しいタグ名…',
-        value:newName,
-        onChange:function(e){setNewName(e.target.value);},
-        onKeyDown:function(e){if(e.key==='Enter')createTag();},
-        style:{flex:1,background:'#111',border:'1px solid #333',color:'#ddd',
-          fontSize:11,borderRadius:4,padding:'4px 7px',outline:'none',minWidth:0}
-      }),
-      ce('button',{
-        onClick:createTag,
-        style:{padding:'4px 10px',fontSize:11,fontWeight:700,
-          background:'#2563eb',border:'none',borderRadius:4,
-          color:'#fff',cursor:'pointer',flexShrink:0}
-      },'追加')
+        ce('input',{ref:newInputRef,type:'text',placeholder:'新しいタグ名…',
+          value:newName,
+          onChange:function(e){setNewName(e.target.value);},
+          onKeyDown:function(e){if(e.key==='Enter')createTag();},
+          style:{flex:1,background:'#1a1a1a',border:'1px solid #333',color:'#ddd',
+            fontSize:13,borderRadius:6,padding:'8px 10px',outline:'none',
+            minHeight:IS_TOUCH?40:32}}),
+        ce('button',{onClick:createTag,
+          style:{padding:'8px 18px',fontSize:13,fontWeight:700,
+            background:'#2563eb',border:'none',borderRadius:6,
+            color:'#fff',cursor:'pointer',flexShrink:0,minHeight:IS_TOUCH?40:32}},'追加')
+      )
     )
   );
 }
@@ -8963,6 +8941,7 @@ function DraftLibrary(props){
   var queryFromEditor=props.queryFromEditor||null;
   var onConsumeQueryFromEditor=props.onConsumeQueryFromEditor||function(){};
   var onOpenNotepad=props.onOpenNotepad||function(){};
+  var onOpenTagManager=props.onOpenTagManager||function(){};
   var s0=useState(caLoadTickers);   var tickers=s0[0],setTickers=s0[1];
   var s1=useState(initialTicker);   var selTicker=s1[0],setSelTicker=s1[1];
   var s2=useState(caLoadMeta);      var meta=s2[0],setMeta=s2[1];
@@ -10189,6 +10168,12 @@ function DraftLibrary(props){
           background:"#14532d",color:"#86efac",
           padding:"7px 12px",borderRadius:8,whiteSpace:"nowrap",flexShrink:0})},
         "📝 メモ帳"),
+      /* タグ管理ボタン */
+      ce("button",{onClick:function(){onOpenTagManager();},
+        style:Object.assign({},BT,{fontSize:13,fontWeight:700,
+          background:"#1e1b4b",color:"#a5b4fc",
+          padding:"7px 12px",borderRadius:8,whiteSpace:"nowrap",flexShrink:0})},
+        "🏷 タグ管理"),
       ce("button",{onClick:function(){setShowTrash(function(v){return !v;});setShowSearch(false);setShowImport(false);},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,
           background:showTrash?"#431407":"#2a2a2a",
@@ -10883,6 +10868,7 @@ function App(){
   /* 2026-04-20: 表示・動作設定モーダル */
   var sDS=useState(false); var showDisplaySettings=sDS[0],setShowDisplaySettings=sDS[1];
   var sNP=useState(false); var showNotepad=sNP[0],setShowNotepad=sNP[1];
+  var sTM=useState(false); var showTagManager=sTM[0],setShowTagManager=sTM[1];
   var s4=useState(function(){try{return sessionStorage.getItem('ca_screen')==='drafts';}catch(e){return false;}}); var showDrafts=s4[0],setShowDrafts=s4[1];
   var s5=useState(function(){try{return sessionStorage.getItem('ca_draftTicker')||null;}catch(e){return null;}}); var draftInitTicker=s5[0],setDraftInitTicker=s5[1];
   /* 2026-04-20: URLパラメータ経由で指定された日付 (DraftLibrary で該当チャートをハイライト) */
@@ -10984,6 +10970,9 @@ function App(){
     return function(){window.removeEventListener('popstate',onPopState);};
   },[]);
 
+  if(showTagManager){
+    return ce(TagManagerPage,{onClose:function(){setShowTagManager(false);},fbCfg:fbCfg});
+  }
   if(showNotepad){
     return ce(NotepadPage,{onClose:function(){setShowNotepad(false);},fbCfg:fbCfg});
   }
@@ -11024,7 +11013,8 @@ function App(){
       /* 2026-04-30: C - エディタから「似た形検索」で起動された時のクエリ draft id */
       queryFromEditor:queryFromEditor,
       onConsumeQueryFromEditor:function(){setQueryFromEditor(null);},
-      onOpenNotepad:function(){setShowNotepad(true);}
+      onOpenNotepad:function(){setShowNotepad(true);},
+      onOpenTagManager:function(){setShowTagManager(true);}
     }),
     /* Firebase設定モーダル */
     showFbSettings&&ce(FbSettingsModal,{
