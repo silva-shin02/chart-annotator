@@ -7956,100 +7956,101 @@ function CaTagSelector(props){
         onClick:onClose},'✕')
     ),
 
-    /* タグ一覧 */
-    defs.length===0
-      ?ce('div',{style:{fontSize:11,color:'#555',marginBottom:8,padding:'2px 0'}},
-          'タグがまだありません')
-      :null,
-    defs.map(function(d,idx){
-      var sel=selectedIds.indexOf(d.id)>=0;
-      var isEditingColor=editColorId===d.id;
-      var isDragOver=dragOverIdx===idx;
-      return ce('div',{key:d.id,
-          onDragOver:function(e){e.preventDefault();e.dataTransfer.dropEffect='move';if(dragOverIdx!==idx)setDragOverIdx(idx);},
-          onDragLeave:function(e){if(!e.currentTarget.contains(e.relatedTarget))setDragOverIdx(null);},
-          onDrop:function(e){
-            e.preventDefault();
-            var src=dragRef.current.src;
-            dragRef.current.src=null;setDragOverIdx(null);
-            if(src===null||src===idx)return;
-            var next=defs.slice();next.splice(idx,0,next.splice(src,1)[0]);
-            saveDefs(next);
-          },
-          onDragEnd:function(){dragRef.current.src=null;setDragOverIdx(null);},
-          style:{display:'flex',alignItems:'center',gap:5,marginBottom:5,
-            borderTop:isDragOver?'2px solid #6366f1':'2px solid transparent',
-            transition:'border-top-color .1s'}},
+    /* タグ一覧: コンテナで onDragOver→preventDefault して "禁止マーク" を消す */
+    ce('div',{onDragOver:function(e){e.preventDefault();}},
+      defs.length===0
+        ?ce('div',{style:{fontSize:11,color:'#555',marginBottom:8,padding:'2px 0'}},
+            'タグがまだありません')
+        :null,
+      defs.map(function(d,idx){
+        var sel=selectedIds.indexOf(d.id)>=0;
+        var isEditingColor=editColorId===d.id;
+        var isDragOver=dragOverIdx===idx;
+        return ce('div',{key:d.id,
+            onDragEnter:function(e){e.preventDefault();setDragOverIdx(idx);},
+            onDrop:function(e){
+              e.preventDefault();
+              var src=dragRef.current.src;
+              dragRef.current.src=null;setDragOverIdx(null);
+              if(src===null||src===idx)return;
+              var next=defs.slice();next.splice(idx,0,next.splice(src,1)[0]);
+              saveDefs(next);
+            },
+            style:{display:'flex',alignItems:'center',gap:5,marginBottom:5,
+              borderTop:isDragOver?'2px solid #6366f1':'2px solid transparent',
+              transition:'border-top-color .1s'}},
 
-        /* ドラッグハンドル (ここだけ draggable) */
-        ce('span',{
-          draggable:true,
-          onDragStart:function(e){dragRef.current.src=idx;e.dataTransfer.effectAllowed='move';e.stopPropagation();},
-          title:'ドラッグして並び替え',
-          style:{cursor:'grab',color:'#555',fontSize:13,flexShrink:0,
-            lineHeight:1,userSelect:'none',paddingRight:1}},'☰'),
+          /* ドラッグハンドル */
+          ce('span',{
+            draggable:true,
+            onDragStart:function(e){dragRef.current.src=idx;e.dataTransfer.effectAllowed='move';},
+            onDragEnd:function(){dragRef.current.src=null;setDragOverIdx(null);},
+            title:'ドラッグして並び替え',
+            style:{cursor:'grab',color:'#555',fontSize:13,flexShrink:0,
+              lineHeight:1,userSelect:'none',paddingRight:1}},'☰'),
 
-        /* 選択チェック（色付きボックス） */
-        ce('div',{
-          onClick:function(){toggleTag(d.id);},
-          title:sel?'選択解除':'選択',
-          style:{width:14,height:14,borderRadius:3,flexShrink:0,cursor:'pointer',
-            background:sel?d.color:'transparent',
-            border:'2px solid '+(sel?d.color:'#555'),
-            transition:'background .12s,border-color .12s'}
-        }),
+          /* 選択チェック（色付きボックス） */
+          ce('div',{
+            onClick:function(){toggleTag(d.id);},
+            title:sel?'選択解除':'選択',
+            style:{width:14,height:14,borderRadius:3,flexShrink:0,cursor:'pointer',
+              background:sel?d.color:'transparent',
+              border:'2px solid '+(sel?d.color:'#555'),
+              transition:'background .12s,border-color .12s'}
+          }),
 
-        /* カラードット (クリックでカラーピッカー開閉) */
-        ce('button',{
-          title:'色を変更',
-          onClick:function(){setEditColorId(isEditingColor?null:d.id);},
-          style:Object.assign({},BS3,{
-            width:16,height:16,borderRadius:'50%',flexShrink:0,
-            background:d.color,
-            outline:isEditingColor?'2px solid #fff':'none',
-            outlineOffset:'1px',
-            boxShadow:'0 1px 3px rgba(0,0,0,.5)',
-            transition:'outline .1s'
-          })
-        }),
-
-        /* タグ名 or リネーム入力 */
-        renId===d.id
-          ?ce('input',{
-              ref:function(el){if(el)el.focus();},
-              value:renTxt,
-              onChange:function(e){setRenTxt(e.target.value);},
-              onKeyDown:function(e){
-                if(e.key==='Enter')commitRename(d.id);
-                if(e.key==='Escape'){setRenId(null);setRenTxt('');}
-              },
-              onBlur:function(){commitRename(d.id);},
-              style:{flex:1,background:'#111',border:'1px solid #555',color:'#ddd',
-                fontSize:11,borderRadius:3,padding:'2px 5px',outline:'none'}
+          /* カラードット (クリックでカラーピッカー開閉) */
+          ce('button',{
+            title:'色を変更',
+            onClick:function(){setEditColorId(isEditingColor?null:d.id);},
+            style:Object.assign({},BS3,{
+              width:16,height:16,borderRadius:'50%',flexShrink:0,
+              background:d.color,
+              outline:isEditingColor?'2px solid #fff':'none',
+              outlineOffset:'1px',
+              boxShadow:'0 1px 3px rgba(0,0,0,.5)',
+              transition:'outline .1s'
             })
-          :ce('span',{
-              onDoubleClick:function(){startRename(d.id,d.name);},
-              title:'ダブルクリックで名前変更',
-              style:{flex:1,fontSize:11,color:sel?'#eee':'#888',
-                overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
-                cursor:'default'}
-            }, d.name),
+          }),
 
-        /* リネームボタン */
-        renId!==d.id&&ce('button',{
-          title:'名前変更',
-          onClick:function(){startRename(d.id,d.name);},
-          style:Object.assign({},BS3,{fontSize:10,color:'#555',lineHeight:1,opacity:0.7})
-        },ce('span',{style:{display:'inline-block',transform:'rotate(-45deg)'}},'✏')),
+          /* タグ名 or リネーム入力 */
+          renId===d.id
+            ?ce('input',{
+                ref:function(el){if(el)el.focus();},
+                value:renTxt,
+                onChange:function(e){setRenTxt(e.target.value);},
+                onKeyDown:function(e){
+                  if(e.key==='Enter')commitRename(d.id);
+                  if(e.key==='Escape'){setRenId(null);setRenTxt('');}
+                },
+                onBlur:function(){commitRename(d.id);},
+                style:{flex:1,background:'#111',border:'1px solid #555',color:'#ddd',
+                  fontSize:11,borderRadius:3,padding:'2px 5px',outline:'none'}
+              })
+            :ce('span',{
+                onDoubleClick:function(){startRename(d.id,d.name);},
+                title:'ダブルクリックで名前変更',
+                style:{flex:1,fontSize:11,color:sel?'#eee':'#888',
+                  overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
+                  cursor:'default'}
+              }, d.name),
 
-        /* 削除ボタン */
-        ce('button',{
-          title:'削除',
-          onClick:function(){deleteTag(d.id);},
-          style:Object.assign({},BS3,{color:'#ef4444',fontSize:13,lineHeight:1})
-        },'×')
-      );
-    }),
+          /* リネームボタン */
+          renId!==d.id&&ce('button',{
+            title:'名前変更',
+            onClick:function(){startRename(d.id,d.name);},
+            style:Object.assign({},BS3,{fontSize:10,color:'#555',lineHeight:1,opacity:0.7})
+          },ce('span',{style:{display:'inline-block',transform:'rotate(-45deg)'}},'✏')),
+
+          /* 削除ボタン */
+          ce('button',{
+            title:'削除',
+            onClick:function(){deleteTag(d.id);},
+            style:Object.assign({},BS3,{color:'#ef4444',fontSize:13,lineHeight:1})
+          },'×')
+        );
+      })
+    ),
 
     /* ── カラーピッカー (選択中のタグの下に展開) ── */
     editColorDef&&ce('div',{
