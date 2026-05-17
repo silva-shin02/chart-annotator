@@ -7862,6 +7862,9 @@ function CaTagSelector(props){
   var sRenId=useState(null); var renId=sRenId[0],setRenId=sRenId[1];
   var sRenTxt=useState(''); var renTxt=sRenTxt[0],setRenTxt=sRenTxt[1];
   var newInputRef=useRef(null);
+  /* ドラッグ並び替え */
+  var dragRef=useRef({src:null});
+  var sDO=useState(null); var dragOverIdx=sDO[0],setDragOverIdx=sDO[1];
 
   /* カラーピッカー用 state */
   var sCE=useState(null); var editColorId=sCE[0],setEditColorId=sCE[1];
@@ -7958,11 +7961,32 @@ function CaTagSelector(props){
       ?ce('div',{style:{fontSize:11,color:'#555',marginBottom:8,padding:'2px 0'}},
           'タグがまだありません')
       :null,
-    defs.map(function(d){
+    defs.map(function(d,idx){
       var sel=selectedIds.indexOf(d.id)>=0;
       var isEditingColor=editColorId===d.id;
+      var isDragOver=dragOverIdx===idx;
       return ce('div',{key:d.id,
-          style:{display:'flex',alignItems:'center',gap:5,marginBottom:5}},
+          draggable:true,
+          onDragStart:function(e){dragRef.current.src=idx;e.dataTransfer.effectAllowed='move';},
+          onDragOver:function(e){e.preventDefault();e.dataTransfer.dropEffect='move';if(dragOverIdx!==idx)setDragOverIdx(idx);},
+          onDragLeave:function(){setDragOverIdx(null);},
+          onDrop:function(e){
+            e.preventDefault();
+            var src=dragRef.current.src;
+            dragRef.current.src=null;setDragOverIdx(null);
+            if(src===null||src===idx)return;
+            var next=defs.slice();next.splice(idx,0,next.splice(src,1)[0]);
+            saveDefs(next);
+          },
+          onDragEnd:function(){dragRef.current.src=null;setDragOverIdx(null);},
+          style:{display:'flex',alignItems:'center',gap:5,marginBottom:5,
+            borderTop:isDragOver?'2px solid #6366f1':'2px solid transparent',
+            transition:'border-top-color .1s'}},
+
+        /* ドラッグハンドル */
+        ce('span',{title:'ドラッグして並び替え',
+          style:{cursor:'grab',color:'#555',fontSize:13,flexShrink:0,
+            lineHeight:1,userSelect:'none',paddingRight:1}},'☰'),
 
         /* 選択チェック（色付きボックス） */
         ce('div',{

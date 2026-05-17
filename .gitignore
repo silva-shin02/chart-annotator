@@ -1,0 +1,5 @@
+# ローカルバックアップ（GitHubにはアップロードしない）
+*（claude実装前）*
+*.bak
+.claude/
+push.bat
