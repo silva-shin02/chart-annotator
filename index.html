@@ -8088,25 +8088,25 @@ function _snReadCategoriesMap(){
 }
 function caLoadSnEvents(date,cb){
   if(!date){cb([]);return;}
-  if(_snEventsCache[date]!==undefined){cb(_snEventsCache[date]||[]);return;}
-  /* localStorage 優先 */
+  /* localStorage は毎回読み直す（SN編集が即反映されるよう）*/
   try{
     var d=JSON.parse(localStorage.getItem('scalping_data_v6'));
     if(d&&d.trades&&d.trades[date]){
       var evts=Array.isArray(d.trades[date].events)?d.trades[date].events:[];
-      _snEventsCache[date]=evts; cb(evts); return;
+      cb(evts); return;
     }
   }catch(e){}
-  /* Firebase フォールバック */
+  /* Firebase フォールバック（ネットワークリクエストはセッションキャッシュ）*/
+  if(_snEventsCache[date]!==undefined){cb(_snEventsCache[date]||[]);return;}
   var cfg=_snReadCfg();
-  if(!cfg||!cfg.fbUrl||cfg.fbPaused){_snEventsCache[date]=[];cb([]);return;}
+  if(!cfg||!cfg.fbUrl||cfg.fbPaused){cb([]);return;}
   var a=cfg.fbSecret?'?auth='+cfg.fbSecret:'';
   fetch(cfg.fbUrl.replace(/\/$/,'')+'/data/trades/'+date+'/events.json'+a)
     .then(function(r){return r.ok?r.json():null;})
     .then(function(data){
       var evts=Array.isArray(data)?data:(data&&typeof data==='object'?Object.values(data):[]);
       _snEventsCache[date]=evts; cb(evts);
-    }).catch(function(){_snEventsCache[date]=[];cb([]);});
+    }).catch(function(){cb([]);});
 }
 
 /* ── CaChartCard: サムネイルカード + メモ + タグ ── */
