@@ -8068,6 +8068,48 @@ function TagManagerPage(props){
   );
 }
 
+/* ─── Scalping Notebook 予定ローダー ───────────────────────────────
+   同一ブラウザの scalping_data_v6 (localStorage) を優先取得し、
+   なければ scalping_cfg_v2 の Firebase URL から日付単位で取得する。
+   結果はセッション中キャッシュして重複リクエストを防ぐ。           */
+var _snEventsCache={};
+function _snReadCfg(){
+  try{var v=JSON.parse(localStorage.getItem('scalping_cfg_v2'));if(v&&v.fbUrl)return v;}catch(e){}
+  return null;
+}
+function _snReadCategoriesMap(){
+  var map={};
+  try{
+    var v=JSON.parse(localStorage.getItem('scalping_data_v6'));
+    if(v&&Array.isArray(v.categories)){
+      v.categories.forEach(function(c){if(c&&c.id)map[c.id]=c;});
+    }
+  }catch(e){}
+  return map;
+}
+function caLoadSnEvents(date,cb){
+  if(!date){cb([]);return;}
+  if(_snEventsCache[date]!==undefined){cb(_snEventsCache[date]||[]);return;}
+  /* localStorage 優先 */
+  try{
+    var d=JSON.parse(localStorage.getItem('scalping_data_v6'));
+    if(d&&d.trades&&d.trades[date]){
+      var evts=Array.isArray(d.trades[date].events)?d.trades[date].events:[];
+      _snEventsCache[date]=evts; cb(evts); return;
+    }
+  }catch(e){}
+  /* Firebase フォールバック */
+  var cfg=_snReadCfg();
+  if(!cfg||!cfg.fbUrl||cfg.fbPaused){_snEventsCache[date]=[];cb([]);return;}
+  var a=cfg.fbSecret?'?auth='+cfg.fbSecret:'';
+  fetch(cfg.fbUrl.replace(/\/$/,'')+'/data/trades/'+date+'/events.json'+a)
+    .then(function(r){return r.ok?r.json():null;})
+    .then(function(data){
+      var evts=Array.isArray(data)?data:(data&&typeof data==='object'?Object.values(data):[]);
+      _snEventsCache[date]=evts; cb(evts);
+    }).catch(function(){_snEventsCache[date]=[];cb([]);});
+}
+
 /* ── CaChartCard: サムネイルカード + メモ + タグ ── */
 function CaChartCard(props){
   var m=props.m;
@@ -8086,6 +8128,13 @@ function CaChartCard(props){
   /* タグ state */
   var sTO=useState(false); var tagOpen=sTO[0],setTagOpen=sTO[1];
   var sTI=useState(function(){return caGetChartTags(m.id);}); var tagIds=sTI[0],setTagIds=sTI[1];
+
+  /* SN予定 state */
+  var sSNE=useState(null); var snEvents=sSNE[0],setSnEvents=sSNE[1];
+  useEffect(function(){
+    if(!m.analysisDate)return;
+    caLoadSnEvents(m.analysisDate,function(evts){setSnEvents(evts);});
+  },[m.analysisDate]);
 
   function handleSave(h){
     caSetChartMemo(m.id,h);
@@ -8165,6 +8214,32 @@ function CaChartCard(props){
           td.name);
       })
     ),
+
+    /* SN予定 (analysisDate がありイベントがある場合のみ) */
+    snEvents&&snEvents.length>0&&(function(){
+      var catMap=_snReadCategoriesMap();
+      var shown=snEvents.slice(0,5);
+      var rest=snEvents.length-shown.length;
+      return ce('div',{style:{padding:'0 9px 6px 9px',borderTop:'1px solid #222'}},
+        ce('div',{style:{fontSize:9,color:'#555',marginBottom:3,letterSpacing:0.3}},'📅 SNノート予定'),
+        shown.map(function(ev){
+          var cat=catMap[ev.categoryId]||null;
+          return ce('div',{key:ev.id||ev.title,
+            style:{display:'flex',alignItems:'baseline',gap:4,marginBottom:2}},
+            cat&&ce('span',{style:{width:6,height:6,borderRadius:'50%',flexShrink:0,
+              background:cat.color,display:'inline-block',marginBottom:1}}),
+            !cat&&ce('span',{style:{width:6,flexShrink:0}}),
+            ev.startTime&&!ev.allDay
+              ?ce('span',{style:{fontSize:9,color:'#666',flexShrink:0,fontVariantNumeric:'tabular-nums'}},ev.startTime)
+              :ce('span',{style:{fontSize:9,color:'#555',flexShrink:0}},'終日'),
+            ce('span',{style:{fontSize:10,color:'#aaa',flex:1,
+              overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',lineHeight:1.4}},
+              ev.title||'(無題)')
+          );
+        }),
+        rest>0&&ce('div',{style:{fontSize:9,color:'#555',paddingLeft:10}},'他 '+rest+' 件')
+      );
+    })(),
 
     /* アクションボタン行 (メモ・タグ) */
     ce('div',{style:{padding:'0 9px 8px 9px',display:'flex',gap:5,alignItems:'center'}},
