@@ -8081,9 +8081,8 @@ function _snReadCategoriesMap(){
   var map={};
   try{
     var v=JSON.parse(localStorage.getItem('scalping_data_v6'));
-    if(v&&Array.isArray(v.categories)){
-      v.categories.forEach(function(c){if(c&&c.id)map[c.id]=c;});
-    }
+    var cats=(v&&v.custom&&Array.isArray(v.custom.eventCategories))?v.custom.eventCategories:[];
+    cats.forEach(function(c){if(c&&c.id)map[c.id]=c;});
   }catch(e){}
   return map;
 }
@@ -8132,9 +8131,14 @@ function CaChartCard(props){
   /* SN予定 state */
   var sSNE=useState(null); var snEvents=sSNE[0],setSnEvents=sSNE[1];
   useEffect(function(){
-    if(!m.analysisDate)return;
-    caLoadSnEvents(m.analysisDate,function(evts){setSnEvents(evts);});
-  },[m.analysisDate]);
+    var date=m.analysisDate||'';
+    if(!date&&m.name){
+      var nm=m.name.match(/(?:^|[_\-])(\d{4})-(\d{2})-(\d{2})(?:[._\-]|$)/);
+      if(nm)date=nm[1]+'-'+nm[2]+'-'+nm[3];
+    }
+    if(!date)return;
+    caLoadSnEvents(date,function(evts){setSnEvents(evts);});
+  },[m.analysisDate,m.name]);
 
   function handleSave(h){
     caSetChartMemo(m.id,h);
