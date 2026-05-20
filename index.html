@@ -1372,6 +1372,7 @@ function DataChart(props){
   var rafRef=useRef(null);
   var drawRef=useRef({on:false});  // ドラッグ式描画状態 {on, sTM, sP, cTM, cP, pts(freehand用)}
   var ctrlPanRef=useRef(false);    // Ctrl+drag パン状態
+  var bothBtnPanRef=useRef(false); // 左右同時押しドラッグ パン状態
   /* 2026-04-23: 2本指ダブルタップ検出用 — [timestamp, ...]
      (2本指touchstart が 600ms以内に2回 → 消しゴムツール切替) */
   var twoTapHistRef=useRef([]);
@@ -2454,6 +2455,13 @@ function DataChart(props){
       ctrlPanRef.current=true;
       return;
     }
+    // 左右同時押しドラッグ = どのツールでもパン (e.buttons===3: 左1+右2)
+    if(e.buttons===3){
+      panStartRef.current={x:e.clientX,y:e.clientY,uS:view.uS,uE:view.uE,ps:pShift};
+      bothBtnPanRef.current=true;
+      drawRef.current={on:false};
+      return;
+    }
     /* 2026-04-22: text/lasso ツール時のみ既存textをhitしたらeditor overlay扱い
        line/dotted/arrow/rect/circle/marker/freehand/pan/eraser では通常描画/pan動作を優先
        tap (dragなし) → editor open / drag>=3px → text stroke 移動 */
@@ -2848,7 +2856,11 @@ function DataChart(props){
       }
       return;
     }
-    if(drawTool!=='pan'&&!ctrlPanRef.current){panStartRef.current=null;return;}
+    /* 左右同時押し中にもパン継続 */
+    if(e.buttons===3&&!bothBtnPanRef.current&&panStartRef.current){
+      bothBtnPanRef.current=true;
+    }
+    if(drawTool!=='pan'&&!ctrlPanRef.current&&!bothBtnPanRef.current){panStartRef.current=null;return;}
     var rect2=getCanvasRect();
     var padL=40, padR=40;
     var chartW=rect2.width-padL-padR;
@@ -3079,6 +3091,7 @@ function DataChart(props){
     }
     panStartRef.current=null;
     ctrlPanRef.current=false;
+    bothBtnPanRef.current=false;
   }
   // タッチ (iPad/スマホ) - 1本指: 描画、2本指: ピンチズーム＋パン
   function onTouchStart(e){
@@ -3399,6 +3412,7 @@ function DataChart(props){
     onMouseMove:onMouseMove,
     onMouseUp:onMouseUp,
     onMouseLeave:function(){onMouseUp();onChartMouseLeave();},
+    onContextMenu:function(e){e.preventDefault();},
     onTouchStart:onTouchStart,
     onTouchMove:onTouchMove,
     onTouchEnd:onTouchEnd,
