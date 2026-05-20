@@ -2464,6 +2464,7 @@ function DataChart(props){
       drawRef.current={on:false};
       pendingTextReqRef.current=null;  // テキスト/スタンプの pending をキャンセル
       pendingSnipRef.current=null;
+      measureDragRef.current=null;     // 計測の pending をキャンセル
       return;
     }
     /* 2026-04-22: text/lasso ツール時のみ既存textをhitしたらeditor overlay扱い
