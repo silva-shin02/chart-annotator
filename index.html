@@ -4594,6 +4594,63 @@ function ImageAnnotator(props){
     });
     triggerRefAutoSave();
   }
+  /* 前日チャート自動ロード */
+  function loadPrevChart(){
+    var ticker=img._ticker||(analysisData&&analysisData.ticker)||'';
+    var currentId=img._draftId||savedDraftIdRef.current||null;
+    var currentDate=(analysisData&&analysisData.date)||'';
+    if(!ticker){window.caToast('銘柄が設定されていません','info');return;}
+    var allMeta=caLoadMeta();
+    var candidates=allMeta.filter(function(m){
+      return m.ticker===ticker&&m.id!==currentId;
+    });
+    if(candidates.length===0){window.caToast('同銘柄の他のチャートがありません','info');return;}
+    /* analysisDate 降順ソート (ない場合は name 降順) */
+    candidates.sort(function(a,b){
+      var da=a.analysisDate||a.name||'';
+      var db=b.analysisDate||b.name||'';
+      return db.localeCompare(da);
+    });
+    /* 現在より前のチャートを探す */
+    var prev=null;
+    if(currentDate){
+      for(var i=0;i<candidates.length;i++){
+        var cd=candidates[i].analysisDate||'';
+        if(!cd||cd<currentDate){prev=candidates[i];break;}
+      }
+    }
+    if(!prev){
+      var curSavedAt=img.savedAt||0;
+      var bySaved=candidates.slice().sort(function(a,b){return b.savedAt-a.savedAt;});
+      for(var j=0;j<bySaved.length;j++){
+        if(bySaved[j].savedAt<curSavedAt){prev=bySaved[j];break;}
+      }
+    }
+    if(!prev&&candidates.length>0)prev=candidates[candidates.length-1];
+    if(!prev){window.caToast('前日チャートが見つかりません','info');return;}
+    function applyRef(d){
+      setRefAnalysis({
+        id:prev.id,ticker:prev.ticker,name:prev.name,
+        analysisData:d.analysisData,
+        analysisStrokes:migrateAnalysisStrokes(d.analysisStrokes,'ref'),
+        savedAt:prev.savedAt||0,
+        _savedAt:(d._v||prev.savedAt||0)
+      });
+    }
+    caLoadDataAsync(prev.id,function(d){
+      if(d&&d.analysisData){applyRef(d);return;}
+      var fbCfg2=props.fbCfg||{};
+      if(!fbCfg2.url){window.caToast('前日チャートのデータが見つかりません','info');return;}
+      var dataBase=fbCfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
+      var auth=fbCfg2.secret?'?auth='+fbCfg2.secret:'';
+      fetch(dataBase+'/'+prev.id+'.json'+auth)
+        .then(function(r){return r.ok?r.json():null;})
+        .then(function(fbData){
+          if(fbData&&fbData.analysisData)applyRef(fbData);
+          else window.caToast('前日チャートのデータが見つかりません','info');
+        }).catch(function(){window.caToast('読込失敗','error');});
+    });
+  }
   /* B-drawing: 分析画面の描画ストローク (時刻+価格座標、tf別管理)
      形状: {'1m':[...],'5m':[...]} 旧配列は {'1m':array,'5m':[]} に自動マイグレート */
   var sAS=useState(function(){return migrateAnalysisStrokes(img&&img.analysisStrokes,'cur');});
@@ -5382,18 +5439,13 @@ function ImageAnnotator(props){
         ),
         analysisData && ce("button",{
           onClick:function(){
-            if(refAnalysis){
-              // 開いている → 閉じる
-              setRefAnalysis(null);
-            }else{
-              // 閉じている → 選択モーダル表示
-              setShowRefAnalysisPicker(true);
-            }
+            if(refAnalysis){setRefAnalysis(null);}
+            else{loadPrevChart();}
           },
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",
             background:refAnalysis?"#16a34a":"#7c3aed",
             color:refAnalysis?"#bbf7d0":"#e9d5ff"})
-        },refAnalysis?"閉じる":"過去チャート"),
+        },refAnalysis?"閉じる":"前日チャート"),
         /* 2026-04-30: C - 現在チャートをクエリにしてテンプレ類似検索 (保存済みのみ) */
         analysisData && img && img._draftId && onSearchSimilar && ce("button",{
           onClick:function(){onSearchSimilar(img._draftId);},
