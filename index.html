@@ -5368,6 +5368,15 @@ function ImageAnnotator(props){
           title:"このチャートに似た過去チャートを検索",
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#4a1e5f",color:"#c4a5f7"})
         },"🔎 似た形"),
+        ce("button",{
+          onClick:function(){setStrokesVisible(function(v){return !v;});},
+          title:strokesVisible?"書き込みを非表示":"書き込みを表示",
+          style:Object.assign({},TS,{fontSize:14,padding:"6px 9px",
+            background:strokesVisible?"#2a2a2a":"#111",
+            color:strokesVisible?"#ccc":"#555",
+            border:strokesVisible?"1px solid #555":"1px solid #333",
+            textDecoration:strokesVisible?"none":"line-through"})
+        },"👁"),
         analysisData && ce("div",{style:{display:"flex",gap:2,flexShrink:0}},
           ['1m','5m'].map(function(t){
             return ce("button",{key:t,onClick:function(){setAnalysisTf(t);},
@@ -5416,15 +5425,6 @@ function ImageAnnotator(props){
         ce("button",{onClick:function(){setShowDisplaySettings(true);},
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#1e3a5f",color:"#a5b4fc",fontWeight:700})},
           "📊 設定"),
-        ce("button",{
-          onClick:function(){setStrokesVisible(function(v){return !v;});},
-          title:strokesVisible?"書き込みを非表示":"書き込みを表示",
-          style:Object.assign({},TS,{fontSize:14,padding:"6px 9px",
-            background:strokesVisible?"#2a2a2a":"#111",
-            color:strokesVisible?"#ccc":"#555",
-            border:strokesVisible?"1px solid #555":"1px solid #333",
-            textDecoration:strokesVisible?"none":"line-through"})
-        },"👁"),
         ce("button",{onClick:function(){setCancelConfirm(true);},style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#333",color:"#ccc"})},"終了"),
         ce("button",{onClick:saveAndExport,style:Object.assign({},TS,{fontSize:12,padding:"6px 12px",background:"#2563eb",color:"#fff",fontWeight:700})},"💾 保存・出力")
       ),
