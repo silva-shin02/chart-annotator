@@ -5362,12 +5362,6 @@ function ImageAnnotator(props){
             background:showCrosshair?"#4a9de3":"#2a2a2a",
             color:showCrosshair?"#fff":"#aaa"})
         },"✛ 十字線"),
-        /* 2026-04-30: C - 現在チャートをクエリにしてテンプレ類似検索 (保存済みのみ) */
-        analysisData && img && img._draftId && onSearchSimilar && ce("button",{
-          onClick:function(){onSearchSimilar(img._draftId);},
-          title:"このチャートに似た過去チャートを検索",
-          style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#4a1e5f",color:"#c4a5f7"})
-        },"🔎 似た形"),
         ce("button",{
           onClick:function(){setStrokesVisible(function(v){return !v;});},
           title:strokesVisible?"書き込みを非表示":"書き込みを表示",
@@ -5400,6 +5394,12 @@ function ImageAnnotator(props){
             background:refAnalysis?"#16a34a":"#7c3aed",
             color:refAnalysis?"#bbf7d0":"#e9d5ff"})
         },refAnalysis?"閉じる":"過去チャート"),
+        /* 2026-04-30: C - 現在チャートをクエリにしてテンプレ類似検索 (保存済みのみ) */
+        analysisData && img && img._draftId && onSearchSimilar && ce("button",{
+          onClick:function(){onSearchSimilar(img._draftId);},
+          title:"このチャートに似た過去チャートを検索",
+          style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#4a1e5f",color:"#c4a5f7"})
+        },"🔎 似た形"),
         /* C7: 過去chart open時のみ「↺変更」ボタン (1clickで別chartに切替) */
         analysisData && refAnalysis && ce("button",{
           onClick:function(){setShowRefAnalysisPicker(true);},
