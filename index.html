@@ -4629,18 +4629,24 @@ function ImageAnnotator(props){
       return m.ticker===ticker&&m.id!==currentId;
     });
     if(candidates.length===0){window.caToast('同銘柄の他のチャートがありません','info');return;}
-    /* analysisDate 降順ソート (ない場合は name 降順) */
+    /* analysisDate 降順ソート
+       analysisDate あり同士は日付降順、なし同士は savedAt 降順、
+       あり vs なし は「あり」を先にする (日本語nameとの混在で順序が崩れないよう name は使わない) */
     candidates.sort(function(a,b){
-      var da=a.analysisDate||a.name||'';
-      var db=b.analysisDate||b.name||'';
-      return db.localeCompare(da);
+      var da=a.analysisDate||'';
+      var db=b.analysisDate||'';
+      if(da&&db)return db.localeCompare(da);   // 両方あり: 日付降順
+      if(da)return -1;                          // aのみあり: a を前
+      if(db)return 1;                           // bのみあり: b を前
+      return (b.savedAt||0)-(a.savedAt||0);    // 両方なし: savedAt 降順
     });
-    /* 現在より前のチャートを探す */
+    /* 現在より前のチャートを探す
+       !cd (analysisDate 未設定) の場合は日付比較をスキップし savedAt フォールバックへ */
     var prev=null;
     if(currentDate){
       for(var i=0;i<candidates.length;i++){
         var cd=candidates[i].analysisDate||'';
-        if(!cd||cd<currentDate){prev=candidates[i];break;}
+        if(cd&&cd<currentDate){prev=candidates[i];break;}
       }
     }
     if(!prev){
