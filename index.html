@@ -5554,12 +5554,6 @@ function ImageAnnotator(props){
             background:splitChart?"#16a34a":"#4a1e5f",
             color:splitChart?"#bbf7d0":"#c4a5f7"})
         },"🔎 似た形"),
-        /* C7: 過去chart open時のみ「↺変更」ボタン (1clickで別chartに切替) */
-        analysisData && refAnalysis && ce("button",{
-          onClick:function(){setShowRefAnalysisPicker(true);},
-          title:"他のチャートに変更",
-          style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#2a2a2a",color:"#aaa"})
-        },"↺変更"),
         /* spacer */
         ce("div",{style:{flex:1}}),
         /* 手動保存 status badge */
