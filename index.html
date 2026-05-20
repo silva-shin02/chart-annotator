@@ -5933,16 +5933,16 @@ function ImageAnnotator(props){
       /* データ読込済: 横並び(現在 + 過去) + floating undo/redo */
       analysisData && ce(Fragment,null,
         /* 横並び/縦並びコンテナ (splitChart時は縦2分割) */
-        ce("div",{ref:splitContainerRef,style:{flex:1,display:"flex",
+        ce("div",{ref:splitContainerRef,style:{flex:1,height:0,display:"flex",
           flexDirection:splitChart?"column":"row",
           overflowX:splitChart?"hidden":"auto",overflowY:"hidden",WebkitOverflowScrolling:"touch"}},
           /* ── 現在チャート (統合chart: refAnalysis有でも全幅、同一キャンバスに連結描画) ── */
           ce("div",{
             style:splitChart
-              ?{display:"flex",flexDirection:"column",flexShrink:0,
-                height:(splitRatio*100)+'%',minHeight:0,
+              ?{display:"flex",flexDirection:"column",
+                flex:'0 0 '+(splitRatio*100)+'%',minHeight:0,
                 outline:splitActive==='top'?'2px solid #3b82f6':'none',outlineOffset:'-2px',
-                boxSizing:'border-box',cursor:'default'}
+                boxSizing:'border-box',cursor:'default',overflow:'hidden'}
               :{display:"flex",flexDirection:"column",
                 // バグA根治: 幅を flex-basis で明示指定 — minWidth:auto + flex:0 0 auto の循環参照でタブレットcanvas width暴走 (33M px化) を防ぐ
                 flex:"1 1 100%",
@@ -6222,7 +6222,7 @@ function ImageAnnotator(props){
           ),
           /* 分割チャート (下) */
           splitChart&&ce("div",{
-            style:{flex:1,display:"flex",flexDirection:"column",minHeight:0,
+            style:{flex:1,display:"flex",flexDirection:"column",minHeight:0,overflow:'hidden',
               outline:splitActive==='bottom'?'2px solid #3b82f6':'none',outlineOffset:'-2px',
               boxSizing:'border-box',cursor:'default'},
             onClick:function(e){setSplitActive('bottom');}
@@ -6900,16 +6900,20 @@ function ImageAnnotator(props){
     }),
 
     /* ── 分割表示: PatternSearchModal ── */
-    showSplitPicker&&ce(PatternSearchModal,{
-      open:true,
-      meta:caLoadMeta(),
-      fbCfg:props.fbCfg||{},
-      tickers:(function(){var t={};caLoadMeta().forEach(function(m){if(m.ticker)t[m.ticker]=1;});return Object.keys(t);})(),
-      initialQueryDraftId:img&&img._draftId||null,
-      onClose:function(){setShowSplitPicker(false);},
-      onOpenChart:function(id){loadSplitChart(id);},
-      expandedYM:{},onToggleYM:function(){},onSetAllYM:function(){}
-    }),
+    showSplitPicker&&(function(){
+      var _curTicker=(img&&img._ticker)||(analysisData&&analysisData.ticker)||'';
+      var _sameMeta=caLoadMeta().filter(function(m){return m.ticker&&m.ticker===_curTicker;});
+      return ce(PatternSearchModal,{
+        open:true,
+        meta:_sameMeta,
+        fbCfg:props.fbCfg||{},
+        tickers:[_curTicker].filter(Boolean),
+        initialQueryDraftId:img&&img._draftId||null,
+        onClose:function(){setShowSplitPicker(false);},
+        onOpenChart:function(id){loadSplitChart(id);},
+        expandedYM:{},onToggleYM:function(){},onSetAllYM:function(){}
+      });
+    })(),
 
     /* ── F1: 過去チャート(分析)ピッカー ── */
     showRefAnalysisPicker&&ce(RefAnalysisPicker,{
