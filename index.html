@@ -4507,6 +4507,8 @@ function ImageAnnotator(props){
   var stAD=useState(function(){return (img&&img.analysisData)||null;});
   var analysisData=stAD[0],setAnalysisData=stAD[1];
   var stAT=useState('1m'); var analysisTf=stAT[0],setAnalysisTf=stAT[1];
+  /* 書き込み表示/非表示トグル */
+  var sSV=useState(true); var strokesVisible=sSV[0],setStrokesVisible=sSV[1];
   /* ジョイスティック表示状態 (タッチのみ) */
   var sJH=useState(function(){return localStorage.getItem('ca_js_hidden')==='1';});
   var jsHidden=sJH[0],setJsHidden=sJH[1];
@@ -5414,6 +5416,15 @@ function ImageAnnotator(props){
         ce("button",{onClick:function(){setShowDisplaySettings(true);},
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#1e3a5f",color:"#a5b4fc",fontWeight:700})},
           "📊 設定"),
+        ce("button",{
+          onClick:function(){setStrokesVisible(function(v){return !v;});},
+          title:strokesVisible?"書き込みを非表示":"書き込みを表示",
+          style:Object.assign({},TS,{fontSize:14,padding:"6px 9px",
+            background:strokesVisible?"#2a2a2a":"#111",
+            color:strokesVisible?"#ccc":"#555",
+            border:strokesVisible?"1px solid #555":"1px solid #333",
+            textDecoration:strokesVisible?"none":"line-through"})
+        },"👁"),
         ce("button",{onClick:function(){setCancelConfirm(true);},style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#333",color:"#ccc"})},"終了"),
         ce("button",{onClick:saveAndExport,style:Object.assign({},TS,{fontSize:12,padding:"6px 12px",background:"#2563eb",color:"#fff",fontWeight:700})},"💾 保存・出力")
       ),
@@ -5811,7 +5822,7 @@ function ImageAnnotator(props){
               /* C1+: 過去chartデータを渡して同一キャンバスに連結描画 */
               refData:refAnalysis?refAnalysis.analysisData:null,
               /* C3+: 過去chart側ストロークも連結描画 (C6で書込対応) */
-              refStrokes:(refAnalysis&&refAnalysis.analysisStrokes)?(refAnalysis.analysisStrokes[analysisTf]||[]):null,
+              refStrokes:strokesVisible?((refAnalysis&&refAnalysis.analysisStrokes)?(refAnalysis.analysisStrokes[analysisTf]||[]):null):null,
               drawTool:tool, drawColor:color, drawWidth:lineW, drawOpacity:opacity,
               drawFontSize:fontSize, drawFontBold:fontBold,
               snippetObj:(tool==='snippet'&&snippets.length)?snippets[selSnipIdx%snippets.length]:null,
@@ -5825,7 +5836,7 @@ function ImageAnnotator(props){
               /* F2: 十字カーソル連動 */
               externalCursorRef:analysisCursorRef, externalCursorBump:cursorBump,
               onExternalCursorChange:notifyAnalysisCursor,
-              strokes:(analysisStrokes&&analysisStrokes[analysisTf])||[],
+              strokes:strokesVisible?((analysisStrokes&&analysisStrokes[analysisTf])||[]):[],
               quickColors:quickColors,
               /* 2026-04-23: 2本指ダブルタップで現ツール⇄消しゴム入れ替え */
               onTwoFingerDoubleTap:function(){
