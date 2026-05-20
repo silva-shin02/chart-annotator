@@ -7144,6 +7144,20 @@ function _dowLabel(dateStr){
   var d=new Date(+p[0],+p[1]-1,+p[2]);
   return ['（日）','（月）','（火）','（水）','（木）','（金）','（土）'][d.getDay()]||'';
 }
+/* meta オブジェクトから曜日ラベルを取得
+   analysisDate(YYYY-MM-DD) → name内 YYYY-MM-DD → name内 _YYYYMMDD の順で日付を解決 */
+function _metaDowLabel(m){
+  var ad=m.analysisDate||'';
+  if(!ad&&typeof m.name==='string'){
+    var r2=m.name.match(/(?:^|[_\-])(\d{4})-(\d{2})-(\d{2})/);
+    if(r2)ad=r2[1]+'-'+r2[2]+'-'+r2[3];
+    if(!ad){
+      var r3=m.name.match(/_(\d{4})(\d{2})(\d{2})(?:[._]|$)/);
+      if(r3)ad=r3[1]+'-'+r3[2]+'-'+r3[3];
+    }
+  }
+  return _dowLabel(ad);
+}
 
 /* 2026-05-03: 銘柄 t の最新 analysisDate (YYYY-MM-DD) と件数を返す
    - charts: meta.filter(m=>m.ticker===t)
@@ -8497,7 +8511,7 @@ function CaChartCard(props){
       ce('div',{style:{flex:1,minWidth:0},onClick:function(){onOpen(m.id);}},
         ce('div',{style:{fontSize:12,fontWeight:700,color:'#ddd',
           overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',cursor:'pointer'}},
-          m.name+(m.analysisDate?_dowLabel(m.analysisDate):'')),
+          m.name+_metaDowLabel(m)),
         ce('div',{style:{fontSize:10,color:isHighlight?'#86efac':'#555',marginTop:2}},
           m.analysisDate?m.analysisDate+' · ':'',dateStr)
       )
