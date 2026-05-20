@@ -5976,8 +5976,8 @@ function ImageAnnotator(props){
               ce("div",{style:{fontSize:13,fontWeight:700,color:"#ddd"}},
                 (analysisData.ticker||'?')+'　'+
                 ((refAnalysis&&refAnalysis.analysisData)
-                  ?((refAnalysis.analysisData.date||'')+' ⇄ '+(analysisData.date||''))
-                  :(analysisData.date||''))
+                  ?((refAnalysis.analysisData.date||'')+_dowLabel(refAnalysis.analysisData.date||'')+' ⇄ '+(analysisData.date||'')+_dowLabel(analysisData.date||''))
+                  :((analysisData.date||'')+_dowLabel(analysisData.date||'')))
               )
             ),
             ce(DataChart,{
@@ -7134,6 +7134,13 @@ function _extractYearMonth(m){
     if(ad2)return ad2[1]+'-'+ad2[2];
   }
   return '(日付不明)';
+}
+
+/* YYYY-MM-DD → '（月）'〜'（日）'  表示専用・保存しない */
+function _dowLabel(dateStr){
+  if(!dateStr||!/^\d{4}-\d{2}-\d{2}$/.test(dateStr))return '';
+  var d=new Date(dateStr+'T00:00:00');
+  return ['（日）','（月）','（火）','（水）','（木）','（金）','（土）'][d.getDay()]||'';
 }
 
 /* 2026-05-03: 銘柄 t の最新 analysisDate (YYYY-MM-DD) と件数を返す
@@ -8487,7 +8494,8 @@ function CaChartCard(props){
       /* タイトル+日付 (flex:1, クリックで開く) */
       ce('div',{style:{flex:1,minWidth:0},onClick:function(){onOpen(m.id);}},
         ce('div',{style:{fontSize:12,fontWeight:700,color:'#ddd',
-          overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',cursor:'pointer'}},m.name),
+          overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',cursor:'pointer'}},
+          m.name+(m.analysisDate?_dowLabel(m.analysisDate):'')),
         ce('div',{style:{fontSize:10,color:isHighlight?'#86efac':'#555',marginTop:2}},
           m.analysisDate?m.analysisDate+' · ':'',dateStr)
       )
