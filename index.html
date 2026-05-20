@@ -5339,7 +5339,7 @@ function ImageAnnotator(props){
         analysisData && ce("button",{
           onClick:function(){setHoriz(function(h2){return !h2;});},
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:horiz?"#D4AC0D":"#2a2a2a",color:horiz?"#1a1a1a":"#aaa"})
-        },"⇺水平・垂直"),
+        },"✛"),
         /* 分析モード固有: 十字 / 1m・5m / 別JSON (analysisData 読込済みの時のみ) */
         analysisData && ce("button",{
           onClick:function(){setShowCrosshair(!showCrosshair);},
@@ -5376,7 +5376,7 @@ function ImageAnnotator(props){
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",
             background:refAnalysis?"#16a34a":"#7c3aed",
             color:refAnalysis?"#bbf7d0":"#e9d5ff"})
-        },refAnalysis?"閉じる":"過去チャートを開く"),
+        },refAnalysis?"閉じる":"過去チャート"),
         /* C7: 過去chart open時のみ「↺変更」ボタン (1clickで別chartに切替) */
         analysisData && refAnalysis && ce("button",{
           onClick:function(){setShowRefAnalysisPicker(true);},
@@ -5402,7 +5402,7 @@ function ImageAnnotator(props){
         ce("button",{onClick:function(){setShowDisplaySettings(true);},
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#1e3a5f",color:"#a5b4fc",fontWeight:700})},
           "📊 設定"),
-        ce("button",{onClick:function(){setCancelConfirm(true);},style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#333",color:"#ccc"})},"分析を終了する"),
+        ce("button",{onClick:function(){setCancelConfirm(true);},style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#333",color:"#ccc"})},"終了"),
         ce("button",{onClick:saveAndExport,style:Object.assign({},TS,{fontSize:12,padding:"6px 12px",background:"#2563eb",color:"#fff",fontWeight:700})},"💾 保存・出力")
       ),
       /* Row 2: color + lineW + opacity + zoom — C8a-fix3: PCでもhorizontal wheel scroll可
