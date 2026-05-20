@@ -4629,23 +4629,34 @@ function ImageAnnotator(props){
       return m.ticker===ticker&&m.id!==currentId;
     });
     if(candidates.length===0){window.caToast('同銘柄の他のチャートがありません','info');return;}
-    /* analysisDate 降順ソート
-       analysisDate あり同士は日付降順、なし同士は savedAt 降順、
-       あり vs なし は「あり」を先にする (日本語nameとの混在で順序が崩れないよう name は使わない) */
+    /* meta から有効な YYYY-MM-DD を取り出すヘルパー
+       優先順位: analysisDate(YYYY-MM-DD) → analysisDate(YYYYMMDD) → name内 YYYY-MM-DD → name内 _YYYYMMDD
+       analysisDate が未設定の古いチャートでも name に日付が含まれていれば比較できる */
+    function _effDate(m){
+      var ad=m.analysisDate||'';
+      if(/^\d{4}-\d{2}-\d{2}$/.test(ad))return ad;
+      var r=ad.match(/^(\d{4})(\d{2})(\d{2})$/);
+      if(r)return r[1]+'-'+r[2]+'-'+r[3];
+      var n=m.name||'';
+      var r2=n.match(/(?:^|[_\-])(\d{4})-(\d{2})-(\d{2})/);
+      if(r2)return r2[1]+'-'+r2[2]+'-'+r2[3];
+      var r3=n.match(/_(\d{4})(\d{2})(\d{2})(?:[._]|$)/);
+      if(r3)return r3[1]+'-'+r3[2]+'-'+r3[3];
+      return '';
+    }
+    /* 有効日付で降順ソート、日付不明は savedAt 降順で後方へ */
     candidates.sort(function(a,b){
-      var da=a.analysisDate||'';
-      var db=b.analysisDate||'';
-      if(da&&db)return db.localeCompare(da);   // 両方あり: 日付降順
-      if(da)return -1;                          // aのみあり: a を前
-      if(db)return 1;                           // bのみあり: b を前
-      return (b.savedAt||0)-(a.savedAt||0);    // 両方なし: savedAt 降順
+      var da=_effDate(a), db=_effDate(b);
+      if(da&&db)return db.localeCompare(da);
+      if(da)return -1;
+      if(db)return 1;
+      return (b.savedAt||0)-(a.savedAt||0);
     });
-    /* 現在より前のチャートを探す
-       !cd (analysisDate 未設定) の場合は日付比較をスキップし savedAt フォールバックへ */
+    /* 現在より前のチャートを探す (analysisDate or name から抽出した有効日付で比較) */
     var prev=null;
     if(currentDate){
       for(var i=0;i<candidates.length;i++){
-        var cd=candidates[i].analysisDate||'';
+        var cd=_effDate(candidates[i]);
         if(cd&&cd<currentDate){prev=candidates[i];break;}
       }
     }
