@@ -1373,6 +1373,8 @@ function DataChart(props){
   var drawRef=useRef({on:false});  // ドラッグ式描画状態 {on, sTM, sP, cTM, cP, pts(freehand用)}
   var ctrlPanRef=useRef(false);    // Ctrl+drag パン状態
   var bothBtnPanRef=useRef(false); // 左右同時押しドラッグ パン状態
+  var pendingTextReqRef=useRef(null); // テキスト新規作成リクエスト (mouseup 時に確定)
+  var pendingSnipRef=useRef(null);    // スタンプ配置 (mouseup 時に確定)
   /* 2026-04-23: 2本指ダブルタップ検出用 — [timestamp, ...]
      (2本指touchstart が 600ms以内に2回 → 消しゴムツール切替) */
   var twoTapHistRef=useRef([]);
@@ -2460,6 +2462,8 @@ function DataChart(props){
       panStartRef.current={x:e.clientX,y:e.clientY,uS:view.uS,uE:view.uE,ps:pShift};
       bothBtnPanRef.current=true;
       drawRef.current={on:false};
+      pendingTextReqRef.current=null;  // テキスト/スタンプの pending をキャンセル
+      pendingSnipRef.current=null;
       return;
     }
     /* 2026-04-22: text/lasso ツール時のみ既存textをhitしたらeditor overlay扱い
@@ -2643,15 +2647,13 @@ function DataChart(props){
           return;
         }
       }
-      /* 既存text hitでなければ従来通り新規作成 portal */
-      if(props.onRequestTextInput){
-        props.onRequestTextInput({
-          tm:tp.tm, p:tp.p,
-          screenX:e.clientX, screenY:e.clientY,
-          editIdx:-1,
-          side:tpSide
-        });
-      }
+      /* 既存text hitでなければ新規作成 — mouseup まで遅延 (左右同時押しパン対応) */
+      pendingTextReqRef.current={
+        tm:tp.tm, p:tp.p,
+        screenX:e.clientX, screenY:e.clientY,
+        editIdx:-1,
+        side:tpSide
+      };
       return;
     }
     if(drawTool==='freehand'){
@@ -2693,7 +2695,8 @@ function DataChart(props){
           fontSize:props.drawFontSize||15,fontBold:!!props.drawFontBold,
           _snippet:true,
           snipId:snipObj.id||null};
-        onStrokeAdd(snipStroke);
+        /* mouseup まで遅延 (左右同時押しパン対応) */
+        pendingSnipRef.current={stroke:snipStroke,fn:onStrokeAdd};
       }
       return;
     }
@@ -3089,6 +3092,15 @@ function DataChart(props){
       drawRef.current={on:false};
       drawCrosshair();
     }
+    /* 左右同時押しでなければ pending のテキスト/スタンプを確定 */
+    if(!bothBtnPanRef.current){
+      var _pt=pendingTextReqRef.current;
+      if(_pt&&props.onRequestTextInput)props.onRequestTextInput(_pt);
+      var _ps=pendingSnipRef.current;
+      if(_ps)_ps.fn(_ps.stroke);
+    }
+    pendingTextReqRef.current=null;
+    pendingSnipRef.current=null;
     panStartRef.current=null;
     ctrlPanRef.current=false;
     bothBtnPanRef.current=false;
