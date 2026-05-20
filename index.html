@@ -7142,7 +7142,7 @@ function _dowLabel(dateStr){
   if(!dateStr||!/^\d{4}-\d{2}-\d{2}$/.test(dateStr))return '';
   var p=dateStr.split('-');
   var d=new Date(+p[0],+p[1]-1,+p[2]);
-  return ['（日）','（月）','（火）','（水）','（木）','（金）','（土）'][d.getDay()]||'';
+  return ['(日)','(月)','(火)','(水)','(木)','(金)','(土)'][d.getDay()]||'';
 }
 /* meta オブジェクトから曜日ラベルを取得
    analysisDate(YYYY-MM-DD) → name内 YYYY-MM-DD → name内 _YYYYMMDD の順で日付を解決 */
