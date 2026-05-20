@@ -3530,8 +3530,15 @@ function DataChart(props){
               end:isStartTop?'start':'end',
               curP:isStartTop?msr.startP:msr.endP};
           },
+          onTouchStart:function(e){
+            e.preventDefault();e.stopPropagation();
+            var isStartTop=msr.startP>=msr.endP;
+            measureTickDragRef.current={msrId:msr.id,
+              end:isStartTop?'start':'end',
+              curP:isStartTop?msr.startP:msr.endP};
+          },
           style:{position:'absolute',left:-10,top:-8,width:22,height:16,
-            cursor:'ns-resize',pointerEvents:'auto',
+            cursor:'ns-resize',pointerEvents:'auto',touchAction:'none',
             display:'flex',alignItems:'center',justifyContent:'center',zIndex:62}},
           ce('div',{style:{width:18,height:3,background:colR,borderRadius:2}})
         ),
@@ -3544,8 +3551,15 @@ function DataChart(props){
               end:isEndBottom?'end':'start',
               curP:isEndBottom?msr.endP:msr.startP};
           },
+          onTouchStart:function(e){
+            e.preventDefault();e.stopPropagation();
+            var isEndBottom=msr.endP<=msr.startP;
+            measureTickDragRef.current={msrId:msr.id,
+              end:isEndBottom?'end':'start',
+              curP:isEndBottom?msr.endP:msr.startP};
+          },
           style:{position:'absolute',left:-10,top:hR-8,width:22,height:16,
-            cursor:'ns-resize',pointerEvents:'auto',
+            cursor:'ns-resize',pointerEvents:'auto',touchAction:'none',
             display:'flex',alignItems:'center',justifyContent:'center',zIndex:62}},
           ce('div',{style:{width:18,height:3,background:colR,borderRadius:2}})
         ),
