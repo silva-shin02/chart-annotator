@@ -4509,6 +4509,15 @@ function ImageAnnotator(props){
   var stAT=useState('1m'); var analysisTf=stAT[0],setAnalysisTf=stAT[1];
   /* 書き込み表示/非表示トグル */
   var sSV=useState(true); var strokesVisible=sSV[0],setStrokesVisible=sSV[1];
+  /* 分割表示 (似た形) */
+  var sSC=useState(null); var splitChart=sSC[0],setSplitChart=sSC[1];
+  var sSS=useState(function(){return {'1m':[],'5m':[]};});
+  var splitStrokes=sSS[0],setSplitStrokes=sSS[1];
+  var sSA=useState('top'); var splitActive=sSA[0],setSplitActive=sSA[1];
+  var sSR=useState(0.5); var splitRatio=sSR[0],setSplitRatio=sSR[1];
+  var sSP=useState(false); var showSplitPicker=sSP[0],setShowSplitPicker=sSP[1];
+  var splitContainerRef=useRef(null);
+  var splitDragRef=useRef(null);
   /* ジョイスティック表示状態 (タッチのみ) */
   var sJH=useState(function(){return localStorage.getItem('ca_js_hidden')==='1';});
   var jsHidden=sJH[0],setJsHidden=sJH[1];
@@ -4650,6 +4659,62 @@ function ImageAnnotator(props){
           else window.caToast('前日チャートのデータが見つかりません','info');
         }).catch(function(){window.caToast('読込失敗','error');});
     });
+  }
+  /* 分割表示: 類似チャートをロードしてセット */
+  function loadSplitChart(id){
+    var allMeta=caLoadMeta();
+    var cm=allMeta.find(function(m){return m.id===id;});
+    if(!cm)return;
+    function apply(d){
+      setSplitChart({id:id,ticker:cm.ticker,name:cm.name,analysisData:d.analysisData,savedAt:cm.savedAt||0,_savedAt:d._v||cm.savedAt||0});
+      setSplitStrokes(migrateAnalysisStrokes(d.analysisStrokes,'cur'));
+      setShowSplitPicker(false);
+      setSplitActive('top');
+    }
+    caLoadDataAsync(id,function(d){
+      if(d&&d.analysisData){apply(d);return;}
+      var fbCfg2=props.fbCfg||{};
+      if(!fbCfg2.url){window.caToast('データが見つかりません','info');return;}
+      var dataBase=fbCfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
+      var auth=fbCfg2.secret?'?auth='+fbCfg2.secret:'';
+      fetch(dataBase+'/'+id+'.json'+auth).then(function(r){return r.ok?r.json():null;})
+        .then(function(fbData){
+          if(fbData&&fbData.analysisData)apply(fbData);
+          else window.caToast('データが見つかりません','info');
+        }).catch(function(){window.caToast('読込失敗','error');});
+    });
+  }
+  /* 分割表示: 閉じるときに下チャートのストロークを保存 */
+  function closeSplitView(){
+    if(splitChart){
+      caLoadDataAsync(splitChart.id,function(d){
+        var nd=Object.assign({},d||{analysisData:splitChart.analysisData},{analysisStrokes:splitStrokes});
+        caSaveData(splitChart.id,nd);
+        var fbCfg2=props.fbCfg||{};
+        if(fbCfg2.url&&!fbCfg2.paused){
+          var auth=fbCfg2.secret?'?auth='+fbCfg2.secret:'';
+          var dataBase=fbCfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
+          fetch(dataBase+'/'+splitChart.id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(nd)}).catch(function(){});
+        }
+      });
+    }
+    setSplitChart(null);
+    setSplitStrokes({'1m':[],'5m':[]});
+    setSplitActive('top');
+  }
+  /* 分割表示: ディバイダードラッグ */
+  function onDividerMouseDown(e){
+    e.preventDefault();e.stopPropagation();
+    var startY=e.clientY,startRatio=splitRatio;
+    function onMove(em){
+      var el=splitContainerRef.current;
+      var h=el?el.getBoundingClientRect().height:600;
+      var dy=em.clientY-startY;
+      setSplitRatio(Math.max(0.2,Math.min(0.8,startRatio+dy/h)));
+    }
+    function onUp(){window.removeEventListener('mousemove',onMove);window.removeEventListener('mouseup',onUp);}
+    window.addEventListener('mousemove',onMove);
+    window.addEventListener('mouseup',onUp);
   }
   /* B-drawing: 分析画面の描画ストローク (時刻+価格座標、tf別管理)
      形状: {'1m':[...],'5m':[...]} 旧配列は {'1m':array,'5m':[]} に自動マイグレート */
@@ -5447,10 +5512,15 @@ function ImageAnnotator(props){
             color:refAnalysis?"#bbf7d0":"#e9d5ff"})
         },refAnalysis?"閉じる":"前日チャート"),
         /* 2026-04-30: C - 現在チャートをクエリにしてテンプレ類似検索 (保存済みのみ) */
-        analysisData && img && img._draftId && onSearchSimilar && ce("button",{
-          onClick:function(){onSearchSimilar(img._draftId);},
-          title:"このチャートに似た過去チャートを検索",
-          style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#4a1e5f",color:"#c4a5f7"})
+        analysisData && img && img._draftId && ce("button",{
+          onClick:function(){
+            if(splitChart){closeSplitView();}
+            else{setShowSplitPicker(true);}
+          },
+          title:splitChart?"分割表示を閉じる":"このチャートに似た過去チャートを検索",
+          style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",
+            background:splitChart?"#16a34a":"#4a1e5f",
+            color:splitChart?"#bbf7d0":"#c4a5f7"})
         },"🔎 似た形"),
         /* C7: 過去chart open時のみ「↺変更」ボタン (1clickで別chartに切替) */
         analysisData && refAnalysis && ce("button",{
@@ -5848,17 +5918,25 @@ function ImageAnnotator(props){
       ),
       /* データ読込済: 横並び(現在 + 過去) + floating undo/redo */
       analysisData && ce(Fragment,null,
-        /* 横並びコンテナ (両チャートで横スクロール) */
-        ce("div",{style:{flex:1,display:"flex",flexDirection:"row",overflowX:"auto",overflowY:"hidden",WebkitOverflowScrolling:"touch"}},
+        /* 横並び/縦並びコンテナ (splitChart時は縦2分割) */
+        ce("div",{ref:splitContainerRef,style:{flex:1,display:"flex",
+          flexDirection:splitChart?"column":"row",
+          overflowX:splitChart?"hidden":"auto",overflowY:"hidden",WebkitOverflowScrolling:"touch"}},
           /* ── 現在チャート (統合chart: refAnalysis有でも全幅、同一キャンバスに連結描画) ── */
-          ce("div",{style:{
-            display:"flex",flexDirection:"column",
-            // バグA根治: 幅を flex-basis で明示指定 — minWidth:auto + flex:0 0 auto の循環参照でタブレットcanvas width暴走 (33M px化) を防ぐ
-            flex:"1 1 100%",
-            alignSelf:"stretch",    // 親flex row経由で高さ継承
-            minHeight:0,            // flex child のminHeight default 'auto' を上書き
-            borderRight:"none"
-          }},
+          ce("div",{
+            style:splitChart
+              ?{display:"flex",flexDirection:"column",flexShrink:0,
+                height:(splitRatio*100)+'%',minHeight:0,
+                outline:splitActive==='top'?'2px solid #3b82f6':'none',outlineOffset:'-2px',
+                boxSizing:'border-box',cursor:'default'}
+              :{display:"flex",flexDirection:"column",
+                // バグA根治: 幅を flex-basis で明示指定 — minWidth:auto + flex:0 0 auto の循環参照でタブレットcanvas width暴走 (33M px化) を防ぐ
+                flex:"1 1 100%",
+                alignSelf:"stretch",    // 親flex row経由で高さ継承
+                minHeight:0,            // flex child のminHeight default 'auto' を上書き
+                borderRight:"none"},
+            onClick:splitChart?function(e){setSplitActive('top');}:undefined
+          },
             /* メタ行 (ticker + date のみ) — C2+: refあり時は両日付連結 */
             ce("div",{style:{display:"flex",alignItems:"center",gap:10,padding:"6px 12px",
               background:"#111",borderBottom:"1px solid #222",flexShrink:0}},
@@ -6117,8 +6195,61 @@ function ImageAnnotator(props){
             });
           }
         })
-        ) /* end 現在チャート container div (統合chart: refAnalysis有でもこの1つに集約) */
-        ), /* end 横並びコンテナ (実質ラップ1枚、旧レイアウト削除で1カラムのみ) */
+        ), /* end 現在チャート container div (統合chart: refAnalysis有でもこの1つに集約) */
+          /* Divider - split mode only */
+          splitChart&&ce("div",{
+            style:{height:10,flexShrink:0,cursor:'row-resize',background:'#292929',
+              display:'flex',alignItems:'center',justifyContent:'center',userSelect:'none'},
+            onMouseDown:onDividerMouseDown
+          },
+            ce("div",{style:{display:'flex',gap:5}},
+              [0,1,2,3,4].map(function(i){return ce("div",{key:i,style:{width:5,height:5,borderRadius:'50%',background:'#6b7280'}});})
+            )
+          ),
+          /* 分割チャート (下) */
+          splitChart&&ce("div",{
+            style:{flex:1,display:"flex",flexDirection:"column",minHeight:0,
+              outline:splitActive==='bottom'?'2px solid #3b82f6':'none',outlineOffset:'-2px',
+              boxSizing:'border-box',cursor:'default'},
+            onClick:function(e){setSplitActive('bottom');}
+          },
+            ce("div",{style:{display:"flex",alignItems:"center",padding:"4px 10px",
+              background:"#111",borderBottom:"1px solid #222",flexShrink:0,gap:8}},
+              ce("span",{style:{fontSize:11,color:"#888",flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},
+                (splitChart.ticker||'')+'　'+(splitChart.analysisData&&splitChart.analysisData.date||'')+'　'+splitChart.name),
+              ce("button",{
+                onClick:function(e){e.stopPropagation();closeSplitView();},
+                style:{background:"none",border:"none",color:"#9ca3af",cursor:"pointer",
+                  fontSize:15,padding:"0 4px",lineHeight:1}
+              },"✕")
+            ),
+            ce(DataChart,{
+              data:splitChart.analysisData,
+              tf:analysisTf,
+              showCrosshair:showCrosshair,
+              drawTool:splitActive==='bottom'?tool:'pan',
+              drawColor:color,drawWidth:lineW,drawOpacity:opacity,
+              drawFontSize:fontSize,drawFontBold:fontBold,
+              snippetObj:splitActive==='bottom'?(tool==='snippet'&&snippets.length?snippets[selSnipIdx%snippets.length]:null):null,
+              snippetsById:(function(){var m={};snippets.forEach(function(sn){if(sn&&sn.id)m[sn.id]=sn;});return m;})(),
+              horiz:horiz,
+              strokes:strokesVisible?(splitStrokes[analysisTf]||[]):[],
+              onStrokeAdd:function(s){var o=Object.assign({},splitStrokes);o[analysisTf]=(o[analysisTf]||[]).concat([s]);setSplitStrokes(o);},
+              onStrokeUpdate:function(side,idx,ns){var o=Object.assign({},splitStrokes);var a=(o[analysisTf]||[]).slice();a[idx]=ns;o[analysisTf]=a;setSplitStrokes(o);},
+              onStrokeDelete:function(side,idx){var o=Object.assign({},splitStrokes);var a=(o[analysisTf]||[]).slice();a.splice(idx,1);o[analysisTf]=a;setSplitStrokes(o);},
+              onStrokeDeleteMany:function(items){var o=Object.assign({},splitStrokes);var a=(o[analysisTf]||[]).slice();var s=new Set(items.map(function(it){return typeof it==='number'?it:it.idx;}));o[analysisTf]=a.filter(function(_,i){return !s.has(i);});setSplitStrokes(o);},
+              onStrokeUpdateMany:function(items){var o=Object.assign({},splitStrokes);var a=(o[analysisTf]||[]).slice();items.forEach(function(it){if(it&&it.stroke)a[it.idx]=it.stroke;});o[analysisTf]=a;setSplitStrokes(o);},
+              onRequestTextInput:splitActive==='bottom'?function(req){setAnalysisTextInput(req);}:null,
+              textInputActive:!!analysisTextInput,
+              quickColors:quickColors,
+              priceRange:priceRange,
+              tradeDir:tradeDir,
+              onTwoFingerDoubleTap:null,
+              onThreeFingerDoubleTap:null,
+              onEraserSessionEnd:function(){},
+            })
+          )
+        ), /* end 横並び/縦並びコンテナ */
         /* F2: VirtualJoystick (タッチデバイスのみ、分析モードのpan制御) */
         IS_TOUCH&&jsHidden&&ReactDOM.createPortal(
           ce("button",{
@@ -6752,6 +6883,18 @@ function ImageAnnotator(props){
     /* 2026-04-20: 表示・動作設定モーダル */
     showDisplaySettings&&ce(DisplaySettingsModal,{
       onClose:function(){setShowDisplaySettings(false);}
+    }),
+
+    /* ── 分割表示: PatternSearchModal ── */
+    showSplitPicker&&ce(PatternSearchModal,{
+      open:true,
+      meta:caLoadMeta(),
+      fbCfg:props.fbCfg||{},
+      tickers:(function(){var t={};caLoadMeta().forEach(function(m){if(m.ticker)t[m.ticker]=1;});return Object.keys(t);})(),
+      initialQueryDraftId:img&&img._draftId||null,
+      onClose:function(){setShowSplitPicker(false);},
+      onOpenChart:function(id){loadSplitChart(id);},
+      expandedYM:{},onToggleYM:function(){},onSetAllYM:function(){}
     }),
 
     /* ── F1: 過去チャート(分析)ピッカー ── */
