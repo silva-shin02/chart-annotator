@@ -5933,14 +5933,15 @@ function ImageAnnotator(props){
       /* データ読込済: 横並び(現在 + 過去) + floating undo/redo */
       analysisData && ce(Fragment,null,
         /* 横並び/縦並びコンテナ (splitChart時は縦2分割) */
-        ce("div",{ref:splitContainerRef,style:{flex:1,height:0,display:"flex",
+        ce("div",{ref:splitContainerRef,style:{flex:1,minHeight:0,display:"flex",
           flexDirection:splitChart?"column":"row",
           overflowX:splitChart?"hidden":"auto",overflowY:"hidden",WebkitOverflowScrolling:"touch"}},
           /* ── 現在チャート (統合chart: refAnalysis有でも全幅、同一キャンバスに連結描画) ── */
           ce("div",{
             style:splitChart
+              /* splitChart時: flex-grow比率で高さ配分 (% や px 不使用 → 親height不要) */
               ?{display:"flex",flexDirection:"column",
-                flex:'0 0 '+(splitRatio*100)+'%',minHeight:0,
+                flexGrow:splitRatio,flexShrink:1,flexBasis:0,minHeight:0,
                 outline:splitActive==='top'?'2px solid #3b82f6':'none',outlineOffset:'-2px',
                 boxSizing:'border-box',cursor:'default',overflow:'hidden'}
               :{display:"flex",flexDirection:"column",
@@ -6222,7 +6223,8 @@ function ImageAnnotator(props){
           ),
           /* 分割チャート (下) */
           splitChart&&ce("div",{
-            style:{flex:1,display:"flex",flexDirection:"column",minHeight:0,overflow:'hidden',
+            style:{flexGrow:1-splitRatio,flexShrink:1,flexBasis:0,
+              display:"flex",flexDirection:"column",minHeight:0,overflow:'hidden',
               outline:splitActive==='bottom'?'2px solid #3b82f6':'none',outlineOffset:'-2px',
               boxSizing:'border-box',cursor:'default'},
             onClick:function(e){setSplitActive('bottom');}
@@ -6256,7 +6258,6 @@ function ImageAnnotator(props){
               onRequestTextInput:splitActive==='bottom'?function(req){setAnalysisTextInput(req);}:null,
               textInputActive:!!analysisTextInput,
               quickColors:quickColors,
-              priceRange:priceRange,
               tradeDir:tradeDir,
               onTwoFingerDoubleTap:null,
               onThreeFingerDoubleTap:null,
