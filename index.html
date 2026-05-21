@@ -2465,6 +2465,9 @@ function DataChart(props){
       pendingTextReqRef.current=null;  // テキスト/スタンプの pending をキャンセル
       pendingSnipRef.current=null;
       measureDragRef.current=null;     // 計測の pending をキャンセル
+      lassoPathRef.current=null;       // 投げ縄パス描画をキャンセル
+      lassoMoveRef.current=null;       // 投げ縄マルチ移動をキャンセル
+      moveRef.current=null;            // ストローク単体移動をキャンセル
       return;
     }
     /* 2026-04-22: text/lasso ツール時のみ既存textをhitしたらeditor overlay扱い
@@ -2746,29 +2749,37 @@ function DataChart(props){
       }
       return;
     }
-    /* 2026-04-23: 投げ縄パス描画中 → ポイント追加 (4px未満は間引き) */
+    /* 2026-04-23: 投げ縄パス描画中 → ポイント追加 (4px未満は間引き)
+       左右同時押しパン中は即キャンセルしてパンへ流す */
     if(lassoPathRef.current){
-      var _lp=lassoPathRef.current;
-      var _last=_lp[_lp.length-1];
-      if(!_last||Math.hypot(e.clientX-_last.x,e.clientY-_last.y)>=4){
-        _lp.push({x:e.clientX,y:e.clientY});
+      if(bothBtnPanRef.current||ctrlPanRef.current){lassoPathRef.current=null;}
+      else{
+        var _lp=lassoPathRef.current;
+        var _last=_lp[_lp.length-1];
+        if(!_last||Math.hypot(e.clientX-_last.x,e.clientY-_last.y)>=4){
+          _lp.push({x:e.clientX,y:e.clientY});
+        }
+        if(!rafRef.current){
+          rafRef.current=requestAnimationFrame(function(){try{drawCrosshair();}catch(err){}rafRef.current=null;});
+        }
+        return;
       }
-      if(!rafRef.current){
-        rafRef.current=requestAnimationFrame(function(){try{drawCrosshair();}catch(err){}rafRef.current=null;});
-      }
-      return;
     }
-    /* 2026-04-23: 投げ縄マルチ移動中 */
+    /* 2026-04-23: 投げ縄マルチ移動中
+       左右同時押しパン中は即キャンセルしてパンへ流す */
     if(lassoMoveRef.current){
-      var tpLm=pxToTimePrice(e.clientX,e.clientY);
-      if(tpLm&&tpLm.p!=null){
-        lassoMoveRef.current.dtm=tpLm.tm-lassoMoveRef.current.startTM;
-        lassoMoveRef.current.dp=tpLm.p-lassoMoveRef.current.startP;
+      if(bothBtnPanRef.current||ctrlPanRef.current){lassoMoveRef.current=null;}
+      else{
+        var tpLm=pxToTimePrice(e.clientX,e.clientY);
+        if(tpLm&&tpLm.p!=null){
+          lassoMoveRef.current.dtm=tpLm.tm-lassoMoveRef.current.startTM;
+          lassoMoveRef.current.dp=tpLm.p-lassoMoveRef.current.startP;
+        }
+        if(!rafRef.current){
+          rafRef.current=requestAnimationFrame(function(){try{drawCrosshair();}catch(err){}rafRef.current=null;});
+        }
+        return;
       }
-      if(!rafRef.current){
-        rafRef.current=requestAnimationFrame(function(){try{drawCrosshair();}catch(err){}rafRef.current=null;});
-      }
-      return;
     }
     // lasso 移動中
     if(moveRef.current){
