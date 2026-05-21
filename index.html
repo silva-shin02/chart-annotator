@@ -2958,12 +2958,74 @@ function DataChart(props){
           }
           return;
         }
-        /* その他: 各アンカーをチェック */
-        var anc=s.anchors;
-        for(var ai=0;ai<anc.length;ai++){
-          var scr=_ancToScr(anc[ai]);
-          if(_pInPoly(scr.x,scr.y)){hits.push({side:side,idx:idx});return;}
+        /* 2点セグメントとポリゴン辺の交差判定ヘルパー */
+        function _segCross(ax,ay,bx,by,cx,cy,dx,dy){
+          var d1x=bx-ax,d1y=by-ay,d2x=dx-cx,d2y=dy-cy;
+          var den=d1x*d2y-d1y*d2x;
+          if(Math.abs(den)<1e-10)return false;
+          var t=((cx-ax)*d2y-(cy-ay)*d2x)/den;
+          var u=((cx-ax)*d1y-(cy-ay)*d1x)/den;
+          return t>=0&&t<=1&&u>=0&&u<=1;
         }
+        function _segInPoly(ax,ay,bx,by){
+          /* 端点がポリゴン内、またはセグメントがポリゴン辺と交差 */
+          if(_pInPoly(ax,ay)||_pInPoly(bx,by))return true;
+          for(var pi=0,pj=poly.length-1;pi<poly.length;pj=pi++){
+            if(_segCross(ax,ay,bx,by,poly[pi].x,poly[pi].y,poly[pj].x,poly[pj].y))return true;
+          }
+          return false;
+        }
+        var anc=s.anchors;
+        /* freehand: 全点チェック (既存動作) */
+        if(tp==='freehand'){
+          for(var ai=0;ai<anc.length;ai++){
+            var scr=_ancToScr(anc[ai]);
+            if(_pInPoly(scr.x,scr.y)){hits.push({side:side,idx:idx});return;}
+          }
+          return;
+        }
+        /* horizontal: 全幅に伸びる水平線 → 複数点でチェック */
+        if(tp==='horizontal'){
+          if(!anc.length)return;
+          var scr0=_ancToScr(anc[0]);
+          var xL=L.padL+rect.left, xR=(L.padL+L.chartW)+rect.left;
+          var hPts=[xL,(xL+xR)/2,xR];
+          for(var hi=0;hi<hPts.length;hi++){
+            if(_pInPoly(hPts[hi],scr0.y)){hits.push({side:side,idx:idx});return;}
+          }
+          return;
+        }
+        if(anc.length<2)return;
+        var pa=_ancToScr(anc[0]), pb=_ancToScr(anc[1]);
+        /* rect: 4角すべて + 4辺の交差チェック */
+        if(tp==='rect'){
+          var c1={x:pa.x,y:pa.y},c2={x:pb.x,y:pa.y},c3={x:pb.x,y:pb.y},c4={x:pa.x,y:pb.y};
+          var corners=[c1,c2,c3,c4];
+          for(var ci=0;ci<4;ci++){if(_pInPoly(corners[ci].x,corners[ci].y)){hits.push({side:side,idx:idx});return;}}
+          /* 4辺 × ポリゴン辺 交差 */
+          var edges=[[c1,c2],[c2,c3],[c3,c4],[c4,c1]];
+          for(var ei=0;ei<4;ei++){
+            for(var pi2=0,pj2=poly.length-1;pi2<poly.length;pj2=pi2++){
+              if(_segCross(edges[ei][0].x,edges[ei][0].y,edges[ei][1].x,edges[ei][1].y,
+                           poly[pi2].x,poly[pi2].y,poly[pj2].x,poly[pj2].y)){
+                hits.push({side:side,idx:idx});return;
+              }
+            }
+          }
+          return;
+        }
+        /* circle: 中心+上下左右4点チェック */
+        if(tp==='circle'){
+          var cx=(pa.x+pb.x)/2, cy=(pa.y+pb.y)/2;
+          var erx=Math.abs(pb.x-pa.x)/2, ery=Math.abs(pb.y-pa.y)/2;
+          var cPts=[{x:cx,y:cy},{x:cx+erx,y:cy},{x:cx-erx,y:cy},{x:cx,y:cy+ery},{x:cx,y:cy-ery}];
+          for(var cpi=0;cpi<cPts.length;cpi++){
+            if(_pInPoly(cPts[cpi].x,cPts[cpi].y)){hits.push({side:side,idx:idx});return;}
+          }
+          return;
+        }
+        /* line/dotted/arrow/marker/trade: 端点 + セグメント交差 */
+        if(_segInPoly(pa.x,pa.y,pb.x,pb.y)){hits.push({side:side,idx:idx});return;}
       }
       if(strokes)strokes.forEach(function(s,i){_checkStroke(s,i,'cur');});
       if(refStrokes)refStrokes.forEach(function(s,i){_checkStroke(s,i,'ref');});
