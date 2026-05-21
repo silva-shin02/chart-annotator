@@ -6789,9 +6789,14 @@ function ImageAnnotator(props){
                   el.style.height=el.scrollHeight+"px";
                   try{
                     el.focus();
-                    var lenT=(el.value||'').length;
-                    /* 既存編集: 末尾にカーソル / 新規: そのまま (空なのでどっちでも) */
-                    el.setSelectionRange(lenT,lenT);
+                    /* 新規テキスト(空)のみ末尾にカーソル。
+                       既存テキスト編集時は setSelectionRange を呼ばない。
+                       RAF はマウント後に遅延発火するため、ユーザーがクリックで
+                       カーソルを任意位置に置いた後でも強制上書きされてしまうため。 */
+                    if(!isEditing){
+                      var lenT=(el.value||'').length;
+                      el.setSelectionRange(lenT,lenT);
+                    }
                   }catch(er){}
                 });
               }
