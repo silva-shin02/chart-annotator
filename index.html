@@ -4890,6 +4890,13 @@ function ImageAnnotator(props){
   var tickerForNote=img._ticker||(analysisData&&analysisData.ticker)||'';
   var stTNote=useState(function(){return caGetTickerNote(tickerForNote);}); var tickerNote=stTNote[0],setTickerNote=stTNote[1];
   var stTNoteOpen=useState(false); var tickerNoteOpen=stTNoteOpen[0],setTickerNoteOpen=stTNoteOpen[1];
+  /* 2026-05-21: エディタ内チャートメモ・タグ */
+  var stEdTagIds=useState(function(){return img._draftId?caGetChartTags(img._draftId):[];});
+  var edTagIds=stEdTagIds[0],setEdTagIds=stEdTagIds[1];
+  var stEdMemoHtml=useState(function(){return img._draftId?caGetChartMemo(img._draftId):'';});
+  var edMemoHtml=stEdMemoHtml[0],setEdMemoHtml=stEdMemoHtml[1];
+  var stEdMemoOpen=useState(false); var edMemoOpen=stEdMemoOpen[0],setEdMemoOpen=stEdMemoOpen[1];
+  var stEdTagOpen=useState(false);  var edTagOpen=stEdTagOpen[0],setEdTagOpen=stEdTagOpen[1];
   var tickerNoteSaveTimerRef=useRef(null);
   function updateTickerNote(val){
     setTickerNote(val);
@@ -4992,6 +4999,34 @@ function ImageAnnotator(props){
   var savedDraftIdRef=useRef(img._draftId||null);
   var savedTickerRef=useRef(img._ticker||'');
   var postSaveCallbackRef=useRef(null);
+  /* エディタ内タグ変更ハンドラ */
+  function handleEditorTagChange(newIds){
+    var cid=img._draftId||savedDraftIdRef.current||null;
+    if(!cid){window.caToast('先にチャートを保存してください','info');return;}
+    caSetChartTags(cid,newIds);
+    setEdTagIds(newIds);
+    var cfg=props.fbCfg;
+    if(cfg&&cfg.url&&!_fbIsPaused(cfg)){
+      var auth=cfg.secret?'?auth='+cfg.secret:'';
+      var u=cfg.url.replace(/\/$/,'')+'/ca-chart-tags/'+encodeURIComponent(cid)+'.json'+auth;
+      fetch(u,{method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({tagIds:newIds,updatedAt:Date.now()})}).catch(function(){});
+    }
+  }
+  /* エディタ内メモ保存ハンドラ */
+  function handleEditorMemoSave(h){
+    var cid=img._draftId||savedDraftIdRef.current||null;
+    if(!cid){window.caToast('先にチャートを保存してください','info');return;}
+    caSetChartMemo(cid,h);
+    setEdMemoHtml(h);
+    var cfg=props.fbCfg;
+    if(cfg&&cfg.url&&!_fbIsPaused(cfg)){
+      var auth=cfg.secret?'?auth='+cfg.secret:'';
+      var u=cfg.url.replace(/\/$/,'')+'/ca-chart-memos/'+encodeURIComponent(cid)+'.json'+auth;
+      fetch(u,{method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({html:h,updatedAt:Date.now()})}).catch(function(){});
+    }
+  }
   /* 2026-04-20 Step3: 画像mode refs撤去
      (baseRef/baseImgRef/baseDimRef/overlayCanvasRef/strokesRef/histRef/futRef/drawRef/
       lastPosRef/freehandPts/panRef/pinchRef/_tHandlers/lassoModeRef/selDragRef/
@@ -6037,14 +6072,78 @@ function ImageAnnotator(props){
                 borderRight:"none"},
             onClick:splitChart?function(e){setSplitActive('top');}:undefined
           },
-            /* メタ行 (ticker + date のみ) — C2+: refあり時は両日付連結 */
-            ce("div",{style:{display:"flex",alignItems:"center",gap:10,padding:"6px 12px",
-              background:"#111",borderBottom:"1px solid #222",flexShrink:0}},
-              ce("div",{style:{fontSize:13,fontWeight:700,color:"#ddd"}},
-                (analysisData.ticker||'?')+'　'+
-                ((refAnalysis&&refAnalysis.analysisData)
-                  ?((refAnalysis.analysisData.date||'')+_dowLabel(refAnalysis.analysisData.date||'')+' ⇄ '+(analysisData.date||'')+_dowLabel(analysisData.date||''))
-                  :((analysisData.date||'')+_dowLabel(analysisData.date||'')))
+            /* メタ行 (ticker + date + チャートメモ/タグ) — 2026-05-21 */
+            ce("div",{style:{background:"#111",borderBottom:"1px solid #222",flexShrink:0}},
+              /* 上段: ticker・date・タグチップ・ボタン群 */
+              ce("div",{style:{display:"flex",alignItems:"center",gap:6,padding:"5px 10px",flexWrap:"wrap",minHeight:32}},
+                ce("div",{style:{fontSize:13,fontWeight:700,color:"#ddd",flexShrink:0}},
+                  (analysisData.ticker||'?')+'　'+
+                  ((refAnalysis&&refAnalysis.analysisData)
+                    ?((refAnalysis.analysisData.date||'')+_dowLabel(refAnalysis.analysisData.date||'')+' ⇄ '+(analysisData.date||'')+_dowLabel(analysisData.date||''))
+                    :((analysisData.date||'')+_dowLabel(analysisData.date||'')))
+                ),
+                /* タグチップ (inline) */
+                (function(){
+                  var _td=caLoadTagDefs(); var _tById={};
+                  _td.forEach(function(d){_tById[d.id]=d;});
+                  return edTagIds.map(function(tid){
+                    var td=_tById[tid]; if(!td)return null;
+                    return ce('span',{key:tid,
+                      onClick:function(e){e.stopPropagation();setEdTagOpen(function(o){return !o;});setEdMemoOpen(false);},
+                      style:{fontSize:10,padding:'2px 8px',borderRadius:10,
+                        background:td.color,color:'#fff',fontWeight:700,
+                        whiteSpace:'nowrap',cursor:'pointer',
+                        boxShadow:'0 1px 3px rgba(0,0,0,.4)'}},
+                      td.name);
+                  });
+                })(),
+                /* ボタン群 (チャートIDがある場合のみ) */
+                (img._draftId||savedDraftIdRef.current)&&ce("div",{
+                  style:{marginLeft:"auto",display:"flex",gap:3,alignItems:"center",flexShrink:0}},
+                  ce("button",{
+                    onClick:function(){setEdMemoOpen(function(o){return !o;});setEdTagOpen(false);},
+                    style:{position:"relative",padding:"3px 7px",fontSize:11,fontWeight:700,
+                      background:edMemoOpen?"#1e1b4b":"transparent",
+                      color:edMemoOpen?"#a5b4fc":"#555",
+                      border:edMemoOpen?"1px solid #4338CA":"1px solid transparent",
+                      borderRadius:5,cursor:"pointer",fontFamily:"inherit"}},
+                    "📝",
+                    _caMemoHasContent(edMemoHtml)&&ce("span",{style:{
+                      position:"absolute",top:-3,right:-3,
+                      width:8,height:8,borderRadius:"50%",
+                      background:"#ef4444",border:"2px solid #111"}})
+                  ),
+                  ce("button",{
+                    onClick:function(){setEdTagOpen(function(o){return !o;});setEdMemoOpen(false);},
+                    style:{padding:"3px 7px",fontSize:11,fontWeight:700,
+                      background:edTagOpen?"#1a2e1a":"transparent",
+                      color:edTagOpen?"#86efac":"#555",
+                      border:edTagOpen?"1px solid #22c55e":"1px solid transparent",
+                      borderRadius:5,cursor:"pointer",fontFamily:"inherit"}},
+                    "🏷"
+                  )
+                )
+              ),
+              /* タグセレクターパネル */
+              edTagOpen&&ce("div",{style:{padding:"8px 12px",borderTop:"1px solid #222",background:"#0a0a0a"}},
+                ce(CaTagSelector,{
+                  chartId:img._draftId||savedDraftIdRef.current,
+                  selectedIds:edTagIds,
+                  onChangeTags:handleEditorTagChange,
+                  onClose:function(){setEdTagOpen(false);},
+                  fbCfg:props.fbCfg||{}
+                })
+              ),
+              /* メモパネル */
+              edMemoOpen&&ce("div",{style:{padding:"8px 12px",borderTop:"1px solid #222",background:"#0a0a0a",maxHeight:220,overflowY:"auto"}},
+                ce(CaMemoEditableField,{
+                  key:"editorMemo_"+(img._draftId||savedDraftIdRef.current||'new'),
+                  html:edMemoHtml,
+                  placeholder:"クリックしてメモを追加…",
+                  guardOwner:"editorMemo_"+(img._draftId||savedDraftIdRef.current||'new'),
+                  hideEditButton:true,
+                  onSave:handleEditorMemoSave
+                })
               )
             ),
             ce(DataChart,{
