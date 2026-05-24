@@ -4601,6 +4601,10 @@ function ImageAnnotator(props){
   var sSC=useState(null); var splitChart=sSC[0],setSplitChart=sSC[1];
   var sSS=useState(function(){return {'1m':[],'5m':[]};});
   var splitStrokes=sSS[0],setSplitStrokes=sSS[1];
+  /* 2026-05-21: splitStrokes をクロージャ外から常に最新参照できるよう Ref に同期 */
+  var splitStrokesRef=useRef(splitStrokes);
+  splitStrokesRef.current=splitStrokes; // 毎レンダー更新 (stale closure 防止)
+  var splitAutoSaveTimerRef=useRef(null);
   var sSA=useState('top'); var splitActive=sSA[0],setSplitActive=sSA[1];
   var sSR=useState(0.5); var splitRatio=sSR[0],setSplitRatio=sSR[1];
   var sSP=useState(false); var showSplitPicker=sSP[0],setShowSplitPicker=sSP[1];
@@ -4928,6 +4932,26 @@ function ImageAnnotator(props){
     }
     return function(){if(tickerNoteSaveTimerRef.current)clearTimeout(tickerNoteSaveTimerRef.current);};
   },[]);
+  /* 2026-05-21: 分割チャート auto-save (splitStrokes 変更から 1.5s debounce) */
+  useEffect(function(){
+    if(!splitChart||!splitChart.id)return;
+    var id=splitChart.id; var sc=splitChart;
+    if(splitAutoSaveTimerRef.current)clearTimeout(splitAutoSaveTimerRef.current);
+    splitAutoSaveTimerRef.current=setTimeout(function(){
+      caLoadDataAsync(id,function(d){
+        var nd=Object.assign({},d||{analysisData:sc.analysisData},{analysisStrokes:splitStrokesRef.current});
+        caSaveData(id,nd);
+        var cfg=props.fbCfg||{};
+        if(cfg.url&&!_fbIsPaused(cfg)){
+          var auth=cfg.secret?'?auth='+cfg.secret:'';
+          var base=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
+          fetch(base+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify(nd)}).catch(function(){});
+        }
+      });
+    },1500);
+    return function(){if(splitAutoSaveTimerRef.current)clearTimeout(splitAutoSaveTimerRef.current);};
+  },[splitStrokes]);
   /* 2026-04-20 Step3: 画像mode state撤去 (textInputState/floatPos) */
   /* 分析モード用 state */
   var stATI=useState(null);  var analysisTextInput=stATI[0],setAnalysisTextInput=stATI[1];
@@ -6439,7 +6463,27 @@ function ImageAnnotator(props){
               onStrokeDelete:function(side,idx){var o=Object.assign({},splitStrokes);var a=(o[analysisTf]||[]).slice();a.splice(idx,1);o[analysisTf]=a;setSplitStrokes(o);},
               onStrokeDeleteMany:function(items){var o=Object.assign({},splitStrokes);var a=(o[analysisTf]||[]).slice();var s=new Set(items.map(function(it){return typeof it==='number'?it:it.idx;}));o[analysisTf]=a.filter(function(_,i){return !s.has(i);});setSplitStrokes(o);},
               onStrokeUpdateMany:function(items){var o=Object.assign({},splitStrokes);var a=(o[analysisTf]||[]).slice();items.forEach(function(it){if(it&&it.stroke)a[it.idx]=it.stroke;});o[analysisTf]=a;setSplitStrokes(o);},
-              onRequestTextInput:splitActive==='bottom'?function(req){setAnalysisTextInput(req);}:null,
+              onRequestTextInput:splitActive==='bottom'?function(req){
+                var initText='',initFS=fontSize,initBold=fontBold,initColor=color,initOp=opacity,initBoxW=null;
+                var initTm=req.tm,initP=req.p;
+                if(req.editIdx>=0){
+                  var srcArr=(splitStrokesRef.current[analysisTf]||[]);
+                  var es=srcArr[req.editIdx];
+                  if(es){
+                    initText=es.text||'';initFS=es.fontSize||fontSize;initBold=!!es.fontBold;
+                    initColor=es.color||color;initOp=es.opacity!=null?es.opacity:opacity;
+                    initBoxW=es.boxW||null;
+                    if(es.anchors&&es.anchors[0]){initTm=es.anchors[0].tm;initP=es.anchors[0].p;}
+                  }
+                }
+                setAnalysisTextInput({tm:initTm,p:initP,screenX:req.screenX,screenY:req.screenY,
+                  text:initText,fontSize:initFS,fontBold:initBold,color:initColor,opacity:initOp,
+                  boxW:initBoxW,editIdx:req.editIdx>=0?req.editIdx:-1,
+                  side:'split',tf:analysisTf,_openedAt:Date.now()});
+              }:null,
+              editingTextIdx:(analysisTextInput&&analysisTextInput.side==='split'&&analysisTextInput.editIdx>=0)
+                ?{side:'cur',idx:analysisTextInput.editIdx}
+                :null,
               textInputActive:!!analysisTextInput,
               quickColors:quickColors,
               tradeDir:tradeDir,
@@ -6574,9 +6618,13 @@ function ImageAnnotator(props){
         var atiSide=ati.side||'cur';
         /* 2026-04-22: 地図モデルズーム対応 — 表示時に fontSize/boxW を zoom 倍、
            保存時は生値 (ati.fontSize/boxW) のまま、ハンドルドラッグ差分は /zoom で生値化 */
-        var atiZoom=(analysisZoom!=null&&analysisZoom>0)?analysisZoom:1.0;
-        /* C6: side別の strokes対象取得/setter */
+        /* 2026-05-21: split時はzoom=1 (分割チャートはzoom未対応) */
+        var atiZoom=atiSide==='split'?1.0:((analysisZoom!=null&&analysisZoom>0)?analysisZoom:1.0);
+        /* C6: side別の strokes対象取得/setter (2026-05-21: 'split' 追加) */
         function getTfArr(){
+          if(atiSide==='split'){
+            return (splitStrokesRef.current[tfKey]||[]).slice();
+          }
           if(atiSide==='ref'){
             var ra=refAnalysisRef.current;
             if(!ra)return null;
@@ -6586,6 +6634,12 @@ function ImageAnnotator(props){
           return (curObj[tfKey]||[]).slice();
         }
         function setTfArrCommit(newTfArr){
+          if(atiSide==='split'){
+            var spObj=splitStrokesRef.current||{'1m':[],'5m':[]};
+            var nextSplit=Object.assign({},spObj,(function(){var o={};o[tfKey]=newTfArr;return o;})());
+            setSplitStrokes(nextSplit);
+            return;
+          }
           if(atiSide==='ref'){
             var ra=refAnalysisRef.current;
             if(!ra)return;
@@ -7074,6 +7128,21 @@ function ImageAnnotator(props){
             _v:now
           };
           caSaveData(id,dataJ);
+          /* エディタ終了時: splitChartの書き込みも確実に保存 */
+          if(splitChart&&splitChart.id){
+            var spId=splitChart.id;
+            caLoadDataAsync(spId,function(spd){
+              var nd=Object.assign({},spd||{analysisData:splitChart.analysisData},{analysisStrokes:splitStrokesRef.current});
+              caSaveData(spId,nd);
+              var cfg=props.fbCfg||{};
+              if(cfg.url&&!_fbIsPaused(cfg)){
+                var auth=cfg.secret?'?auth='+cfg.secret:'';
+                var base=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
+                fetch(base+'/'+spId+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
+                  body:JSON.stringify(nd)}).catch(function(){});
+              }
+            });
+          }
           generateAnalysisThumb(dataJ.analysisData, function(thumb){
             _finalize(thumb||img._thumb||'');
           });
