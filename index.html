@@ -6099,7 +6099,7 @@ function ImageAnnotator(props){
                 })(),
                 /* ボタン群 (チャートIDがある場合のみ) */
                 (img._draftId||savedDraftIdRef.current)&&ce("div",{
-                  style:{marginLeft:"auto",display:"flex",gap:3,alignItems:"center",flexShrink:0}},
+                  style:{display:"flex",gap:3,alignItems:"center",flexShrink:0}},
                   ce("button",{
                     onClick:function(){setEdMemoOpen(function(o){return !o;});setEdTagOpen(false);},
                     style:{position:"relative",padding:"3px 7px",fontSize:11,fontWeight:700,
@@ -6107,7 +6107,7 @@ function ImageAnnotator(props){
                       color:edMemoOpen?"#a5b4fc":"#555",
                       border:edMemoOpen?"1px solid #4338CA":"1px solid transparent",
                       borderRadius:5,cursor:"pointer",fontFamily:"inherit"}},
-                    "📝",
+                    "メモ",
                     _caMemoHasContent(edMemoHtml)&&ce("span",{style:{
                       position:"absolute",top:-3,right:-3,
                       width:8,height:8,borderRadius:"50%",
@@ -6120,7 +6120,7 @@ function ImageAnnotator(props){
                       color:edTagOpen?"#86efac":"#555",
                       border:edTagOpen?"1px solid #22c55e":"1px solid transparent",
                       borderRadius:5,cursor:"pointer",fontFamily:"inherit"}},
-                    "🏷"
+                    "タグ"
                   )
                 )
               ),
