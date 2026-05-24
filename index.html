@@ -6705,13 +6705,17 @@ function ImageAnnotator(props){
         }
         function deleteAnalysisText(){
           if(ati.editIdx>=0){
-            var curArr=getTfArr();
-            if(curArr){
-              curArr.splice(ati.editIdx,1);
-              setTfArrCommit(curArr);
-            }
+            window.caConfirm('このテキストを削除しますか？',function(){
+              var curArr=getTfArr();
+              if(curArr){
+                curArr.splice(ati.editIdx,1);
+                setTfArrCommit(curArr);
+              }
+              setAnalysisTextInput(null);
+            },null,{yesLabel:'削除',noLabel:'キャンセル',danger:true});
+          } else {
+            setAnalysisTextInput(null);
           }
-          setAnalysisTextInput(null);
         }
         function cancelAnalysisText(){setAnalysisTextInput(null);}
         var sx=ati.screenX||0, sy=ati.screenY||0;
