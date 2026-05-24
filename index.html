@@ -5060,7 +5060,7 @@ function ImageAnnotator(props){
   /* 2026-04-20 Step3: penTapRef 撤去 (canvas touchstart useEffectで使用、削除済) */
   var toolRef=useRef("pan"); // tool stateのミラー（pointerイベント用）
   var toolMemRef=useRef({}); // ツール別の色・線幅・透明度を記憶
-  var prevHorizRef=useRef(false); // dotted切替前の水平スナップ状態
+  /* prevHorizRef は toolMemRef.horiz に統合したため削除 */
   /* 分析モード用 ref */
   /* C6: tf別 undo/redo 履歴。各entryは {cur:[...],ref:[...]} のスナップショット (cur/ref 共通スタック) */
   var analysisHistRef=useRef({'1m':[{cur:[],ref:[]}],'5m':[{cur:[],ref:[]}]});
@@ -5572,27 +5572,30 @@ function ImageAnnotator(props){
 
   // ── switchTool ──
   function switchTool(t){
-    // 現ツールの設定を保存
     var noSave=["pan","eraser","lasso","lassoFree","snippet"];
+    // 現ツールの設定を保存 (horiz含む)
     if(noSave.indexOf(tool)<0){
-      toolMemRef.current[tool]={color:color,lineW:lineW,opacity:opacity,fontSize:fontSize,fontBold:fontBold};
+      toolMemRef.current[tool]={color:color,lineW:lineW,opacity:opacity,fontSize:fontSize,fontBold:fontBold,horiz:horiz};
     }
     // marker離脱時のリセット
     if(tool==="marker"&&t!=="marker"){setLineW(2);setOpacity(1);}
-    // dotted離脱時: 水平スナップを元に戻す
-    if(tool==="dotted"&&t!=="dotted"){setHoriz(prevHorizRef.current);}
     setTool(t);
     /* 2026-04-20 Step3: 画像mode選択cleanup撤去 (analysis selectedIdx は DataChart 管理) */
     // marker進入時の固定設定
     if(t==="marker"){setLineW(3);setOpacity(0.7);}
-    // dotted進入時: 水平スナップ自動ON
-    if(t==="dotted"&&tool!=="dotted"){prevHorizRef.current=horiz;setHoriz(true);}
-    // 保存済み設定の復元
-    var mem=toolMemRef.current[t];
-    if(mem&&noSave.indexOf(t)<0){
-      setColor(mem.color);
-      if(t!=="marker"){setLineW(mem.lineW);setOpacity(mem.opacity);}
-      if(t==="text"){setFontSize(mem.fontSize);setFontSizeStr(String(mem.fontSize));}
+    // 保存済み設定の復元 (horiz含む)
+    if(noSave.indexOf(t)<0){
+      var mem=toolMemRef.current[t];
+      if(mem){
+        setColor(mem.color);
+        if(t!=="marker"){setLineW(mem.lineW);setOpacity(mem.opacity);}
+        if(t==="text"){setFontSize(mem.fontSize);setFontSizeStr(String(mem.fontSize));}
+        // horiz: 保存済みがあればそれを使う (未保存=null/undefinedの場合はdottedのみtrue)
+        setHoriz(mem.horiz!=null?!!mem.horiz:t==="dotted");
+      } else {
+        // 初回進入: dottedは水平スナップON、その他はOFF
+        setHoriz(t==="dotted");
+      }
     }
   }
 
