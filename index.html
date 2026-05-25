@@ -9570,6 +9570,180 @@ function NotepadPage(props){
   );
 }
 
+/* ─── CaCalendarModal: カレンダーからチャートを探す ─── */
+function CaCalendarModal(props){
+  var charts=props.charts||[];
+  var onOpenChart=props.onOpenChart||function(){};
+  var onClose=props.onClose||function(){};
+
+  /* デフォルト表示月: 最新チャートの月、なければ今月 */
+  function _resolveDate(m){
+    var ad=m.analysisDate||'';
+    if(/^\d{4}-\d{2}-\d{2}$/.test(ad))return ad;
+    var r=ad.match(/^(\d{4})(\d{2})(\d{2})$/);
+    if(r)return r[1]+'-'+r[2]+'-'+r[3];
+    var n=m.name||'';
+    var r2=n.match(/(?:^|[_\-])(\d{4})-(\d{2})-(\d{2})/);
+    if(r2)return r2[1]+'-'+r2[2]+'-'+r2[3];
+    var r3=n.match(/_(\d{4})(\d{2})(\d{2})(?:[._]|$)/);
+    if(r3)return r3[1]+'-'+r3[2]+'-'+r3[3];
+    return '';
+  }
+  var latestDate=null;
+  charts.forEach(function(m){var d=_resolveDate(m);if(d&&(!latestDate||d>latestDate))latestDate=d;});
+  var defYear,defMonth;
+  if(latestDate){var pts=latestDate.split('-');defYear=parseInt(pts[0],10);defMonth=parseInt(pts[1],10)-1;}
+  else{var _nd=new Date();defYear=_nd.getFullYear();defMonth=_nd.getMonth();}
+
+  var sY=useState(defYear);   var year=sY[0],setYear=sY[1];
+  var sMo=useState(defMonth); var month=sMo[0],setMonth=sMo[1]; /* 0-based */
+  var sSel=useState(latestDate||null); var selDate=sSel[0],setSelDate=sSel[1];
+
+  /* date -> [chart] マップ */
+  var dateMap={};
+  charts.forEach(function(m){
+    var d=_resolveDate(m);
+    if(!d)return;
+    if(!dateMap[d])dateMap[d]=[];
+    dateMap[d].push(m);
+  });
+
+  /* カレンダーグリッド計算 */
+  var firstDOW=new Date(year,month,1).getDay(); /* 0=日 */
+  var daysInMonth=new Date(year,month+1,0).getDate();
+  var cells=[];
+  for(var _i=0;_i<firstDOW;_i++)cells.push(null);
+  for(var _d=1;_d<=daysInMonth;_d++)cells.push(_d);
+  while(cells.length%7!==0)cells.push(null);
+
+  var MNAMES=['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
+  var DNAMES=['日','月','火','水','木','金','土'];
+
+  function pad2(n){return n<10?'0'+n:''+n;}
+  function makeDS(d){return year+'-'+pad2(month+1)+'-'+pad2(d);}
+
+  var todayD=new Date();
+  var todayStr=todayD.getFullYear()+'-'+pad2(todayD.getMonth()+1)+'-'+pad2(todayD.getDate());
+
+  function prevMonth(){if(month===0){setMonth(11);setYear(year-1);}else setMonth(month-1);setSelDate(null);}
+  function nextMonth(){if(month===11){setMonth(0);setYear(year+1);}else setMonth(month+1);setSelDate(null);}
+
+  var selCharts=selDate?(dateMap[selDate]||[]).slice().sort(function(a,b){return(b.savedAt||0)-(a.savedAt||0);}):[];
+
+  return ReactDOM.createPortal(
+    ce('div',{
+      style:{position:'fixed',inset:0,zIndex:10050,background:'rgba(0,0,0,0.72)',
+        display:'flex',alignItems:'center',justifyContent:'center',padding:12},
+      onMouseDown:function(e){if(e.target===e.currentTarget)onClose();}
+    },
+      ce('div',{style:{background:'#1a1a1a',borderRadius:12,border:'1px solid #333',
+        boxShadow:'0 8px 40px rgba(0,0,0,.9)',display:'flex',flexDirection:'row',
+        overflow:'hidden',maxWidth:760,width:'100%',maxHeight:'min(90vh,580px)'}},
+
+        /* 左: カレンダー */
+        ce('div',{style:{padding:16,minWidth:260,maxWidth:300,flexShrink:0,
+          borderRight:'1px solid #2a2a2a',display:'flex',flexDirection:'column',gap:0}},
+
+          /* 月ナビ */
+          ce('div',{style:{display:'flex',alignItems:'center',gap:6,marginBottom:10}},
+            ce('button',{onClick:prevMonth,style:{background:'#2a2a2a',border:'none',color:'#ccc',
+              borderRadius:6,cursor:'pointer',padding:'4px 11px',fontSize:17,lineHeight:1}},'‹'),
+            ce('span',{style:{flex:1,textAlign:'center',fontSize:14,fontWeight:700,color:'#eee'}},
+              year+'年 '+MNAMES[month]),
+            ce('button',{onClick:nextMonth,style:{background:'#2a2a2a',border:'none',color:'#ccc',
+              borderRadius:6,cursor:'pointer',padding:'4px 11px',fontSize:17,lineHeight:1}},'›')
+          ),
+
+          /* 曜日ヘッダ */
+          ce('div',{style:{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:2,marginBottom:3}},
+            DNAMES.map(function(d,i){
+              return ce('div',{key:i,style:{textAlign:'center',fontSize:10,fontWeight:700,padding:'2px 0',
+                color:i===0?'#ef4444':i===6?'#60a5fa':'#666'}},d);
+            })
+          ),
+
+          /* 日付グリッド */
+          ce('div',{style:{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:2,flex:1}},
+            cells.map(function(d,i){
+              if(!d)return ce('div',{key:'e'+i});
+              var ds=makeDS(d);
+              var hasDot=!!dateMap[ds];
+              var isSel=selDate===ds;
+              var isToday=todayStr===ds;
+              var dow=i%7;
+              var isWeekend=dow===0||dow===6;
+              return ce('div',{key:i,
+                onClick:function(){if(hasDot)setSelDate(ds);},
+                style:{position:'relative',textAlign:'center',padding:'5px 2px 8px',
+                  borderRadius:5,cursor:hasDot?'pointer':'default',
+                  background:isSel?'#6366F1':(isToday?'#1e1b4b':'transparent'),
+                  color:isSel?'#fff':(isWeekend?(dow===0?'#ef4444':'#60a5fa'):(hasDot?'#ddd':'#444')),
+                  fontWeight:hasDot?700:400,fontSize:12,userSelect:'none'}},
+                d,
+                hasDot&&ce('span',{style:{position:'absolute',bottom:2,left:'50%',
+                  transform:'translateX(-50%)',width:4,height:4,borderRadius:'50%',
+                  background:isSel?'rgba(255,255,255,0.8)':'#ef4444',display:'block'}})
+              );
+            })
+          )
+        ),
+
+        /* 右: 選択日のチャート */
+        ce('div',{style:{flex:1,padding:16,display:'flex',flexDirection:'column',
+          overflowY:'auto',minWidth:0}},
+          selDate
+            ? ce('div',{style:{display:'flex',flexDirection:'column',gap:8,height:'100%'}},
+                ce('div',{style:{fontSize:13,fontWeight:700,color:'#ccc',marginBottom:4,flexShrink:0}},
+                  selDate+' のチャート'),
+                selCharts.length===0
+                  ? ce('div',{style:{color:'#555',fontSize:12,paddingTop:20,textAlign:'center'}},
+                      'この日のチャートはありません')
+                  : ce('div',{style:{flex:1,overflowY:'auto',display:'flex',
+                      flexDirection:'column',gap:10}},
+                      selCharts.map(function(m,idx){
+                        var thumb=_thumbMemCache[m.id]||m.thumbUrl||m.thumb||null;
+                        return ce('div',{key:m.id||idx,
+                          style:{border:'1px solid #2a2a2a',borderRadius:8,
+                            overflow:'hidden',background:'#111',flexShrink:0}},
+                          thumb
+                            ? ce('img',{src:thumb,draggable:false,
+                                style:{width:'100%',display:'block',maxHeight:160,
+                                  objectFit:'contain',background:'#000'},
+                                onError:function(e){e.target.style.display='none';}})
+                            : ce('div',{style:{width:'100%',height:70,background:'#1e1e1e',
+                                display:'flex',alignItems:'center',justifyContent:'center',
+                                color:'#444',fontSize:11}},'サムネイルなし'),
+                          ce('div',{style:{padding:'6px 8px',display:'flex',
+                            alignItems:'center',gap:6}},
+                            ce('span',{style:{flex:1,fontSize:10,color:'#999',overflow:'hidden',
+                              textOverflow:'ellipsis',whiteSpace:'nowrap'}},m.name||''),
+                            ce('button',{
+                              onClick:function(){onOpenChart(m.id);onClose();},
+                              style:{background:'#6366F1',color:'#fff',border:'none',
+                                borderRadius:5,cursor:'pointer',fontSize:11,fontWeight:700,
+                                padding:'5px 10px',flexShrink:0,whiteSpace:'nowrap'}},
+                              'この日のチャートを開く')
+                          )
+                        );
+                      })
+                    )
+              )
+            : ce('div',{style:{flex:1,display:'flex',alignItems:'center',
+                justifyContent:'center',color:'#444',fontSize:13}},
+                '← 日付を選択してください'),
+          ce('div',{style:{flexShrink:0,marginTop:10,display:'flex',justifyContent:'flex-end'}},
+            ce('button',{onClick:onClose,
+              style:{background:'#2a2a2a',color:'#aaa',border:'none',borderRadius:6,
+                cursor:'pointer',fontSize:12,padding:'6px 14px'}},
+              '閉じる')
+          )
+        )
+      )
+    ),
+    document.body
+  );
+}
+
 /* ページロード中に1回だけ Firebase 初期同期を行うためのフラグ */
 var _caFbInitDone=false;
 function DraftLibrary(props){
@@ -9659,6 +9833,8 @@ function DraftLibrary(props){
   var sSelTags=useState([]);         var selTagIds=sSelTags[0],setSelTagIds=sSelTags[1];
   var sTagMode=useState('or');       var tagMode=sTagMode[0],setTagMode=sTagMode[1];
   var sTagGroupBy=useState('ticker');var tagGroupBy=sTagGroupBy[0],setTagGroupBy=sTagGroupBy[1];
+  /* カレンダー検索モーダル */
+  var sCal=useState(false); var calOpen=sCal[0],setCalOpen=sCal[1];
   /* 2026-04-30: パターン検索 (Phase 1: 寄り天) */
   var sPat=useState(false);      var showPatternSearch=sPat[0],setShowPatternSearch=sPat[1];
   /* 2026-04-30: C - エディタから起動された時の初期クエリ */
@@ -11405,6 +11581,11 @@ function DraftLibrary(props){
       ce("div",{style:{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}},
         /* sort bar + add button */
         selTicker!==null&&ce("div",{style:{padding:"8px 12px 4px",display:"flex",alignItems:"center",gap:6,flexShrink:0,flexWrap:"wrap"}},
+          /* カレンダーから探す */
+          ce("button",{onClick:function(){setCalOpen(true);},
+            style:Object.assign({},BT,{fontSize:11,fontWeight:700,padding:"5px 10px",borderRadius:7,
+              background:"#0e7490",color:"#fff"})},
+            "📅 カレンダーから探す"),
           ce("button",{onClick:function(){addFileRef.current&&addFileRef.current.click();},
             style:Object.assign({},BT,{fontSize:11,fontWeight:700,padding:"5px 10px",borderRadius:7,
               background:"#16a34a",color:"#fff"})},
@@ -11535,6 +11716,12 @@ function DraftLibrary(props){
         initialQueryDraftId:patSearchInitQuery,
         /* 2026-05-03: 年月折り畳み state を共有 */
         expandedYM:expandedYM, onToggleYM:toggleYM, onSetAllYM:setAllYM
+      }),
+      /* カレンダー検索モーダル */
+      calOpen&&selTicker&&ce(CaCalendarModal,{
+        charts:meta.filter(function(m){return m.ticker===selTicker;}),
+        onOpenChart:function(id){openChart(id);},
+        onClose:function(){setCalOpen(false);}
       })
     )
   );
