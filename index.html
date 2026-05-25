@@ -9814,11 +9814,11 @@ function CaCalendarModal(props){
               var isWeekend=dow===0||dow===6;
               return ce('div',{key:i,
                 onClick:function(){if(hasDot)setSelDate(ds);},
-                style:{position:'relative',textAlign:'center',padding:'4px 2px 5px',
+                style:{position:'relative',textAlign:'center',padding:'7px 3px 8px',
                   borderRadius:4,cursor:hasDot?'pointer':'default',
                   background:isSel?'#6366F1':(isToday?'#1e1b4b':'transparent'),
                   color:isSel?'#fff':(isWeekend?(dow===0?'#ef4444':'#60a5fa'):(hasDot?'#ddd':'#444')),
-                  fontWeight:hasDot?700:400,fontSize:12,userSelect:'none'}},
+                  fontWeight:hasDot?700:400,fontSize:13,userSelect:'none'}},
                 d,
                 hasDot&&ce('span',{style:{position:'absolute',bottom:2,left:'50%',
                   transform:'translateX(-50%)',width:4,height:4,borderRadius:'50%',
