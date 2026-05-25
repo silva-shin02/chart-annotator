@@ -6126,8 +6126,8 @@ function ImageAnnotator(props){
                 })(),
                 /* SN チャート形状タグ (inline, 読み取り専用) */
                 (function(){
-                  var snDate=analysisData.date||'';
                   var snTicker=analysisData.ticker||img._ticker||'';
+                  var snDate=analysisData.date||_caResolveMetaDate(img)||'';
                   if(!snDate||!snTicker)return null;
                   var snTags=caLoadSnChartShapeTags(snTicker,snDate);
                   if(!snTags||!snTags.length)return null;
@@ -8680,6 +8680,20 @@ function _caTickerToSnStockNames(caTicker, snData){
   }
   return names;
 }
+/* meta オブジェクトから YYYY-MM-DD を解決 (analysisDate 優先、なければ name から抽出) */
+function _caResolveMetaDate(m){
+  if(!m)return '';
+  var ad=m.analysisDate||'';
+  if(/^\d{4}-\d{2}-\d{2}$/.test(ad))return ad;
+  var r=ad.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if(r)return r[1]+'-'+r[2]+'-'+r[3];
+  var n=String(m.name||'');
+  var r2=n.match(/(?:^|[_\-])(\d{4})-(\d{2})-(\d{2})/);
+  if(r2)return r2[1]+'-'+r2[2]+'-'+r2[3];
+  var r3=n.match(/_(\d{4})(\d{2})(\d{2})(?:[._\(]|$)/);
+  if(r3)return r3[1]+'-'+r3[2]+'-'+r3[3];
+  return '';
+}
 /* CA ticker + 日付 → SN の chartShapeTags + stockTags (文字列[])
    SN は data.charts[snStock+"_"+date] に両方を持つ。どちらも表示対象。 */
 function caLoadSnChartShapeTags(caTicker, date){
@@ -8846,7 +8860,7 @@ function CaChartCard(props){
 
     /* SN チャート形状タグ (同日・同銘柄のSNデータから読み取り) */
     (function(){
-      var snDate=m.analysisDate||'';
+      var snDate=_caResolveMetaDate(m);
       if(!snDate||!m.ticker)return null;
       var snTags=caLoadSnChartShapeTags(m.ticker,snDate);
       if(!snTags||!snTags.length)return null;
