@@ -9759,6 +9759,17 @@ function CaCalendarModal(props){
 
   var selCharts=selDate?(dateMap[selDate]||[]).slice().sort(function(a,b){return(b.savedAt||0)-(a.savedAt||0);}):[];
 
+  /* メモ・タグ表示用ヘルパー (右パネル) */
+  var _calTagDefs=caLoadTagDefs();
+  var _calTagDefsById={};
+  _calTagDefs.forEach(function(d){_calTagDefsById[d.id]=d;});
+  var _calTagMap=caLoadTagMap();
+  function _calStripHtml(html){
+    if(!html)return '';
+    return html.replace(/<[^>]*>/g,' ').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&')
+      .replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/\s+/g,' ').trim();
+  }
+
   return ReactDOM.createPortal(
     ce('div',{
       style:{position:'fixed',inset:0,zIndex:10050,background:'rgba(0,0,0,0.72)',
@@ -9831,6 +9842,13 @@ function CaCalendarModal(props){
                       flexDirection:'column',gap:10}},
                       selCharts.map(function(m,idx){
                         var thumb=_thumbMemCache[m.id]||m.thumbUrl||m.thumb||null;
+                        /* CA タグ */
+                        var caTids=_calTagMap[m.id]||[];
+                        /* SN タグ */
+                        var snTags=selDate&&m.ticker?caLoadSnChartShapeTags(m.ticker,selDate):[];
+                        /* メモ */
+                        var memoHtml=caGetChartMemo(m.id);
+                        var memoText=_calStripHtml(memoHtml);
                         return ce('div',{key:m.id||idx,
                           style:{border:'1px solid #2a2a2a',borderRadius:8,
                             overflow:'hidden',background:'#111',flexShrink:0}},
@@ -9843,6 +9861,29 @@ function CaCalendarModal(props){
                             : ce('div',{style:{width:'100%',height:70,background:'#1e1e1e',
                                 display:'flex',alignItems:'center',justifyContent:'center',
                                 color:'#444',fontSize:11}},'サムネイルなし'),
+                          /* CA タグ + SN タグ */
+                          (caTids.length>0||snTags.length>0)&&ce('div',{
+                            style:{padding:'5px 8px 2px',display:'flex',flexWrap:'wrap',gap:4}},
+                            caTids.map(function(tid){
+                              var td=_calTagDefsById[tid]; if(!td)return null;
+                              return ce('span',{key:tid,style:{fontSize:10,padding:'2px 7px',
+                                borderRadius:10,background:td.color,color:'#fff',fontWeight:700,
+                                whiteSpace:'nowrap'}},td.name);
+                            }),
+                            snTags.map(function(t,si){
+                              var _i=t.indexOf(':');
+                              var label=_i>=0?t.slice(_i+1):t;
+                              return ce('span',{key:'sn'+si,style:{fontSize:10,padding:'2px 7px',
+                                borderRadius:10,background:'#1c1f3a',color:'#a5b4fc',fontWeight:700,
+                                whiteSpace:'nowrap',border:'1px solid #3730a3'}},
+                                '✦ '+label);
+                            })
+                          ),
+                          /* メモ (内容がある場合のみ) */
+                          memoText&&ce('div',{style:{padding:'3px 8px 4px',fontSize:11,color:'#888',
+                            overflow:'hidden',display:'-webkit-box',WebkitLineClamp:2,
+                            WebkitBoxOrient:'vertical',lineHeight:1.5}},
+                            memoText),
                           ce('div',{style:{padding:'6px 8px',display:'flex',
                             alignItems:'center',gap:6}},
                             ce('span',{style:{flex:1,fontSize:10,color:'#999',overflow:'hidden',
@@ -9868,6 +9909,172 @@ function CaCalendarModal(props){
               '閉じる')
           )
         )
+      )
+    ),
+    document.body
+  );
+}
+
+/* ─── CaTagSearchModal: タグからチャートを探す (CA タグ + SN タグ) ─── */
+function CaTagSearchModal(props){
+  var ticker=props.ticker||'';
+  var charts=props.charts||[];
+  var onOpenChart=props.onOpenChart||function(){};
+  var onClose=props.onClose||function(){};
+
+  var sSel=useState(null); var selTag=sSel[0],setSelTag=sSel[1];
+
+  /* CA タグ → 該当チャート */
+  var tagDefs=caLoadTagDefs();
+  var tagMap=caLoadTagMap();
+  var tagDefsById={};
+  tagDefs.forEach(function(d){tagDefsById[d.id]=d;});
+  var caTagMatches={};
+  charts.forEach(function(m){
+    var tids=tagMap[m.id]||[];
+    tids.forEach(function(tid){
+      if(!caTagMatches[tid])caTagMatches[tid]=[];
+      caTagMatches[tid].push(m);
+    });
+  });
+  var caTags=tagDefs.filter(function(d){return caTagMatches[d.id]&&caTagMatches[d.id].length>0;});
+
+  /* SN タグ → 該当チャート */
+  var snTagMatches={};
+  charts.forEach(function(m){
+    var date=_caResolveMetaDate(m);
+    if(!date||!m.ticker)return;
+    var tags=caLoadSnChartShapeTags(m.ticker,date);
+    tags.forEach(function(t){
+      if(!snTagMatches[t])snTagMatches[t]=[];
+      snTagMatches[t].push(m);
+    });
+  });
+  var snTagKeys=Object.keys(snTagMatches);
+
+  var hasTags=caTags.length>0||snTagKeys.length>0;
+
+  /* 選択中タグの結果 */
+  var matchedCharts=[];
+  var selLabel='';
+  if(selTag){
+    if(selTag.type==='ca'){
+      matchedCharts=caTagMatches[selTag.id]||[];
+      var _td=tagDefsById[selTag.id];
+      selLabel=_td?_td.name:'';
+    } else {
+      matchedCharts=snTagMatches[selTag.label]||[];
+      var _idx=selTag.label.indexOf(':');
+      selLabel=_idx>=0?selTag.label.slice(_idx+1):selTag.label;
+    }
+  }
+
+  var BT0={border:'none',cursor:'pointer',fontFamily:'inherit'};
+
+  return ReactDOM.createPortal(
+    ce('div',{onClick:onClose,
+      style:{position:'fixed',inset:0,background:'rgba(0,0,0,.75)',zIndex:3000,
+        display:'flex',alignItems:'center',justifyContent:'center',padding:16}},
+      ce('div',{onClick:function(e){e.stopPropagation();},
+        style:{background:'#1a1a1a',borderRadius:14,boxShadow:'0 8px 40px rgba(0,0,0,.9)',
+          display:'flex',flexDirection:'column',maxWidth:820,width:'100%',
+          maxHeight:'min(88vh,680px)',overflow:'hidden'}},
+
+        /* ヘッダー */
+        ce('div',{style:{padding:'13px 16px 10px',borderBottom:'1px solid #2a2a2a',
+          display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0}},
+          ce('div',{style:{fontWeight:700,fontSize:14,color:'#fff'}},
+            '🏷 タグから探す',
+            ticker&&ce('span',{style:{color:'#666',fontWeight:400,fontSize:12,marginLeft:8}},'— '+ticker)
+          ),
+          ce('button',{onClick:onClose,
+            style:Object.assign({},BT0,{background:'none',color:'#888',fontSize:18,padding:'0 4px'})},
+            '✕')
+        ),
+
+        /* ボディ */
+        !hasTags
+          ? ce('div',{style:{padding:'40px 24px',textAlign:'center',color:'#555',fontSize:13}},
+              'このチャートにはまだタグがありません')
+          : ce('div',{style:{display:'flex',flex:1,overflow:'hidden',minHeight:0}},
+
+            /* 左: タグリスト */
+            ce('div',{style:{width:195,borderRight:'1px solid #2a2a2a',overflowY:'auto',
+              padding:'8px 0',flexShrink:0}},
+              caTags.length>0&&ce('div',null,
+                ce('div',{style:{padding:'4px 12px 6px',fontSize:10,fontWeight:700,
+                  color:'#555',letterSpacing:1,textTransform:'uppercase'}}, 'CA タグ'),
+                caTags.map(function(td){
+                  var isSel=selTag&&selTag.type==='ca'&&selTag.id===td.id;
+                  var cnt=(caTagMatches[td.id]||[]).length;
+                  return ce('button',{key:td.id,onClick:function(){setSelTag({type:'ca',id:td.id});},
+                    style:Object.assign({},BT0,{display:'flex',alignItems:'center',gap:7,
+                      width:'100%',padding:'7px 12px',background:isSel?'#1e2a3a':'none',
+                      textAlign:'left'})},
+                    ce('span',{style:{width:9,height:9,borderRadius:'50%',flexShrink:0,
+                      background:td.color,display:'inline-block'}}),
+                    ce('span',{style:{fontSize:12,color:isSel?'#93c5fd':'#ccc',flex:1,
+                      overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},td.name),
+                    ce('span',{style:{fontSize:10,color:'#555',flexShrink:0,marginLeft:4}},cnt)
+                  );
+                })
+              ),
+              snTagKeys.length>0&&ce('div',null,
+                caTags.length>0&&ce('div',{style:{margin:'6px 12px',borderTop:'1px solid #2a2a2a'}}),
+                ce('div',{style:{padding:'4px 12px 6px',fontSize:10,fontWeight:700,
+                  color:'#555',letterSpacing:1,textTransform:'uppercase'}}, 'SN タグ'),
+                snTagKeys.map(function(t){
+                  var isSel=selTag&&selTag.type==='sn'&&selTag.label===t;
+                  var cnt=(snTagMatches[t]||[]).length;
+                  var _i=t.indexOf(':');
+                  var label=_i>=0?t.slice(_i+1):t;
+                  return ce('button',{key:t,onClick:function(){setSelTag({type:'sn',label:t});},
+                    style:Object.assign({},BT0,{display:'flex',alignItems:'center',gap:7,
+                      width:'100%',padding:'7px 12px',background:isSel?'#1c1f3a':'none',
+                      textAlign:'left'})},
+                    ce('span',{style:{fontSize:10,color:'#a5b4fc',flexShrink:0}},'✦'),
+                    ce('span',{style:{fontSize:12,color:isSel?'#a5b4fc':'#ccc',flex:1,
+                      overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},label),
+                    ce('span',{style:{fontSize:10,color:'#555',flexShrink:0,marginLeft:4}},cnt)
+                  );
+                })
+              )
+            ),
+
+            /* 右: 結果チャート */
+            ce('div',{style:{flex:1,overflowY:'auto',padding:12}},
+              !selTag
+                ? ce('div',{style:{padding:'40px 16px',textAlign:'center',color:'#555',fontSize:13}},
+                    '← タグを選択してください')
+                : matchedCharts.length===0
+                  ? ce('div',{style:{padding:24,color:'#555',fontSize:13}},'該当チャートなし')
+                  : ce('div',null,
+                      ce('div',{style:{fontSize:12,color:'#888',marginBottom:10}},
+                        selLabel,' — ',matchedCharts.length,'件'),
+                      ce('div',{style:{display:'flex',flexWrap:'wrap',gap:10}},
+                        matchedCharts.map(function(m){
+                          var thumb=_thumbMemCache[m.id]||m.thumbUrl||m.thumb;
+                          var label=m.analysisDate||m.name||'';
+                          return ce('div',{key:m.id,
+                            onClick:function(){onOpenChart(m.id);onClose();},
+                            style:{width:145,background:'#111',borderRadius:8,overflow:'hidden',
+                              cursor:'pointer',border:'1px solid #2a2a2a',flexShrink:0}},
+                            thumb
+                              ? ce('img',{src:thumb,draggable:false,
+                                  style:{width:'100%',height:85,objectFit:'cover',display:'block'},
+                                  onError:function(e){e.target.style.display='none';}})
+                              : ce('div',{style:{width:'100%',height:85,background:'#1e1e1e',
+                                  display:'flex',alignItems:'center',justifyContent:'center',
+                                  color:'#444',fontSize:10}},'no preview'),
+                            ce('div',{style:{padding:'5px 8px',fontSize:10,color:'#aaa',
+                              overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},
+                              label)
+                          );
+                        })
+                      )
+                    )
+            )
+          )
       )
     ),
     document.body
@@ -9965,6 +10172,8 @@ function DraftLibrary(props){
   var sTagGroupBy=useState('ticker');var tagGroupBy=sTagGroupBy[0],setTagGroupBy=sTagGroupBy[1];
   /* カレンダー検索モーダル */
   var sCal=useState(false); var calOpen=sCal[0],setCalOpen=sCal[1];
+  /* タグ検索モーダル */
+  var sTagM=useState(false); var tagModalOpen=sTagM[0],setTagModalOpen=sTagM[1];
   /* 2026-04-30: パターン検索 (Phase 1: 寄り天) */
   var sPat=useState(false);      var showPatternSearch=sPat[0],setShowPatternSearch=sPat[1];
   /* 2026-04-30: C - エディタから起動された時の初期クエリ */
@@ -11716,6 +11925,11 @@ function DraftLibrary(props){
             style:Object.assign({},BT,{fontSize:11,fontWeight:700,padding:"5px 10px",borderRadius:7,
               background:"#0e7490",color:"#fff"})},
             "📅 カレンダーから探す"),
+          /* タグから探す */
+          ce("button",{onClick:function(){setTagModalOpen(true);},
+            style:Object.assign({},BT,{fontSize:11,fontWeight:700,padding:"5px 10px",borderRadius:7,
+              background:"#4f46e5",color:"#fff"})},
+            "🏷 タグから探す"),
           ce("button",{onClick:function(){addFileRef.current&&addFileRef.current.click();},
             style:Object.assign({},BT,{fontSize:11,fontWeight:700,padding:"5px 10px",borderRadius:7,
               background:"#16a34a",color:"#fff"})},
@@ -11852,6 +12066,13 @@ function DraftLibrary(props){
         charts:meta.filter(function(m){return m.ticker===selTicker;}),
         onOpenChart:function(id){openChart(id);},
         onClose:function(){setCalOpen(false);}
+      }),
+      /* タグ検索モーダル */
+      tagModalOpen&&selTicker&&ce(CaTagSearchModal,{
+        ticker:selTicker,
+        charts:meta.filter(function(m){return m.ticker===selTicker;}),
+        onOpenChart:function(id){openChart(id);},
+        onClose:function(){setTagModalOpen(false);}
       })
     )
   );
