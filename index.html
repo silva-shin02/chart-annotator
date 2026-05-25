@@ -9795,15 +9795,15 @@ function CaCalendarModal(props){
           ),
 
           /* 曜日ヘッダ */
-          ce('div',{style:{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:2,marginBottom:3}},
+          ce('div',{style:{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:1,marginBottom:2}},
             DNAMES.map(function(d,i){
-              return ce('div',{key:i,style:{textAlign:'center',fontSize:10,fontWeight:700,padding:'2px 0',
+              return ce('div',{key:i,style:{textAlign:'center',fontSize:10,fontWeight:700,padding:'1px 0',
                 color:i===0?'#ef4444':i===6?'#60a5fa':'#666'}},d);
             })
           ),
 
           /* 日付グリッド */
-          ce('div',{style:{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:2,flex:1}},
+          ce('div',{style:{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:1}},
             cells.map(function(d,i){
               if(!d)return ce('div',{key:'e'+i});
               var ds=makeDS(d);
@@ -9814,8 +9814,8 @@ function CaCalendarModal(props){
               var isWeekend=dow===0||dow===6;
               return ce('div',{key:i,
                 onClick:function(){if(hasDot)setSelDate(ds);},
-                style:{position:'relative',textAlign:'center',padding:'5px 2px 8px',
-                  borderRadius:5,cursor:hasDot?'pointer':'default',
+                style:{position:'relative',textAlign:'center',padding:'4px 2px 5px',
+                  borderRadius:4,cursor:hasDot?'pointer':'default',
                   background:isSel?'#6366F1':(isToday?'#1e1b4b':'transparent'),
                   color:isSel?'#fff':(isWeekend?(dow===0?'#ef4444':'#60a5fa'):(hasDot?'#ddd':'#444')),
                   fontWeight:hasDot?700:400,fontSize:12,userSelect:'none'}},
