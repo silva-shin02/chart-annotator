@@ -8715,6 +8715,37 @@ function caLoadSnChartShapeTags(caTicker, date){
   }catch(e){}
   return [];
 }
+/* ── コンソール診断ヘルパー (DevTools で window.caDebugSN() を実行) ── */
+window.caDebugSN=function(ticker,date){
+  try{
+    var snRaw=localStorage.getItem('scalping_data_v6');
+    if(!snRaw){console.warn('[caDebugSN] scalping_data_v6 が localStorage にありません');return;}
+    var snData=JSON.parse(snRaw);
+    var keys=Object.keys(snData.charts||{});
+    console.log('[caDebugSN] SN charts総数:',keys.length);
+    if(ticker){
+      var snData2=snData;
+      var cands=_caTickerToSnStockNames(ticker,snData2);
+      console.log('[caDebugSN] ticker='+ticker+' 候補SNストック名:',cands);
+      var related=keys.filter(function(k){return cands.some(function(c){return k.indexOf(c+'_')===0;});});
+      console.log('[caDebugSN] 関連キー(最大20件):',related.slice(0,20));
+      if(date){
+        cands.forEach(function(c){
+          var ck=c+'_'+date;
+          var cd=snData.charts[ck];
+          console.log('[caDebugSN] charts["'+ck+'"]:',cd||'(なし)');
+          if(cd)console.log('  chartShapeTags:',cd.chartShapeTags,'stockTags:',cd.stockTags);
+        });
+      }
+    }
+    var caMeta=caLoadMeta();
+    console.log('[caDebugSN] CAチャート数:',caMeta.length);
+    caMeta.slice(0,10).forEach(function(m){
+      var d=_caResolveMetaDate(m);
+      console.log('  ticker='+m.ticker+' name='+m.name+' analysisDate='+m.analysisDate+' → resolved='+d);
+    });
+  }catch(e){console.error('[caDebugSN] エラー:',e);}
+};
 function _snReadCategoriesMap(){
   var map={};
   try{
@@ -12026,9 +12057,21 @@ function App(){
       var all=caLoadMeta();
       var hit=all.find(function(m){return m.id===params.id;});
       if(hit){
+        /* SNからのURL経由: analysisDateが未設定ならparams.dateで補完 */
+        if(params.date&&!hit.analysisDate){
+          var patchedMeta=all.map(function(m){
+            return m.id===hit.id?Object.assign({},m,{analysisDate:params.date}):m;
+          });
+          caSaveMeta(patchedMeta);
+          hit=Object.assign({},hit,{analysisDate:params.date});
+        }
         /* openChart 相当: dataを読み込んでエディタに遷移 */
         var extra={_draftId:hit.id,_ticker:hit.ticker||'',_name:hit.name||'',_thumb:hit.thumb||'',_savedAt:hit.savedAt||0};
         caLoadDataAsync(hit.id,function(d){
+          /* analysisData.dateも補完 (メタ同期) */
+          if(d&&d.analysisData&&!d.analysisData.date&&params.date){
+            d=Object.assign({},d,{analysisData:Object.assign({},d.analysisData,{date:params.date})});
+          }
           if(d&&(d.orig_base64||d.base64)){
             setImg(Object.assign({},d,extra));
           } else if(d&&d.analysisData){
