@@ -12068,9 +12068,9 @@ function DraftLibrary(props){
         onClose:function(){setCalOpen(false);}
       }),
       /* タグ検索モーダル */
-      tagModalOpen&&selTicker&&ce(CaTagSearchModal,{
-        ticker:selTicker,
-        charts:meta.filter(function(m){return m.ticker===selTicker;}),
+      tagModalOpen&&ce(CaTagSearchModal,{
+        ticker:selTicker||'',
+        charts:selTicker?meta.filter(function(m){return m.ticker===selTicker;}):meta,
         onOpenChart:function(id){openChart(id);},
         onClose:function(){setTagModalOpen(false);}
       })
