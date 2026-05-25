@@ -8680,7 +8680,8 @@ function _caTickerToSnStockNames(caTicker, snData){
   }
   return names;
 }
-/* CA ticker + 日付 → SN の chartShapeTags (文字列[]) */
+/* CA ticker + 日付 → SN の chartShapeTags + stockTags (文字列[])
+   SN は data.charts[snStock+"_"+date] に両方を持つ。どちらも表示対象。 */
 function caLoadSnChartShapeTags(caTicker, date){
   if(!caTicker||!date)return [];
   try{
@@ -8692,8 +8693,10 @@ function caLoadSnChartShapeTags(caTicker, date){
     for(var i=0;i<candidates.length;i++){
       var ck=candidates[i]+'_'+date;
       var cd=snData.charts[ck];
-      if(cd&&Array.isArray(cd.chartShapeTags)&&cd.chartShapeTags.length)
-        return cd.chartShapeTags;
+      if(!cd)continue;
+      /* SN は chartShapeTags と stockTags の両方を「タグ」として扱う */
+      var merged=(cd.chartShapeTags||[]).concat(cd.stockTags||[]);
+      if(merged.length)return merged;
     }
   }catch(e){}
   return [];
