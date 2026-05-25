@@ -6124,6 +6124,23 @@ function ImageAnnotator(props){
                       td.name);
                   });
                 })(),
+                /* SN チャート形状タグ (inline, 読み取り専用) */
+                (function(){
+                  var snDate=analysisData.date||'';
+                  var snTicker=analysisData.ticker||img._ticker||'';
+                  if(!snDate||!snTicker)return null;
+                  var snTags=caLoadSnChartShapeTags(snTicker,snDate);
+                  if(!snTags||!snTags.length)return null;
+                  return snTags.map(function(t,i){
+                    var idx=t.indexOf(':');
+                    var label=idx>=0?t.slice(idx+1):t;
+                    return ce('span',{key:'sn'+i,
+                      style:{fontSize:10,padding:'2px 8px',borderRadius:10,
+                        background:'#1c1f3a',color:'#a5b4fc',fontWeight:700,
+                        whiteSpace:'nowrap',border:'1px solid #3730a3',letterSpacing:0.2}},
+                      '✦ '+label);
+                  });
+                })(),
                 /* ボタン群 (チャートIDがある場合のみ) */
                 (img._draftId||savedDraftIdRef.current)&&ce("div",{
                   style:{display:"flex",gap:3,alignItems:"center",flexShrink:0}},
@@ -8636,40 +8653,47 @@ function _snReadCfg(){
   try{var v=JSON.parse(localStorage.getItem('scalping_cfg_v2'));if(v&&v.fbUrl)return v;}catch(e){}
   return null;
 }
-/* ─── SN銘柄タグ連携: CA ticker → SN shvExtraTags 逆引き ───────────────
-   SN は stockName(例:"SBG") → tag[] を shvExtraTags に持つ。
-   CA ticker(例:"ソフトバンク") から stockCode(例:"9984") を取得し、
-   SN custom.stockCodes と DEFAULT_STOCK_MAP を逆引きして対応 stockName を特定する。 */
+/* ─── SN チャート形状タグ連携 ─────────────────────────────────────────
+   SN は data.charts[snStockName+"_"+date].chartShapeTags に各日の形状タグを持つ。
+   CA ticker(例:"ソフトバンク") + date(YYYY-MM-DD) → SN stockName(例:"SBG") を
+   コード逆引きで解決し、該当の chartShapeTags を返す。                    */
 var _SN_DEFAULT_CODE_MAP={ /* SNデフォルトstockName→code */
   "INPEX":"1605","JX金属":"5016","フジクラ":"5803",
   "川崎重工":"7012","IHI":"7013","SBG":"9984"
 };
-function caLoadSnTickerTags(caTicker){
-  if(!caTicker)return [];
+/* CA ticker から候補となる SN stockName 一覧を返す */
+function _caTickerToSnStockNames(caTicker, snData){
+  var names=[];
+  /* ①直接名前一致 */
+  names.push(caTicker);
+  var code=caGetCodeByTicker(caTicker);
+  if(!code)return names;
+  /* ②custom.stockCodes 逆引き */
+  var sc=(snData&&snData.custom&&snData.custom.stockCodes)||{};
+  for(var k in sc){
+    var e=sc[k];
+    if(e&&(e.caTicker===caTicker||String(e.code)===String(code)))names.push(k);
+  }
+  /* ③デフォルトマップ逆引き */
+  for(var dk in _SN_DEFAULT_CODE_MAP){
+    if(String(_SN_DEFAULT_CODE_MAP[dk])===String(code))names.push(dk);
+  }
+  return names;
+}
+/* CA ticker + 日付 → SN の chartShapeTags (文字列[]) */
+function caLoadSnChartShapeTags(caTicker, date){
+  if(!caTicker||!date)return [];
   try{
     var snRaw=localStorage.getItem('scalping_data_v6');
     if(!snRaw)return [];
     var snData=JSON.parse(snRaw);
-    var snTags=(snData&&snData.custom&&typeof snData.custom.shvExtraTags==='object'&&
-      !Array.isArray(snData.custom.shvExtraTags))?snData.custom.shvExtraTags:{};
-    /* 直接名前一致 (例: SN="INPEX" === CA="INPEX") */
-    if(Array.isArray(snTags[caTicker])&&snTags[caTicker].length)return snTags[caTicker];
-    /* コード経由で逆引き */
-    var code=caGetCodeByTicker(caTicker);
-    if(!code)return [];
-    /* custom.stockCodes を優先 */
-    var snCustomCodes=(snData.custom&&snData.custom.stockCodes)||{};
-    for(var k in snCustomCodes){
-      var e=snCustomCodes[k];
-      if(e&&String(e.code)===String(code)){
-        if(Array.isArray(snTags[k])&&snTags[k].length)return snTags[k];
-      }
-    }
-    /* デフォルトマップでフォールバック */
-    for(var dk in _SN_DEFAULT_CODE_MAP){
-      if(String(_SN_DEFAULT_CODE_MAP[dk])===String(code)){
-        if(Array.isArray(snTags[dk])&&snTags[dk].length)return snTags[dk];
-      }
+    if(!snData||!snData.charts)return [];
+    var candidates=_caTickerToSnStockNames(caTicker,snData);
+    for(var i=0;i<candidates.length;i++){
+      var ck=candidates[i]+'_'+date;
+      var cd=snData.charts[ck];
+      if(cd&&Array.isArray(cd.chartShapeTags)&&cd.chartShapeTags.length)
+        return cd.chartShapeTags;
     }
   }catch(e){}
   return [];
@@ -8816,6 +8840,25 @@ function CaChartCard(props){
           td.name);
       })
     ),
+
+    /* SN チャート形状タグ (同日・同銘柄のSNデータから読み取り) */
+    (function(){
+      var snDate=m.analysisDate||'';
+      if(!snDate||!m.ticker)return null;
+      var snTags=caLoadSnChartShapeTags(m.ticker,snDate);
+      if(!snTags||!snTags.length)return null;
+      return ce('div',{style:{padding:'0 9px 5px 9px',display:'flex',flexWrap:'wrap',gap:4}},
+        snTags.map(function(t,i){
+          var idx=t.indexOf(':');
+          var label=idx>=0?t.slice(idx+1):t;
+          return ce('span',{key:i,
+            style:{fontSize:10,padding:'2px 7px',borderRadius:10,
+              background:'#1c1f3a',color:'#a5b4fc',fontWeight:700,
+              whiteSpace:'nowrap',border:'1px solid #3730a3',letterSpacing:0.2}},
+            '✦ '+label);
+        })
+      );
+    })(),
 
     /* SN予定 (analysisDate がありイベントがある場合のみ) */
     snEvents&&snEvents.length>0&&(function(){
@@ -11661,25 +11704,6 @@ function DraftLibrary(props){
               allOpen?"▶ 全折り畳み":"▼ 全展開");
           })()
         ),
-        /* SN銘柄タグ連携バナー */
-        selTicker&&(function(){
-          var snTags=caLoadSnTickerTags(selTicker);
-          if(!snTags||snTags.length===0)return null;
-          return ce("div",{style:{margin:"0 12px 4px",padding:"5px 10px",background:"#1c1200",
-            border:"1px solid #78350f",borderRadius:7,display:"flex",alignItems:"center",
-            gap:6,flexShrink:0,flexWrap:"wrap"}},
-            ce("span",{style:{fontSize:10,color:"#92400e",fontWeight:700,flexShrink:0}},"SN銘柄タグ"),
-            snTags.map(function(t,i){
-              var idx=t.indexOf(":");
-              var label=idx>=0?(t.slice(0,idx)+" ▸ "+t.slice(idx+1)):t;
-              return ce("span",{key:i,style:{display:"inline-flex",alignItems:"center",
-                padding:"2px 7px",fontSize:10,fontWeight:700,
-                background:"#292202",color:"#fbbf24",
-                border:"1px solid #78350f",borderRadius:4}},
-                "🏷 "+label);
-            })
-          );
-        })(),
         /* 日付ハイライトバナー (scalping-notebookからURL遷移) */
         highlightDate&&ce("div",{
           style:{margin:"0 12px 8px",padding:"8px 12px",background:"#0a1f0a",
