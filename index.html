@@ -1384,6 +1384,7 @@ function DataChart(props){
   var measureDragRef=useRef(null);
   var measureTickDragRef=useRef(null); /* {msrId, end:'start'|'end', curP} */
   var sMeasures=useState([]); var measures=sMeasures[0],setMeasures=sMeasures[1];
+  var measuresRef=useRef([]); /* setMeasures と同期し analysisCommit/undo/redo で参照 */
   /* 2026-04-20: 出来高下端固定モード用 refs (pricePx>0 時のみ使用)
      - hiddenCanvasRef: 従来通りの単一canvas描画先 (display:none)
      - priceCanvasRef: 上段 (scrollable 内)、hidden の price 部分を drawImage 転写
@@ -3077,12 +3078,12 @@ function DataChart(props){
     if(measureTickDragRef.current){
       var tdrUp=measureTickDragRef.current;
       if(tdrUp.curP!=null){
-        setMeasures(function(prev){
-          return prev.map(function(m){
-            if(m.id!==tdrUp.msrId)return m;
-            return Object.assign({},m,tdrUp.end==='start'?{startP:tdrUp.curP}:{endP:tdrUp.curP});
-          });
+        var _newMsTick=(measuresRef.current||[]).map(function(m){
+          if(m.id!==tdrUp.msrId)return m;
+          return Object.assign({},m,tdrUp.end==='start'?{startP:tdrUp.curP}:{endP:tdrUp.curP});
         });
+        setMeasures(_newMsTick);
+        measureCommit(_newMsTick);
       }
       measureTickDragRef.current=null;
       return;
@@ -3095,7 +3096,9 @@ function DataChart(props){
         var newM={id:'meas_'+Date.now(),
           startP:md.startP,endP:md.curP,
           startTm:md.startTm,startSide:md.startSide};
-        setMeasures(function(prev){return prev.concat([newM]);});
+        var _newMsAdd=(measuresRef.current||[]).concat([newM]);
+        setMeasures(_newMsAdd);
+        measureCommit(_newMsAdd);
       }
       measureDragRef.current=null;
       drawCrosshair();
@@ -3649,7 +3652,9 @@ function DataChart(props){
           ce('button',{
             onClick:function(e){
               e.stopPropagation();
-              setMeasures(function(prev){return prev.filter(function(x){return x.id!==msr.id;});});
+              var _newMsDel=(measuresRef.current||[]).filter(function(x){return x.id!==msr.id;});
+              setMeasures(_newMsDel);
+              measureCommit(_newMsDel);
             },
             style:{border:'none',background:'rgba(255,255,255,0.1)',color:'#888',
               fontSize:13,cursor:'pointer',padding:'1px 4px',borderRadius:3,lineHeight:1}
@@ -5114,8 +5119,8 @@ function ImageAnnotator(props){
   useEffect(function(){
     var init=cloneAnalysisStrokes(analysisStrokesRef.current);
     analysisHistRef.current={
-      '1m':[{cur:(init['1m']||[]).slice(),ref:[]}],
-      '5m':[{cur:(init['5m']||[]).slice(),ref:[]}]
+      '1m':[{cur:(init['1m']||[]).slice(),ref:[],measures:[]}],
+      '5m':[{cur:(init['5m']||[]).slice(),ref:[],measures:[]}]
     };
     analysisFutRef.current={'1m':[],'5m':[]};
   },[]);
@@ -5125,8 +5130,8 @@ function ImageAnnotator(props){
     var cur=cloneAnalysisStrokes(analysisStrokesRef.current);
     var ref=refAnalysis?cloneAnalysisStrokes(refAnalysis.analysisStrokes):{'1m':[],'5m':[]};
     analysisHistRef.current={
-      '1m':[{cur:(cur['1m']||[]).slice(),ref:(ref['1m']||[]).slice()}],
-      '5m':[{cur:(cur['5m']||[]).slice(),ref:(ref['5m']||[]).slice()}]
+      '1m':[{cur:(cur['1m']||[]).slice(),ref:(ref['1m']||[]).slice(),measures:measuresRef.current.slice()}],
+      '5m':[{cur:(cur['5m']||[]).slice(),ref:(ref['5m']||[]).slice(),measures:measuresRef.current.slice()}]
     };
     analysisFutRef.current={'1m':[],'5m':[]};
     setCanUndo(false);setCanRedo(false);
@@ -5373,12 +5378,25 @@ function ImageAnnotator(props){
     }
     var refTfArr=((refSrc&&refSrc[tk])||[]).slice();
     var hist=analysisHistRef.current[tk]||[];
-    analysisHistRef.current[tk]=hist.slice(-19).concat([{cur:curTfArr,ref:refTfArr}]);
+    analysisHistRef.current[tk]=hist.slice(-19).concat([{cur:curTfArr,ref:refTfArr,measures:measuresRef.current.slice()}]);
     analysisFutRef.current[tk]=[];
     setCanUndo(analysisHistRef.current[tk].length>1);
     setCanRedo(false);
     /* 2026-04-20 Step3: polling 45秒grace period用、commit時刻記録 (旧commit()から移植) */
     lastLocalCommitRef.current=Date.now();
+  }
+  /* 計測の追加/削除/移動確定をアンドゥ履歴に登録する */
+  function measureCommit(newMeasures){
+    measuresRef.current=newMeasures;
+    var tk=analysisTfRef.current||'1m';
+    var curTfArr=((analysisStrokesRef.current&&analysisStrokesRef.current[tk])||[]).slice();
+    var ra=refAnalysisRef.current;
+    var refTfArr=(ra&&ra.analysisStrokes&&(ra.analysisStrokes[tk]||[]).slice())||[];
+    var hist=analysisHistRef.current[tk]||[];
+    analysisHistRef.current[tk]=hist.slice(-19).concat([{cur:curTfArr,ref:refTfArr,measures:newMeasures.slice()}]);
+    analysisFutRef.current[tk]=[];
+    setCanUndo(analysisHistRef.current[tk].length>1);
+    setCanRedo(false);
   }
   function undo(){
     var tk=analysisTfRef.current||'1m';
@@ -5389,8 +5407,8 @@ function ImageAnnotator(props){
     var curTfArrNow=((curObj[tk])||[]).slice();
     var ra=refAnalysisRef.current;
     var refTfArrNow=(ra&&ra.analysisStrokes&&(ra.analysisStrokes[tk]||[]).slice())||[];
-    /* 現状をfutureへ退避 */
-    analysisFutRef.current[tk]=[{cur:curTfArrNow,ref:refTfArrNow}].concat((analysisFutRef.current[tk]||[]).slice(0,19));
+    /* 現状をfutureへ退避 (計測も保存) */
+    analysisFutRef.current[tk]=[{cur:curTfArrNow,ref:refTfArrNow,measures:measuresRef.current.slice()}].concat((analysisFutRef.current[tk]||[]).slice(0,19));
     analysisHistRef.current[tk]=hist.slice(0,-1);
     /* cur/ref 両方復元 */
     var nextCurObj=Object.assign({},curObj);
@@ -5402,6 +5420,12 @@ function ImageAnnotator(props){
       setRefAnalysis(Object.assign({},ra,{analysisStrokes:nextRefStrokes}));
       triggerRefAutoSave();
     }
+    /* 計測を復元 */
+    if(prev.measures!==undefined){
+      var _prevMs=(prev.measures||[]).slice();
+      measuresRef.current=_prevMs;
+      setMeasures(_prevMs);
+    }
     setCanUndo(analysisHistRef.current[tk].length>1);
     setCanRedo((analysisFutRef.current[tk]||[]).length>0);
   }
@@ -5411,7 +5435,7 @@ function ImageAnnotator(props){
     if(!fut.length)return;
     var next=fut[0], restFut=fut.slice(1);
     analysisFutRef.current[tk]=restFut;
-    analysisHistRef.current[tk]=(analysisHistRef.current[tk]||[]).concat([{cur:(next.cur||[]).slice(),ref:(next.ref||[]).slice()}]);
+    analysisHistRef.current[tk]=(analysisHistRef.current[tk]||[]).concat([{cur:(next.cur||[]).slice(),ref:(next.ref||[]).slice(),measures:(next.measures||[]).slice()}]);
     var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
     var nextCurObj=Object.assign({},curObj);
     nextCurObj[tk]=(next.cur||[]).slice();
@@ -5422,6 +5446,12 @@ function ImageAnnotator(props){
       nextRefStrokes[tk]=(next.ref||[]).slice();
       setRefAnalysis(Object.assign({},ra,{analysisStrokes:nextRefStrokes}));
       triggerRefAutoSave();
+    }
+    /* 計測を復元 */
+    if(next.measures!==undefined){
+      var _nextMs=(next.measures||[]).slice();
+      measuresRef.current=_nextMs;
+      setMeasures(_nextMs);
     }
     setCanUndo((analysisHistRef.current[tk]||[]).length>1);
     setCanRedo(restFut.length>0);
