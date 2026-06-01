@@ -1384,7 +1384,11 @@ function DataChart(props){
   var measureDragRef=useRef(null);
   var measureTickDragRef=useRef(null); /* {msrId, end:'start'|'end', curP} */
   var sMeasures=useState([]); var measures=sMeasures[0],setMeasures=sMeasures[1];
-  var measuresRef=useRef([]); /* setMeasures と同期し analysisCommit/undo/redo で参照 */
+  /* ImageAnnotator から渡される ref に setMeasures を登録 (undo/redo 時に呼ばれる) */
+  var measuresControlRef=props.measuresControlRef;
+  if(measuresControlRef)measuresControlRef.current=setMeasures;
+  /* ImageAnnotator の measureCommit を呼ぶコールバック */
+  var onMeasureCommit=props.onMeasureCommit||function(){};
   /* 2026-04-20: 出来高下端固定モード用 refs (pricePx>0 時のみ使用)
      - hiddenCanvasRef: 従来通りの単一canvas描画先 (display:none)
      - priceCanvasRef: 上段 (scrollable 内)、hidden の price 部分を drawImage 転写
@@ -3078,12 +3082,12 @@ function DataChart(props){
     if(measureTickDragRef.current){
       var tdrUp=measureTickDragRef.current;
       if(tdrUp.curP!=null){
-        var _newMsTick=(measuresRef.current||[]).map(function(m){
+        var _newMsTick=measures.map(function(m){
           if(m.id!==tdrUp.msrId)return m;
           return Object.assign({},m,tdrUp.end==='start'?{startP:tdrUp.curP}:{endP:tdrUp.curP});
         });
         setMeasures(_newMsTick);
-        measureCommit(_newMsTick);
+        onMeasureCommit(_newMsTick);
       }
       measureTickDragRef.current=null;
       return;
@@ -3096,9 +3100,9 @@ function DataChart(props){
         var newM={id:'meas_'+Date.now(),
           startP:md.startP,endP:md.curP,
           startTm:md.startTm,startSide:md.startSide};
-        var _newMsAdd=(measuresRef.current||[]).concat([newM]);
+        var _newMsAdd=measures.concat([newM]);
         setMeasures(_newMsAdd);
-        measureCommit(_newMsAdd);
+        onMeasureCommit(_newMsAdd);
       }
       measureDragRef.current=null;
       drawCrosshair();
@@ -3640,10 +3644,12 @@ function DataChart(props){
             display:'flex',alignItems:'center',justifyContent:'center',zIndex:62}},
           ce('div',{style:{width:18,height:3,background:colR,borderRadius:2}})
         ),
-        /* ラベル + × ボタン */
+        /* ラベル + × ボタン (縦線の左側に表示) */
         ce('div',{
           onMouseDown:function(e){e.stopPropagation();},
-          style:{position:'absolute',left:14,top:Math.round(hR/2)-13,pointerEvents:'auto',
+          style:{position:'absolute',left:0,top:Math.round(hR/2)-13,
+            transform:'translateX(calc(-100% - 10px))',
+            pointerEvents:'auto',
             display:'flex',alignItems:'center',gap:5,
             background:'rgba(18,18,18,0.9)',borderRadius:6,
             padding:'4px 8px 4px 9px',border:'1px solid '+colR,
@@ -3652,9 +3658,9 @@ function DataChart(props){
           ce('button',{
             onClick:function(e){
               e.stopPropagation();
-              var _newMsDel=(measuresRef.current||[]).filter(function(x){return x.id!==msr.id;});
+              var _newMsDel=measures.filter(function(x){return x.id!==msr.id;});
               setMeasures(_newMsDel);
-              measureCommit(_newMsDel);
+              onMeasureCommit(_newMsDel);
             },
             style:{border:'none',background:'rgba(255,255,255,0.1)',color:'#888',
               fontSize:13,cursor:'pointer',padding:'1px 4px',borderRadius:3,lineHeight:1}
@@ -5067,6 +5073,9 @@ function ImageAnnotator(props){
   var toolMemRef=useRef({}); // ツール別の色・線幅・透明度を記憶
   /* prevHorizRef は toolMemRef.horiz に統合したため削除 */
   /* 分析モード用 ref */
+  /* 計測undo用: DataChart の setMeasures を受け取るref / 現在の measures 値追跡 */
+  var measuresControlRef=useRef(null); // DataChartがsetMeasuresをここにセットする
+  var measuresRef=useRef([]);          // 現在の measures スナップショット (commit/undo/redo で使用)
   /* C6: tf別 undo/redo 履歴。各entryは {cur:[...],ref:[...]} のスナップショット (cur/ref 共通スタック) */
   var analysisHistRef=useRef({'1m':[{cur:[],ref:[]}],'5m':[{cur:[],ref:[]}]});
   var analysisFutRef=useRef({'1m':[],'5m':[]});
@@ -5420,11 +5429,11 @@ function ImageAnnotator(props){
       setRefAnalysis(Object.assign({},ra,{analysisStrokes:nextRefStrokes}));
       triggerRefAutoSave();
     }
-    /* 計測を復元 */
+    /* 計測を復元 (measuresControlRef.current = DataChart の setMeasures) */
     if(prev.measures!==undefined){
       var _prevMs=(prev.measures||[]).slice();
       measuresRef.current=_prevMs;
-      setMeasures(_prevMs);
+      if(measuresControlRef.current)measuresControlRef.current(_prevMs);
     }
     setCanUndo(analysisHistRef.current[tk].length>1);
     setCanRedo((analysisFutRef.current[tk]||[]).length>0);
@@ -5451,7 +5460,7 @@ function ImageAnnotator(props){
     if(next.measures!==undefined){
       var _nextMs=(next.measures||[]).slice();
       measuresRef.current=_nextMs;
-      setMeasures(_nextMs);
+      if(measuresControlRef.current)measuresControlRef.current(_nextMs);
     }
     setCanUndo((analysisHistRef.current[tk]||[]).length>1);
     setCanRedo(restFut.length>0);
@@ -6270,6 +6279,9 @@ function ImageAnnotator(props){
                 ?{side:(analysisTextInput.side||'cur'),idx:analysisTextInput.editIdx}
                 :null,
               textInputActive:!!analysisTextInput,
+              /* 計測undo/redo連携 */
+              measuresControlRef:measuresControlRef,
+              onMeasureCommit:measureCommit,
               /* 2026-04-20: 「…」ボタンdrag終了時のtm/p変換用 */
               chartAPIRef:chartAPIRefAnalysis,
           /* C6: onStrokeAdd - s.side で cur/ref 分岐 */
