@@ -1839,28 +1839,29 @@ function DataChart(props){
       ctx.moveTo(mX2-8,mY1); ctx.lineTo(mX2+8,mY1);
       ctx.moveTo(mX2-8,mY2); ctx.lineTo(mX2+8,mY2);
       ctx.stroke();
-      /* 差分ラベル (中央) */
+      /* 差分ラベル (中央・縦線の左側) */
       var mMidY=(mY1+mY2)/2;
       var mDiffRnd=Math.round(Math.abs(mdiff2));
       var mDiffStr=mDiffRnd+'円';
       ctx.font='bold 13px -apple-system,Helvetica,sans-serif';
       ctx.textAlign='left';
-      var mLx=mX2+12;
       var mTw=ctx.measureText(mDiffStr).width;
+      var mLx=mX2-12-mTw; /* 線の左側に配置 */
       ctx.globalAlpha=0.8; ctx.fillStyle='rgba(0,0,0,0.82)';
-      ctx.fillRect(mLx-2,mMidY-14,mTw+10,19);
+      ctx.fillRect(mLx-4,mMidY-14,mTw+10,19);
       ctx.globalAlpha=0.95; ctx.fillStyle=mcol;
-      ctx.fillText(mDiffStr,mLx+3,mMidY+1);
-      /* 開始点: 価格+時刻 */
+      ctx.fillText(mDiffStr,mLx,mMidY+1);
+      /* 開始点: 価格+時刻 (縦線の左側) */
       var mHH=Math.floor(md2.startTm/60), mMM=md2.startTm%60;
       var mTimeStr=mHH+':'+(mMM<10?'0'+mMM:mMM);
       var mPriceLabel=Math.round(md2.startP*10)/10+'円  '+mTimeStr;
       ctx.font='11px -apple-system,Helvetica,sans-serif';
       var mTw2=ctx.measureText(mPriceLabel).width;
+      var mLx2=mX2-12-mTw2;
       ctx.globalAlpha=0.7; ctx.fillStyle='rgba(0,0,0,0.8)';
-      ctx.fillRect(mLx-2,mY1-17,mTw2+10,15);
+      ctx.fillRect(mLx2-4,mY1-17,mTw2+8,15);
       ctx.globalAlpha=0.9; ctx.fillStyle='rgba(220,220,220,0.9)';
-      ctx.fillText(mPriceLabel,mLx+3,mY1-5);
+      ctx.fillText(mPriceLabel,mLx2,mY1-5);
       ctx.restore();
     }
 
