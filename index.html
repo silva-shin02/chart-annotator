@@ -2402,7 +2402,8 @@ function DataChart(props){
           tipTm:s.pointer.tipTm,tipP:s.pointer.tipP,rootSide:s.pointer.rootSide,rootFrac:s.pointer.rootFrac};
         return true;
       }
-      return true; /* 編集中の枠外タップは無視 (誤スタンプ防止)。確定はボタンで */
+      /* ハンドル外タップ: 配置直後は無視 (誤スタンプ防止)、選択再編集時は通常動作(移動/文字編集)へ */
+      return pe.fromSelect?false:true;
     }
     if(pe.phase==='pickRoot'){
       /* 枠線付近のタップで根元確定 */
@@ -2795,6 +2796,17 @@ function DataChart(props){
       /* 既存textをhitした場合はtext modeと同じ挙動 */
       var hiArr=(hi.side==='ref')?(refStrokes||[]):(strokes||[]);
       var hiStk=hiArr[hi.idx];
+      /* 矢印付きスタンプ: 初回タップは選択+矢印ハンドル表示 (テキスト編集は2回目タップ)。
+         ドラッグで移動も可。ハンドル(根本/矢先)は最上位の ptrPointerDown で掴める。 */
+      if(hiStk&&(hiStk.type||hiStk.tool)==='text'&&hiStk._snippet&&hiStk.pointer&&hi.side==='cur'){
+        var _alreadyPE=ptrEditRef.current&&ptrEditRef.current.fromSelect&&ptrEditRef.current.strokeId===hiStk.id;
+        if(!_alreadyPE){
+          setPtrEdit({strokeId:hiStk.id,phase:'editing',side:'cur',fromSelect:true});
+          moveRef.current={side:hi.side, idx:hi.idx, startTM:tp.tm, startP:tp.p, dtm:0, dp:0, moving:false};
+          return;
+        }
+        /* 2回目以降: 通常のテキスト編集起動 (下の共通処理へフォールスルー) */
+      }
       if(hiStk&&(hiStk.type||hiStk.tool)==='text'){
         var lScr=anchorToScreen(hiStk,hi.side);
         moveRef.current={
@@ -3537,6 +3549,14 @@ function DataChart(props){
 
   /* ツール切替時 / データ切替時: 選択状態をリセット */
   useEffect(function(){setSelectedIdx(null);setLassoSel(null);ptrDragRef.current=null;setPtrEdit(null);},[drawTool,data,tf]);
+  /* 選択(fromSelect)由来の矢印編集: 対象スタンプが選択解除されたら編集を終了 */
+  useEffect(function(){
+    var pe=ptrEditRef.current;
+    if(pe&&pe.fromSelect){
+      var cur=selectedIdx&&selectedIdx.side==='cur'?(strokes||[])[selectedIdx.idx]:null;
+      if(!cur||cur.id!==pe.strokeId){ptrDragRef.current=null;setPtrEdit(null);}
+    }
+  },[selectedIdx,strokes]);
 
   /* Delete/Escapeキー: 選択削除・解除 (C6: side対応) */
   useEffect(function(){
@@ -3770,9 +3790,10 @@ function DataChart(props){
           padding:"2px 6px"}
       },"✕")
     ),
-    /* ── スタンプ矢印 編集: 枠パルス + 直上バナー ── */
+    /* ── スタンプ矢印 編集: 枠パルス + 直上バナー ──
+       選択ツールからの再編集(fromSelect)時はバナー/枠を出さず、矢印ハンドル(オーバーレイ)のみ */
     (function(){
-      if(!ptrEdit)return null;
+      if(!ptrEdit||ptrEdit.fromSelect)return null;
       var hit=findSnippetById(ptrEdit.strokeId);
       if(!hit||!hit.stroke){return null;}
       var box=getSnippetBoxCss(hit.stroke, hit.side);
