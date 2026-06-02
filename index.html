@@ -4661,27 +4661,28 @@ function projectBoxPerimeter(box, px, py){
     :(box.h>0?(best.y-box.y)/box.h:0.5);
   return {side:best.side, frac:Math.max(0,Math.min(1,frac))};
 }
-/* 矢印を描く (root点 → tip点)。座標は呼び出し側のスケールに合わせて渡す */
+/* 矢印を描く (root点 → tip点)。標準の矢印ツールと同じ矢じり形状 */
 function drawPointerArrow(ctx, rx, ry, tx, ty, col, w){
   var dx=tx-rx, dy=ty-ry, len=Math.hypot(dx,dy);
   ctx.save();
   ctx.setLineDash([]);
   ctx.strokeStyle=col; ctx.fillStyle=col;
-  ctx.lineWidth=w; ctx.lineCap='round'; ctx.lineJoin='round';
+  ctx.lineWidth=w; ctx.lineCap='butt'; ctx.lineJoin='miter';
   ctx.globalAlpha=1;
-  ctx.beginPath(); ctx.moveTo(rx,ry); ctx.lineTo(tx,ty); ctx.stroke();
-  /* 矢じり */
-  if(len>1){
-    var ang=Math.atan2(dy,dx);
-    var ah=Math.max(8,w*3.2);
-    var spread=0.42;
-    ctx.beginPath();
-    ctx.moveTo(tx,ty);
-    ctx.lineTo(tx-ah*Math.cos(ang-spread),ty-ah*Math.sin(ang-spread));
-    ctx.lineTo(tx-ah*Math.cos(ang+spread),ty-ah*Math.sin(ang+spread));
-    ctx.closePath();
-    ctx.fill();
-  }
+  if(len<1){ctx.restore();return;}
+  var ang=Math.atan2(ty-ry,tx-rx);       // root→tip の向き
+  var hs=Math.max(9, w*3.4);             // 矢じりの長さ (標準矢印準拠)
+  var spread=Math.PI/6;                  // 30° (標準矢印と同じ)
+  /* 線は矢じりの根元手前で止める → 先端の突き抜けを防ぐ */
+  var bx=tx-hs*0.86*Math.cos(ang), by=ty-hs*0.86*Math.sin(ang);
+  ctx.beginPath(); ctx.moveTo(rx,ry); ctx.lineTo(bx,by); ctx.stroke();
+  /* 矢じり (tip を頂点とする三角形) */
+  ctx.beginPath();
+  ctx.moveTo(tx,ty);
+  ctx.lineTo(tx-hs*Math.cos(ang-spread), ty-hs*Math.sin(ang-spread));
+  ctx.lineTo(tx-hs*Math.cos(ang+spread), ty-hs*Math.sin(ang+spread));
+  ctx.closePath();
+  ctx.fill();
   ctx.restore();
 }
 
