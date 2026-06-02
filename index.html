@@ -33,6 +33,14 @@ input[type=range]{accent-color:#6366F1}
 .toolbar-row::-webkit-scrollbar-thumb{background:#555;border-radius:4px}
 .toolbar-row::-webkit-scrollbar-track{background:#1a1a1a}
 canvas{image-rendering:high-quality;-webkit-image-rendering:high-quality}
+/* スタンプ矢印: 根元選択段階の枠線パルス */
+@keyframes caPtrPulse{
+  0%{box-shadow:0 0 0 0 rgba(99,102,241,0.55);border-color:#818cf8;}
+  70%{box-shadow:0 0 0 7px rgba(99,102,241,0);border-color:#6366F1;}
+  100%{box-shadow:0 0 0 0 rgba(99,102,241,0);border-color:#818cf8;}
+}
+.ca-ptr-frame{animation:caPtrPulse 1.2s ease-out infinite;}
+@keyframes caPtrBanner{0%{opacity:0;transform:translateY(4px);}100%{opacity:1;transform:translateY(0);}}
 </style>
 </head>
 <body>
@@ -1389,6 +1397,17 @@ function DataChart(props){
   if(measuresControlRef)measuresControlRef.current=setMeasures;
   /* ImageAnnotator の measureCommit を呼ぶコールバック */
   var onMeasureCommit=props.onMeasureCommit||function(){};
+  /* ─── スタンプ矢印 (pointer) 編集 ───
+     ptrEdit: {strokeId, phase:'pickRoot'|'editing', side} | null  ← バナー/枠パルス/ハンドル表示
+     ptrDragRef: {strokeId, side, idx, mode:'root'|'tip', tipTm,tipP,rootSide,rootFrac} ← ドラッグ中 */
+  var sPtrEdit=useState(null); var ptrEdit=sPtrEdit[0],setPtrEdit=sPtrEdit[1];
+  var ptrEditRef=useRef(null);
+  useEffect(function(){
+    ptrEditRef.current=ptrEdit;
+    /* 編集状態変化でオーバーレイ(ハンドル)を再描画 */
+    if(!rafRef.current){rafRef.current=requestAnimationFrame(function(){drawCrosshair();rafRef.current=null;});}
+  },[ptrEdit]);
+  var ptrDragRef=useRef(null);
   /* 2026-04-20: 出来高下端固定モード用 refs (pricePx>0 時のみ使用)
      - hiddenCanvasRef: 従来通りの単一canvas描画先 (display:none)
      - priceCanvasRef: 上段 (scrollable 内)、hidden の price 部分を drawImage 転写
@@ -1865,6 +1884,35 @@ function DataChart(props){
       ctx.restore();
     }
 
+    /* スタンプ矢印 編集: 矢印プレビュー + root/tip ハンドル */
+    var _pe=ptrEditRef.current;
+    if(L&&_pe&&_pe.phase==='editing'){
+      var _hh=findSnippetById(_pe.strokeId);
+      if(_hh&&_hh.stroke){
+        var _s=_hh.stroke, _box=getSnippetBoxCss(_s,_hh.side);
+        var _dr=ptrDragRef.current;
+        var _rSide=(_dr&&_dr.rootSide!=null)?_dr.rootSide:(_s.pointer?_s.pointer.rootSide:'bottom');
+        var _rFrac=(_dr&&_dr.rootFrac!=null)?_dr.rootFrac:(_s.pointer?_s.pointer.rootFrac:0.5);
+        var _tTm=(_dr&&_dr.tipTm!=null)?_dr.tipTm:(_s.pointer?_s.pointer.tipTm:null);
+        var _tP=(_dr&&_dr.tipP!=null)?_dr.tipP:(_s.pointer?_s.pointer.tipP:null);
+        if(_box&&_tTm!=null&&_tP!=null){
+          var _rp=pointerRootPt(_box,_rSide,_rFrac);
+          var _tx=minToXWithSide(_tTm,_hh.side), _ty=pToYcss(_tP);
+          var _col=_s.color||'#ff9500';
+          drawPointerArrow(ctx,_rp.x,_rp.y,_tx,_ty,_col,2.4);
+          ctx.save();
+          ctx.lineWidth=2;
+          /* root ハンドル (白丸+色縁) */
+          ctx.fillStyle='#fff'; ctx.strokeStyle=_col;
+          ctx.beginPath(); ctx.arc(_rp.x,_rp.y,6,0,Math.PI*2); ctx.fill(); ctx.stroke();
+          /* tip ハンドル (色丸+白縁) */
+          ctx.fillStyle=_col; ctx.strokeStyle='#fff';
+          ctx.beginPath(); ctx.arc(_tx,_ty,7,0,Math.PI*2); ctx.fill(); ctx.stroke();
+          ctx.restore();
+        }
+      }
+    }
+
     /* 十字カーソル */
     if(!showCrosshair||!L)return;
     /* F2: 連動cursor が親から来ていればそれを自分の画面座標に変換して描く。
@@ -2287,6 +2335,138 @@ function DataChart(props){
     }catch(err){return null;}
   }
 
+  /* ─── スタンプ矢印 編集: 座標ヘルパー (CSS px、layoutRef基準) ─── */
+  function pToYcss(p){
+    var L=layoutRef.current; if(!L)return 0;
+    if(typeof L.dpmax==='number'&&typeof L.pxPerYen==='number'&&L.pxPerYen>0)
+      return L.priceTop+(L.dpmax-p)*L.pxPerYen;
+    return L.priceTop+(1-(p-L.pmin)/((L.pmax-L.pmin)||1))*L.priceH;
+  }
+  /* スタンプ枠を CSS px で算出 {x,y,w,h}。時間プレフィックス込み。失敗時 null */
+  function getSnippetBoxCss(s, side){
+    var L=layoutRef.current, cnv=canvasRef.current;
+    if(!L||!cnv||!s||!s.anchors||!s.anchors[0])return null;
+    var hitZoom=(typeof L.zoom==='number'&&L.zoom>0)?L.zoom:1.0;
+    var a=s.anchors[0];
+    var tx=minToXWithSide(a.tm, side||'cur'), ty=pToYcss(a.p);
+    var fs=(s.fontSize||15)*hitZoom;
+    var fb=s.fontBold?'bold ':'';
+    var rawLines=snippetDisplayText(s, s.text||(s._snippet&&s.snipId&&props.snippetsById&&props.snippetsById[s.snipId]?props.snippetsById[s.snipId].text:'')||'').split('\n');
+    var boxW=(s.boxW&&s.boxW>0)?s.boxW*hitZoom:0;
+    var mctx=cnv.getContext('2d'); mctx.save();
+    mctx.font=fb+fs+"px -apple-system,'Helvetica Neue',sans-serif";
+    var lines=[];
+    if(boxW>0){
+      rawLines.forEach(function(para){var cur='';for(var ci=0;ci<para.length;ci++){var t=cur+para[ci];if(mctx.measureText(t).width>boxW&&cur.length>0){lines.push(cur);cur=para[ci];}else cur=t;}lines.push(cur);});
+    }else lines=rawLines;
+    var mW=0; lines.forEach(function(l){var w=mctx.measureText(l).width;if(w>mW)mW=w;});
+    mctx.restore();
+    if(boxW>mW)mW=boxW;
+    var tH=lines.length*fs*1.3;
+    var bpad=3*hitZoom;
+    return {x:tx-bpad, y:ty-bpad, w:mW+bpad*2, h:tH+bpad*2};
+  }
+  /* strokeId から現在の {idx,side,stroke} を引く (cur側のみ対応) */
+  function findSnippetById(id){
+    if(!id)return null;
+    for(var i=0;i<(strokes||[]).length;i++){if(strokes[i]&&strokes[i].id===id)return {idx:i,side:'cur',stroke:strokes[i]};}
+    return null;
+  }
+  /* 確定: ドラッグ結果(pointer)を stroke に反映して undo履歴へ */
+  function commitPointer(strokeId, pointer){
+    var hit=findSnippetById(strokeId); if(!hit||!props.onStrokeUpdate)return;
+    var ns=Object.assign({},hit.stroke,{pointer:pointer});
+    props.onStrokeUpdate(hit.side, hit.idx, ns);
+  }
+  function _ptrSchedDraw(){
+    if(!rafRef.current){rafRef.current=requestAnimationFrame(function(){drawCrosshair();rafRef.current=null;});}
+  }
+  /* スタンプ矢印編集の pointerdown 相当。処理したら true (通常ツール動作を抑止) */
+  function ptrPointerDown(clientX,clientY){
+    var pe=ptrEditRef.current; if(!pe)return false;
+    var hit=findSnippetById(pe.strokeId);
+    if(!hit){setPtrEdit(null);return false;}
+    var box=getSnippetBoxCss(hit.stroke,hit.side); if(!box)return true;
+    var rect=getCanvasRect(); var px=clientX-rect.left, py=clientY-rect.top;
+    var s=hit.stroke;
+    if(pe.phase==='editing'&&s.pointer){
+      var tipX=minToXWithSide(s.pointer.tipTm,hit.side), tipY=pToYcss(s.pointer.tipP);
+      if(Math.hypot(px-tipX,py-tipY)<=18){
+        ptrDragRef.current={strokeId:pe.strokeId,side:hit.side,idx:hit.idx,mode:'tip',
+          tipTm:s.pointer.tipTm,tipP:s.pointer.tipP,rootSide:s.pointer.rootSide,rootFrac:s.pointer.rootFrac};
+        return true;
+      }
+      var rp=pointerRootPt(box,s.pointer.rootSide,s.pointer.rootFrac);
+      if(Math.hypot(px-rp.x,py-rp.y)<=18){
+        ptrDragRef.current={strokeId:pe.strokeId,side:hit.side,idx:hit.idx,mode:'root',
+          tipTm:s.pointer.tipTm,tipP:s.pointer.tipP,rootSide:s.pointer.rootSide,rootFrac:s.pointer.rootFrac};
+        return true;
+      }
+      return true; /* 編集中の枠外タップは無視 (誤スタンプ防止)。確定はボタンで */
+    }
+    if(pe.phase==='pickRoot'){
+      /* 枠線付近のタップで根元確定 */
+      var proj=projectBoxPerimeter(box,px,py);
+      var rpc=pointerRootPt(box,proj.side,proj.frac);
+      if(Math.hypot(px-rpc.x,py-rpc.y)<=22){
+        /* 既定の矢先: 根元から外向き法線に約70px。チャート時間に変換 */
+        var nx=0,ny=0;
+        if(proj.side==='top')ny=-1; else if(proj.side==='bottom')ny=1;
+        else if(proj.side==='left')nx=-1; else nx=1;
+        var tipScreenX=rpc.x+nx*70, tipScreenY=rpc.y+ny*70;
+        var tp=pxToTimePrice(rect.left+tipScreenX, rect.top+tipScreenY);
+        var a0=s.anchors&&s.anchors[0]?s.anchors[0]:{tm:0,p:0};
+        var tipTm=(tp&&typeof tp.tm==='number')?tp.tm:a0.tm;
+        var tipP=(tp&&tp.p!=null)?tp.p:a0.p;
+        commitPointer(pe.strokeId,{rootSide:proj.side,rootFrac:proj.frac,tipTm:tipTm,tipP:tipP});
+        setPtrEdit({strokeId:pe.strokeId,phase:'editing',side:hit.side});
+        return true;
+      }
+      return true; /* 枠から離れたタップは無視 (スキップは✕ボタン) */
+    }
+    return true;
+  }
+  function ptrPointerMove(clientX,clientY){
+    var d=ptrDragRef.current; if(!d)return false;
+    var rect=getCanvasRect(); var px=clientX-rect.left, py=clientY-rect.top;
+    if(d.mode==='tip'){
+      var tp=pxToTimePrice(clientX,clientY);
+      if(tp){ if(typeof tp.tm==='number')d.tipTm=tp.tm; if(tp.p!=null)d.tipP=tp.p; }
+    } else if(d.mode==='root'){
+      var hit=findSnippetById(d.strokeId);
+      if(hit){var box=getSnippetBoxCss(hit.stroke,hit.side); if(box){var pr=projectBoxPerimeter(box,px,py); d.rootSide=pr.side; d.rootFrac=pr.frac;}}
+    }
+    _ptrSchedDraw();
+    return true;
+  }
+  function ptrPointerUp(){
+    var d=ptrDragRef.current; if(!d)return false;
+    var hit=findSnippetById(d.strokeId);
+    if(hit){
+      var base=hit.stroke.pointer||{};
+      commitPointer(d.strokeId,{
+        rootSide:d.rootSide!=null?d.rootSide:base.rootSide,
+        rootFrac:d.rootFrac!=null?d.rootFrac:base.rootFrac,
+        tipTm:d.tipTm!=null?d.tipTm:base.tipTm,
+        tipP:d.tipP!=null?d.tipP:base.tipP
+      });
+    }
+    ptrDragRef.current=null;
+    _ptrSchedDraw();
+    return true;
+  }
+  /* 「選択」ツールでスタンプをタップ → pointer編集を再開 (pointer有時) */
+  function ptrTryReedit(clientX,clientY){
+    var hitIdx=hitTestStroke(clientX,clientY); if(hitIdx==null)return false;
+    var s=getStrokeByHit(hitIdx);
+    if(s&&s._snippet&&s.pointer&&hitIdx.side==='cur'){
+      setPtrEdit({strokeId:s.id,phase:'editing',side:'cur'});
+      _ptrSchedDraw();
+      return true;
+    }
+    return false;
+  }
+
   function hitTestStroke(clientX,clientY){
     var L=layoutRef.current; if(!L)return null;
     var rect=getCanvasRect();
@@ -2368,7 +2548,7 @@ function DataChart(props){
         var fsRaw=s.fontSize||15;
         var fs=fsRaw*hitZoom;  /* 画面上の実フォントサイズ */
         var fb=s.fontBold?'bold ':'';
-        var rawLines=(s.text||'').split('\n');
+        var rawLines=snippetDisplayText(s, s.text||'').split('\n');
         /* 2026-04-20: boxW指定時は wordBreak wrap (描画と一致させる)
            2026-04-22: boxW も zoom 倍 (描画側と同じ) */
         var hitBoxW=(s.boxW&&s.boxW>0)?s.boxW*hitZoom:0;
@@ -2457,6 +2637,8 @@ function DataChart(props){
   function onMouseDown(e){
     // テキスト入力中はpan/zoom/描画をすべてロック
     if(props.textInputActive)return;
+    // スタンプ矢印 編集モード優先
+    if(ptrEditRef.current&&ptrPointerDown(e.clientX,e.clientY))return;
     // Ctrl+ドラッグ = どのツールでもパン
     if(e.ctrlKey||e.metaKey){
       panStartRef.current={x:e.clientX,y:e.clientY,uS:view.uS,uE:view.uE,ps:pShift};
@@ -2720,6 +2902,8 @@ function DataChart(props){
   }
   function onMouseMove(e){
     if(props.textInputActive)return;
+    // スタンプ矢印 ドラッグ中
+    if(ptrDragRef.current){ptrPointerMove(e.clientX,e.clientY);return;}
     // 十字カーソル座標更新 (hoverでも描画中でも)
     if(containerRef.current){
       var rect=getCanvasRect();
@@ -2902,6 +3086,8 @@ function DataChart(props){
     }
   }
   function onMouseUp(){
+    // スタンプ矢印 ドラッグ終了
+    if(ptrDragRef.current){ptrPointerUp();return;}
     /* 2026-04-23: 投げ縄パス終了 → ポリゴン内ストローク一括選択 */
     if(lassoPathRef.current&&lassoPathRef.current.length>=3){
       var poly=lassoPathRef.current;
@@ -3179,7 +3365,13 @@ function DataChart(props){
       var _pt=pendingTextReqRef.current;
       if(_pt&&props.onRequestTextInput)props.onRequestTextInput(_pt);
       var _ps=pendingSnipRef.current;
-      if(_ps)_ps.fn(_ps.stroke);
+      if(_ps){
+        _ps.fn(_ps.stroke);
+        /* スタンプ配置直後: 根元選択モードへ (バナー+枠パルス表示) */
+        var _sid=_ps.stroke&&_ps.stroke.id;
+        var _sside=_ps.stroke&&_ps.stroke.side||'cur';
+        if(_sid&&_sside==='cur')setPtrEdit({strokeId:_sid,phase:'pickRoot',side:'cur'});
+      }
     }
     pendingTextReqRef.current=null;
     pendingSnipRef.current=null;
@@ -3344,12 +3536,12 @@ function DataChart(props){
   // ダブルクリック: (機能削除、ユーザー要望)
 
   /* ツール切替時 / データ切替時: 選択状態をリセット */
-  useEffect(function(){setSelectedIdx(null);setLassoSel(null);},[drawTool,data,tf]);
+  useEffect(function(){setSelectedIdx(null);setLassoSel(null);ptrDragRef.current=null;setPtrEdit(null);},[drawTool,data,tf]);
 
   /* Delete/Escapeキー: 選択削除・解除 (C6: side対応) */
   useEffect(function(){
     function onKey(e){
-      if(e.key==='Escape'){setSelectedIdx(null);setLassoSel(null);return;}
+      if(e.key==='Escape'){if(ptrEditRef.current){ptrDragRef.current=null;setPtrEdit(null);return;}setSelectedIdx(null);setLassoSel(null);return;}
       if(e.key==='Delete'||e.key==='Backspace'){
         // input/textarea にフォーカス中は無視
         var ae=document.activeElement;
@@ -3578,6 +3770,49 @@ function DataChart(props){
           padding:"2px 6px"}
       },"✕")
     ),
+    /* ── スタンプ矢印 編集: 枠パルス + 直上バナー ── */
+    (function(){
+      if(!ptrEdit)return null;
+      var hit=findSnippetById(ptrEdit.strokeId);
+      if(!hit||!hit.stroke){return null;}
+      var box=getSnippetBoxCss(hit.stroke, hit.side);
+      if(!box)return null;
+      var bw=box.w, bx=box.x, by=box.y;
+      var isPick=ptrEdit.phase==='pickRoot';
+      /* バナー位置: 基本は枠の直上、上端に近ければ下へ */
+      var bannerH=30;
+      var bannerTop=by-bannerH-6;
+      var below=false;
+      if(bannerTop<2){bannerTop=by+box.h+6;below=true;}
+      var bannerLeft=bx+bw/2;
+      var msg=isPick?'矢印の根元を枠線上でタップ':'矢先をドラッグして時間を決める';
+      return ce('div',{key:'ptr-edit',style:{position:'absolute',inset:0,pointerEvents:'none',zIndex:90}},
+        /* 枠パルス (pickRoot時のみ。editing中は矢印ハンドルで誘導) */
+        isPick&&ce('div',{className:'ca-ptr-frame',style:{position:'absolute',
+          left:bx-2,top:by-2,width:bw+4,height:box.h+4,
+          border:'2px solid #6366F1',borderRadius:4,pointerEvents:'none'}}),
+        /* バナー */
+        ce('div',{style:{position:'absolute',left:bannerLeft,top:bannerTop,
+          transform:'translateX(-50%)',pointerEvents:'auto',
+          display:'flex',alignItems:'center',gap:8,whiteSpace:'nowrap',
+          background:'rgba(28,28,40,0.97)',border:'1px solid #6366F1',borderRadius:9,
+          padding:'5px 8px 5px 11px',boxShadow:'0 4px 16px rgba(0,0,0,.55)',
+          animation:'caPtrBanner .18s ease-out'},
+          onMouseDown:function(ev){ev.stopPropagation();},
+          onTouchStart:function(ev){ev.stopPropagation();}},
+          ce('span',{style:{fontSize:11.5,color:'#c7d2fe',fontWeight:700}},msg),
+          isPick
+            ? ce('button',{onClick:function(ev){ev.stopPropagation();setPtrEdit(null);},
+                style:{border:'none',background:'rgba(255,255,255,0.08)',color:'#aaa',
+                  fontSize:12,fontWeight:700,cursor:'pointer',borderRadius:5,padding:'3px 8px'}},
+                'スキップ ✕')
+            : ce('button',{onClick:function(ev){ev.stopPropagation();setPtrEdit(null);},
+                style:{border:'none',background:'#6366F1',color:'#fff',
+                  fontSize:12,fontWeight:700,cursor:'pointer',borderRadius:5,padding:'3px 11px'}},
+                '確定')
+        )
+      );
+    })(),
     /* ── 計測結果オーバーレイ ── */
     measures.map(function(msr){
       var Lm=layoutRef.current; if(!Lm)return null;
@@ -4298,7 +4533,9 @@ function drawAnalysisStrokeExt(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,pric
        テキストエディット時のtextarea wrap表示と一致させるため
        2026-04-21: boxW も zoom 連動 */
     var boxWZ=(s.boxW&&s.boxW>0)?s.boxW*Z:0;
-    var rawLines=resolvedText.split('\n');
+    /* スタンプ矢印: pointer有時は文頭に時間プレフィックスを表示 (保存テキストは不変) */
+    var dispText=snippetDisplayText(s, resolvedText);
+    var rawLines=dispText.split('\n');
     var displayLines=[];
     if(boxWZ>0){
       rawLines.forEach(function(para){
@@ -4334,6 +4571,14 @@ function drawAnalysisStrokeExt(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,pric
       ctx.strokeRect(x-bpad,y-bpad,maxW+bpad*2,boxH+bpad*2);
       ctx.restore();
       ctx.globalAlpha=op;
+      /* スタンプ矢印: 枠の root点 → 矢先(tipTm,tipP) */
+      if(s.pointer&&typeof s.pointer.tipTm==='number'&&typeof s.pointer.tipP==='number'){
+        var pbox={x:x-bpad,y:y-bpad,w:maxW+bpad*2,h:boxH+bpad*2};
+        var rpt=pointerRootPt(pbox,s.pointer.rootSide,s.pointer.rootFrac);
+        var tpx=minToX(s.pointer.tipTm), tpy=pToY(s.pointer.tipP);
+        ctx.globalAlpha=op;
+        drawPointerArrow(ctx,rpt.x,rpt.y,tpx,tpy,col,Math.max(1.5,2*Z));
+      }
     }
     ctx.fillStyle=col;
     displayLines.forEach(function(l,i){ctx.fillText(l,x,y+i*fs*1.3);});
@@ -4375,6 +4620,71 @@ function getHandleAnchors(s){
   return [];
 }
 
+/* ─── スタンプ矢印 (pointer) ヘルパー ─────────────────────────────
+   スタンプに矢印を付け、矢先のチャート時間 tipTm を記録する機能。
+   s.pointer = {rootSide:'top|right|bottom|left', rootFrac:0..1, tipTm:分, tipP:価格} */
+function snipTimeStr(tm){
+  if(typeof tm!=='number'||isNaN(tm))return '';
+  var hh=Math.floor(tm/60), mm=((Math.round(tm)%60)+60)%60;
+  return hh+':'+(mm<10?'0'+mm:mm);
+}
+/* スタンプ表示テキスト: pointer有時のみ時間プレフィックスを付ける (保存テキストは変更しない) */
+function snippetDisplayText(s, baseText){
+  baseText=baseText||'';
+  if(s&&s._snippet&&s.pointer&&typeof s.pointer.tipTm==='number'){
+    var t=snipTimeStr(s.pointer.tipTm);
+    if(t)return t+' '+baseText;
+  }
+  return baseText;
+}
+/* 枠 box={x,y,w,h} の辺+割合 → 周上の点 */
+function pointerRootPt(box, side, frac){
+  frac=Math.max(0,Math.min(1,(typeof frac==='number'?frac:0.5)));
+  if(side==='top')   return {x:box.x+box.w*frac, y:box.y};
+  if(side==='bottom')return {x:box.x+box.w*frac, y:box.y+box.h};
+  if(side==='left')  return {x:box.x,            y:box.y+box.h*frac};
+  return {x:box.x+box.w, y:box.y+box.h*frac}; /* right */
+}
+/* 点(px,py) を 枠 box の周(4辺)に投影し、最寄りの {side,frac} を返す */
+function projectBoxPerimeter(box, px, py){
+  function cl(v,a,b){return Math.max(a,Math.min(b,v));}
+  var cands=[
+    {side:'top',    x:cl(px,box.x,box.x+box.w), y:box.y},
+    {side:'bottom', x:cl(px,box.x,box.x+box.w), y:box.y+box.h},
+    {side:'left',   x:box.x,                    y:cl(py,box.y,box.y+box.h)},
+    {side:'right',  x:box.x+box.w,              y:cl(py,box.y,box.y+box.h)}
+  ];
+  var best=cands[0], bd=Infinity;
+  cands.forEach(function(c){var d=Math.hypot(px-c.x,py-c.y);if(d<bd){bd=d;best=c;}});
+  var frac=(best.side==='top'||best.side==='bottom')
+    ?(box.w>0?(best.x-box.x)/box.w:0.5)
+    :(box.h>0?(best.y-box.y)/box.h:0.5);
+  return {side:best.side, frac:Math.max(0,Math.min(1,frac))};
+}
+/* 矢印を描く (root点 → tip点)。座標は呼び出し側のスケールに合わせて渡す */
+function drawPointerArrow(ctx, rx, ry, tx, ty, col, w){
+  var dx=tx-rx, dy=ty-ry, len=Math.hypot(dx,dy);
+  ctx.save();
+  ctx.setLineDash([]);
+  ctx.strokeStyle=col; ctx.fillStyle=col;
+  ctx.lineWidth=w; ctx.lineCap='round'; ctx.lineJoin='round';
+  ctx.globalAlpha=1;
+  ctx.beginPath(); ctx.moveTo(rx,ry); ctx.lineTo(tx,ty); ctx.stroke();
+  /* 矢じり */
+  if(len>1){
+    var ang=Math.atan2(dy,dx);
+    var ah=Math.max(8,w*3.2);
+    var spread=0.42;
+    ctx.beginPath();
+    ctx.moveTo(tx,ty);
+    ctx.lineTo(tx-ah*Math.cos(ang-spread),ty-ah*Math.sin(ang-spread));
+    ctx.lineTo(tx-ah*Math.cos(ang+spread),ty-ah*Math.sin(ang+spread));
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
 /* ハンドルドラッグで stroke.anchors を更新した新strokeを返す (純粋関数) */
 function applyHandleTransform(s, handleId, dtm, dp){
   if(!s||!s.anchors||s.anchors.length<2)return s;
@@ -4413,7 +4723,7 @@ function getStrokeScreenBounds(ctx,s,minToX,pToY){
     var x=minToX(a.tm), y=pToY(a.p);
     var fs=s.fontSize||15;
     var fb=s.fontBold?'bold ':'';
-    var rawLines=(s.text||'').split('\n');
+    var rawLines=snippetDisplayText(s, s.text||'').split('\n');
     ctx.save();
     ctx.font=fb+fs+"px -apple-system,'Helvetica Neue',sans-serif";
     var displayLines=[];
@@ -4510,7 +4820,7 @@ function drawSelectionHighlight(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,pri
     var x=minToX(a.tm), y=pToY(a.p);
     var fs=s.fontSize||15;
     var fb=s.fontBold?'bold ':'';
-    var rawLines=(s.text||'').split('\n');
+    var rawLines=snippetDisplayText(s, s.text||'').split('\n');
     ctx.save();
     ctx.font=fb+fs+"px -apple-system,'Helvetica Neue',sans-serif";
     var displayLines=[];
