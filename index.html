@@ -2923,6 +2923,18 @@ function DataChart(props){
         var hitS=getStrokeByHit(gHitSnip);
         if(hitS&&(hitS.type||hitS.tool)==='text'){
           setSelectedIdx(gHitSnip);
+          /* 矢印付きスタンプ: 「選択」ツールと同じく初回タップは選択+矢印ハンドル表示
+             (テキスト編集は2回目のタップ)。スタンプツールでも矢印を編集できるように。 */
+          if(hitS._snippet&&hitS.pointer&&gHitSnip.side==='cur'){
+            var _alreadyPEs=ptrEditRef.current&&ptrEditRef.current.fromSelect&&ptrEditRef.current.strokeId===hitS.id;
+            if(!_alreadyPEs){
+              setPtrEdit({strokeId:hitS.id,phase:'editing',side:'cur',fromSelect:true});
+              moveRef.current={side:gHitSnip.side, idx:gHitSnip.idx,
+                startTM:tp.tm, startP:tp.p, dtm:0, dp:0, moving:false};
+              return;
+            }
+            /* 2回目以降: 通常のテキスト編集へフォールスルー */
+          }
           var snScr=anchorToScreen(hitS,gHitSnip.side);
           moveRef.current={side:gHitSnip.side, idx:gHitSnip.idx,
             startTM:tp.tm, startP:tp.p, dtm:0, dp:0, moving:false,
