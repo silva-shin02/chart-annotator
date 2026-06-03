@@ -2669,6 +2669,20 @@ function DataChart(props){
         var gStk=gArr[gHit.idx];
         if(gStk&&(gStk.type||gStk.tool)==='text'){
           if(drawTool==='lasso')setSelectedIdx(gHit);
+          /* 矢印付きスタンプ + 選択ツール: 初回タップは選択+矢印ハンドル表示
+             (テキスト編集は2回目のタップ)。ハンドル(根本/矢先)で矢印を編集できる。 */
+          if(drawTool==='lasso'&&gStk._snippet&&gStk.pointer&&gHit.side==='cur'){
+            var _alreadyPEg=ptrEditRef.current&&ptrEditRef.current.fromSelect&&ptrEditRef.current.strokeId===gStk.id;
+            if(!_alreadyPEg){
+              var gTp0=pxToTimePrice(e.clientX,e.clientY);
+              setPtrEdit({strokeId:gStk.id,phase:'editing',side:'cur',fromSelect:true});
+              moveRef.current={side:gHit.side, idx:gHit.idx,
+                startTM:(gTp0&&gTp0.tm!=null?gTp0.tm:0), startP:(gTp0&&gTp0.p!=null?gTp0.p:0),
+                dtm:0, dp:0, moving:false};
+              return;
+            }
+            /* 2回目以降: 通常のテキスト編集へフォールスルー */
+          }
           var gScr=anchorToScreen(gStk,gHit.side);
           var gTp=pxToTimePrice(e.clientX,e.clientY);
           moveRef.current={
@@ -2796,17 +2810,6 @@ function DataChart(props){
       /* 既存textをhitした場合はtext modeと同じ挙動 */
       var hiArr=(hi.side==='ref')?(refStrokes||[]):(strokes||[]);
       var hiStk=hiArr[hi.idx];
-      /* 矢印付きスタンプ: 初回タップは選択+矢印ハンドル表示 (テキスト編集は2回目タップ)。
-         ドラッグで移動も可。ハンドル(根本/矢先)は最上位の ptrPointerDown で掴める。 */
-      if(hiStk&&(hiStk.type||hiStk.tool)==='text'&&hiStk._snippet&&hiStk.pointer&&hi.side==='cur'){
-        var _alreadyPE=ptrEditRef.current&&ptrEditRef.current.fromSelect&&ptrEditRef.current.strokeId===hiStk.id;
-        if(!_alreadyPE){
-          setPtrEdit({strokeId:hiStk.id,phase:'editing',side:'cur',fromSelect:true});
-          moveRef.current={side:hi.side, idx:hi.idx, startTM:tp.tm, startP:tp.p, dtm:0, dp:0, moving:false};
-          return;
-        }
-        /* 2回目以降: 通常のテキスト編集起動 (下の共通処理へフォールスルー) */
-      }
       if(hiStk&&(hiStk.type||hiStk.tool)==='text'){
         var lScr=anchorToScreen(hiStk,hi.side);
         moveRef.current={
