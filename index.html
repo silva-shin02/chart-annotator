@@ -1884,6 +1884,22 @@ function DataChart(props){
       ctx.restore();
     }
 
+    /* スタンプ配置ステージ: ドラッグ中はスタンプ本体を移動先にプレビュー描画 */
+    var _pePl=ptrEditRef.current;
+    if(L&&_pePl&&_pePl.phase==='placing'){
+      var _drPl=ptrDragRef.current;
+      if(_drPl&&_drPl.mode==='move'&&_drPl.curTm!=null&&_drPl.curP!=null){
+        var _hhPl=findSnippetById(_pePl.strokeId);
+        if(_hhPl&&_hhPl.stroke){
+          var _prevStk=Object.assign({},_hhPl.stroke,{anchors:[{tm:_drPl.curTm,p:_drPl.curP}]});
+          var _minFnPl=function(m){return minToXWithSide(m,_hhPl.side);};
+          ctx.globalAlpha=0.92;
+          drawAnalysisStrokeExt(ctx,_prevStk,_minFnPl,pToYcss,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
+          ctx.globalAlpha=1;
+        }
+      }
+    }
+
     /* スタンプ矢印 編集: 矢印プレビュー + root/tip ハンドル */
     var _pe=ptrEditRef.current;
     if(L&&_pe&&_pe.phase==='editing'){
@@ -2389,6 +2405,22 @@ function DataChart(props){
     var box=getSnippetBoxCss(hit.stroke,hit.side); if(!box)return true;
     var rect=getCanvasRect(); var px=clientX-rect.left, py=clientY-rect.top;
     var s=hit.stroke;
+    if(pe.phase==='placing'){
+      /* スタンプ配置ステージ: 本体タップ→移動ドラッグ / 空白タップ→矢印の根元選択へ */
+      var inBox=(px>=box.x-10&&px<=box.x+box.w+10&&py>=box.y-10&&py<=box.y+box.h+10);
+      if(inBox){
+        var tpm=pxToTimePrice(clientX,clientY);
+        var a0m=s.anchors&&s.anchors[0]?s.anchors[0]:{tm:0,p:0};
+        ptrDragRef.current={strokeId:pe.strokeId,side:hit.side,idx:hit.idx,mode:'move',
+          offTm:(tpm&&tpm.tm!=null?a0m.tm-tpm.tm:0),
+          offP:(tpm&&tpm.p!=null?a0m.p-tpm.p:0),
+          curTm:a0m.tm, curP:a0m.p};
+        return true;
+      }
+      /* 空白タップ → 配置確定して矢印の根元選択ステージへ */
+      setPtrEdit({strokeId:pe.strokeId,phase:'pickRoot',side:hit.side});
+      return true;
+    }
     if(pe.phase==='editing'&&s.pointer){
       var tipX=minToXWithSide(s.pointer.tipTm,hit.side), tipY=pToYcss(s.pointer.tipP);
       if(Math.hypot(px-tipX,py-tipY)<=18){
@@ -2430,7 +2462,10 @@ function DataChart(props){
   function ptrPointerMove(clientX,clientY){
     var d=ptrDragRef.current; if(!d)return false;
     var rect=getCanvasRect(); var px=clientX-rect.left, py=clientY-rect.top;
-    if(d.mode==='tip'){
+    if(d.mode==='move'){
+      var tpv=pxToTimePrice(clientX,clientY);
+      if(tpv){ if(tpv.tm!=null)d.curTm=tpv.tm+d.offTm; if(tpv.p!=null)d.curP=tpv.p+d.offP; }
+    } else if(d.mode==='tip'){
       var tp=pxToTimePrice(clientX,clientY);
       if(tp){ if(typeof tp.tm==='number')d.tipTm=tp.tm; if(tp.p!=null)d.tipP=tp.p; }
     } else if(d.mode==='root'){
@@ -2442,6 +2477,18 @@ function DataChart(props){
   }
   function ptrPointerUp(){
     var d=ptrDragRef.current; if(!d)return false;
+    if(d.mode==='move'){
+      var hitM=findSnippetById(d.strokeId);
+      if(hitM&&d.curTm!=null&&d.curP!=null&&props.onStrokeUpdate){
+        var aM=hitM.stroke.anchors&&hitM.stroke.anchors[0];
+        var movedM=!aM||Math.abs(aM.tm-d.curTm)>0.001||Math.abs(aM.p-d.curP)>0.0001;
+        if(movedM){
+          var nsM=Object.assign({},hitM.stroke,{anchors:[{tm:d.curTm,p:d.curP}]});
+          props.onStrokeUpdate(hitM.side,hitM.idx,nsM);
+        }
+      }
+      ptrDragRef.current=null; _ptrSchedDraw(); return true;
+    }
     var hit=findSnippetById(d.strokeId);
     if(hit){
       var base=hit.stroke.pointer||{};
@@ -3382,10 +3429,10 @@ function DataChart(props){
       var _ps=pendingSnipRef.current;
       if(_ps){
         _ps.fn(_ps.stroke);
-        /* スタンプ配置直後: 根元選択モードへ (バナー+枠パルス表示) */
+        /* スタンプ配置直後: まず「配置ステージ」へ (ドラッグで位置調整→空白タップで矢印へ) */
         var _sid=_ps.stroke&&_ps.stroke.id;
         var _sside=_ps.stroke&&_ps.stroke.side||'cur';
-        if(_sid&&_sside==='cur')setPtrEdit({strokeId:_sid,phase:'pickRoot',side:'cur'});
+        if(_sid&&_sside==='cur')setPtrEdit({strokeId:_sid,phase:'placing',side:'cur'});
       }
     }
     pendingTextReqRef.current=null;
@@ -3793,7 +3840,8 @@ function DataChart(props){
           padding:"2px 6px"}
       },"✕")
     ),
-    /* ── スタンプ矢印 編集: 枠パルス + 直上バナー ──
+    /* ── スタンプ矢印: ステージ別 枠表示 + 直上バナー ──
+       placing=配置調整 / pickRoot=根元選択 / editing=矢先調整。
        選択ツールからの再編集(fromSelect)時はバナー/枠を出さず、矢印ハンドル(オーバーレイ)のみ */
     (function(){
       if(!ptrEdit||ptrEdit.fromSelect)return null;
@@ -3802,20 +3850,50 @@ function DataChart(props){
       var box=getSnippetBoxCss(hit.stroke, hit.side);
       if(!box)return null;
       var bw=box.w, bx=box.x, by=box.y;
-      var isPick=ptrEdit.phase==='pickRoot';
+      var phase=ptrEdit.phase;
+      var isPlacing=phase==='placing', isPick=phase==='pickRoot';
       /* バナー位置: 基本は枠の直上、上端に近ければ下へ */
-      var bannerH=30;
-      var bannerTop=by-bannerH-6;
-      var below=false;
-      if(bannerTop<2){bannerTop=by+box.h+6;below=true;}
+      var bannerTop=by-36;
+      if(bannerTop<2){bannerTop=by+box.h+6;}
       var bannerLeft=bx+bw/2;
-      var msg=isPick?'矢印の根元を枠線上でタップ':'矢先をドラッグして時間を決める';
-      return ce('div',{key:'ptr-edit',style:{position:'absolute',inset:0,pointerEvents:'none',zIndex:90}},
-        /* 枠パルス (pickRoot時のみ。editing中は矢印ハンドルで誘導) */
-        isPick&&ce('div',{className:'ca-ptr-frame',style:{position:'absolute',
+      var msg=isPlacing?'スタンプの位置を決める（ドラッグで調整／空白をタップで次へ）'
+             :isPick?'矢印の根元を枠線上でタップ'
+             :'矢先をドラッグして時間を決める';
+      /* 枠の見た目: placing=破線(移動可)、pickRoot=パルス、editing=なし */
+      var frameEl=null;
+      if(isPlacing){
+        frameEl=ce('div',{style:{position:'absolute',
           left:bx-2,top:by-2,width:bw+4,height:box.h+4,
-          border:'2px solid #6366F1',borderRadius:4,pointerEvents:'none'}}),
-        /* バナー */
+          border:'2px dashed #6366F1',borderRadius:4,
+          background:'rgba(99,102,241,0.10)',pointerEvents:'none'}});
+      }else if(isPick){
+        frameEl=ce('div',{className:'ca-ptr-frame',style:{position:'absolute',
+          left:bx-2,top:by-2,width:bw+4,height:box.h+4,
+          border:'2px solid #6366F1',borderRadius:4,pointerEvents:'none'}});
+      }
+      /* ボタン: placing=やめる(削除) / pickRoot=スキップ / editing=確定 */
+      var btnEl;
+      if(isPlacing){
+        btnEl=ce('button',{onClick:function(ev){ev.stopPropagation();
+            var h2=findSnippetById(ptrEdit.strokeId);
+            if(h2&&props.onStrokeDelete)props.onStrokeDelete(h2.side,h2.idx);
+            ptrDragRef.current=null;setPtrEdit(null);},
+          style:{border:'none',background:'rgba(255,255,255,0.08)',color:'#f87171',
+            fontSize:12,fontWeight:700,cursor:'pointer',borderRadius:5,padding:'3px 8px'}},
+          'やめる');
+      }else if(isPick){
+        btnEl=ce('button',{onClick:function(ev){ev.stopPropagation();setPtrEdit(null);},
+          style:{border:'none',background:'rgba(255,255,255,0.08)',color:'#aaa',
+            fontSize:12,fontWeight:700,cursor:'pointer',borderRadius:5,padding:'3px 8px'}},
+          'スキップ ✕');
+      }else{
+        btnEl=ce('button',{onClick:function(ev){ev.stopPropagation();setPtrEdit(null);},
+          style:{border:'none',background:'#6366F1',color:'#fff',
+            fontSize:12,fontWeight:700,cursor:'pointer',borderRadius:5,padding:'3px 11px'}},
+          '確定');
+      }
+      return ce('div',{key:'ptr-edit',style:{position:'absolute',inset:0,pointerEvents:'none',zIndex:90}},
+        frameEl,
         ce('div',{style:{position:'absolute',left:bannerLeft,top:bannerTop,
           transform:'translateX(-50%)',pointerEvents:'auto',
           display:'flex',alignItems:'center',gap:8,whiteSpace:'nowrap',
@@ -3825,15 +3903,7 @@ function DataChart(props){
           onMouseDown:function(ev){ev.stopPropagation();},
           onTouchStart:function(ev){ev.stopPropagation();}},
           ce('span',{style:{fontSize:11.5,color:'#c7d2fe',fontWeight:700}},msg),
-          isPick
-            ? ce('button',{onClick:function(ev){ev.stopPropagation();setPtrEdit(null);},
-                style:{border:'none',background:'rgba(255,255,255,0.08)',color:'#aaa',
-                  fontSize:12,fontWeight:700,cursor:'pointer',borderRadius:5,padding:'3px 8px'}},
-                'スキップ ✕')
-            : ce('button',{onClick:function(ev){ev.stopPropagation();setPtrEdit(null);},
-                style:{border:'none',background:'#6366F1',color:'#fff',
-                  fontSize:12,fontWeight:700,cursor:'pointer',borderRadius:5,padding:'3px 11px'}},
-                '確定')
+          btnEl
         )
       );
     })(),
