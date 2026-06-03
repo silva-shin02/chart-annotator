@@ -6843,6 +6843,7 @@ function ImageAnnotator(props){
           /* C6: onRequestTextInput({tm,p,screenX,screenY,editIdx,side}) */
           onRequestTextInput:function(req){
             var initText='', initFS=fontSize, initBold=fontBold, initColor=color, initOp=opacity, initBoxW=null;
+            var initSnippet=false;
             var reqSide=req.side||'cur';
             /* 2026-04-20: 既存編集時は anchor を stroke側から取得 (テキスト位置保持)
                — ImageAnnotator側で req.tm/p に anchor値を入れてるが、親側でも最終保険として上書き */
@@ -6865,6 +6866,7 @@ function ImageAnnotator(props){
                 initOp=es.opacity!=null?es.opacity:opacity;
                 /* C9後-fix: 既存のboxW を引き継ぐ (無ければ未設定) */
                 initBoxW=es.boxW||null;
+                initSnippet=!!es._snippet;
                 /* 2026-04-20: anchor を stroke側から取得して確定時の位置ずれを防止 */
                 if(es.anchors&&es.anchors[0]){
                   initTm=es.anchors[0].tm;
@@ -6882,6 +6884,7 @@ function ImageAnnotator(props){
               editIdx: req.editIdx>=0?req.editIdx:-1,
               side: reqSide,
               tf:analysisTf,
+              _snippet:initSnippet,  // スタンプ編集時はカーソルを文末に置くため
               _openedAt:Date.now()  // タッチ合成イベント暴発ガード用 (タブレット対応)
             });
           }
@@ -7428,11 +7431,11 @@ function ImageAnnotator(props){
                   el.style.height=el.scrollHeight+"px";
                   try{
                     el.focus();
-                    /* 新規テキスト(空)のみ末尾にカーソル。
-                       既存テキスト編集時は setSelectionRange を呼ばない。
-                       RAF はマウント後に遅延発火するため、ユーザーがクリックで
-                       カーソルを任意位置に置いた後でも強制上書きされてしまうため。 */
-                    if(!isEditing){
+                    /* 新規テキスト(空)は末尾にカーソル。
+                       通常の既存テキスト編集では setSelectionRange を呼ばない
+                       (ユーザーがクリックでカーソルを置いた位置を尊重)。
+                       2026-06: スタンプ(スニペット)編集時は文章末尾をデフォルトにする (要望) */
+                    if(!isEditing||ati._snippet){
                       var lenT=(el.value||'').length;
                       el.setSelectionRange(lenT,lenT);
                     }
