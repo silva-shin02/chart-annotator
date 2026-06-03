@@ -7215,6 +7215,20 @@ function ImageAnnotator(props){
           ce("div",{
             onMouseDown:function(e){e.preventDefault();e.stopPropagation();},
             onTouchStart:function(e){e.stopPropagation();},
+            /* 2026-06: ツールバーが画面端で見切れないよう、実寸を測って viewport 内にクランプ
+               (左右の見切れ → 確定/削除ボタンが押せない問題の対策) */
+            ref:function(el){
+              if(!el)return;
+              var vw=window.innerWidth||document.documentElement.clientWidth||0;
+              var vh=window.innerHeight||document.documentElement.clientHeight||0;
+              var w=el.offsetWidth, h=el.offsetHeight;
+              if(!w||!vw)return;
+              var L=Math.min(Math.max(4,sx), Math.max(4, vw-w-4));
+              var T=Math.max(4, sy-46);
+              if(T+h>vh-4) T=Math.max(4, vh-h-4);
+              el.style.left=L+"px";
+              el.style.top=T+"px";
+            },
             style:{
               position:"fixed",
               left:Math.max(4,sx),top:Math.max(4,sy-46),
