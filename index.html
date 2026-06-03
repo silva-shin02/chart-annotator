@@ -2438,19 +2438,24 @@ function DataChart(props){
       return pe.fromSelect?false:true;
     }
     if(pe.phase==='pickRoot'){
-      /* 枠線付近のタップで根元確定 */
-      var proj=projectBoxPerimeter(box,px,py);
-      var rpc=pointerRootPt(box,proj.side,proj.frac);
-      if(Math.hypot(px-rpc.x,py-rpc.y)<=22){
+      /* 枠線付近のタップで根元確定 (現状の無印枠で当たり判定) */
+      var proj0=projectBoxPerimeter(box,px,py);
+      var rpc0=pointerRootPt(box,proj0.side,proj0.frac);
+      if(Math.hypot(px-rpc0.x,py-rpc0.y)<=22){
         /* 既定の矢先: 根元から外向き法線に約70px。チャート時間に変換 */
         var nx=0,ny=0;
-        if(proj.side==='top')ny=-1; else if(proj.side==='bottom')ny=1;
-        else if(proj.side==='left')nx=-1; else nx=1;
-        var tipScreenX=rpc.x+nx*70, tipScreenY=rpc.y+ny*70;
+        if(proj0.side==='top')ny=-1; else if(proj0.side==='bottom')ny=1;
+        else if(proj0.side==='left')nx=-1; else nx=1;
+        var tipScreenX=rpc0.x+nx*70, tipScreenY=rpc0.y+ny*70;
         var tp=pxToTimePrice(rect.left+tipScreenX, rect.top+tipScreenY);
         var a0=s.anchors&&s.anchors[0]?s.anchors[0]:{tm:0,p:0};
         var tipTm=(tp&&typeof tp.tm==='number')?tp.tm:a0.tm;
         var tipP=(tp&&tp.p!=null)?tp.p:a0.p;
+        /* pointer確定後は文頭に時間が付いて枠が広がるため、
+           プレフィックス込みの枠で投影し直してクリック点に根元を合わせる (ズレ防止) */
+        var tmpStroke=Object.assign({},s,{pointer:{rootSide:proj0.side,rootFrac:proj0.frac,tipTm:tipTm,tipP:tipP}});
+        var box2=getSnippetBoxCss(tmpStroke,hit.side)||box;
+        var proj=projectBoxPerimeter(box2,px,py);
         commitPointer(pe.strokeId,{rootSide:proj.side,rootFrac:proj.frac,tipTm:tipTm,tipP:tipP});
         setPtrEdit({strokeId:pe.strokeId,phase:'editing',side:hit.side});
         return true;
