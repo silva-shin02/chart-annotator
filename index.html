@@ -2437,8 +2437,21 @@ function DataChart(props){
           tipTm:s.pointer.tipTm,tipP:s.pointer.tipP,rootSide:s.pointer.rootSide,rootFrac:s.pointer.rootFrac,rootOff:s.pointer.rootOff};
         return true;
       }
-      /* ハンドル外タップ: 配置直後は無視 (誤スタンプ防止)、選択再編集時は通常動作(移動/文字編集)へ */
-      return pe.fromSelect?false:true;
+      /* ハンドル外タップ:
+         (配置直後) クリックした場所をそのまま矢先にする＝ドラッグ不要で1クリック確定。
+         (選択再編集) 従来通り通常動作(移動/文字編集)へ。 */
+      if(!pe.fromSelect){
+        var tpClk=pxToTimePrice(clientX,clientY);
+        if(tpClk&&typeof tpClk.tm==='number'&&tpClk.p!=null){
+          commitPointer(pe.strokeId,{
+            rootSide:s.pointer.rootSide, rootFrac:s.pointer.rootFrac, rootOff:s.pointer.rootOff,
+            tipTm:tpClk.tm, tipP:tpClk.p
+          });
+          _ptrSchedDraw();
+        }
+        return true;
+      }
+      return false;
     }
     if(pe.phase==='pickRoot'){
       /* 枠線付近のタップで根元確定。rootOff(左端からの論理px)で保存するので
