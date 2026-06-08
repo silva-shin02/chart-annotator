@@ -275,13 +275,13 @@ function ColorPicker(props){
   function pick(c){
     onChange(c); onHistory(c);
     if(editingSlot!==null){ var nq=quickColors.slice(); nq[editingSlot]=c; onQuickColors(nq); }
-    else if(!quickColors.includes(c)) onQuickColors([c].concat(quickColors).slice(0,7));
+    else if(!quickColors.includes(c)) onQuickColors([c].concat(quickColors).slice(0,8));
     closeAll();
   }
   function addCustom(){
     if(!presets.includes(customVal)) savePresets(presets.concat([customVal]));
     onChange(customVal); onHistory(customVal);
-    if(!quickColors.includes(customVal)) onQuickColors([customVal].concat(quickColors).slice(0,7));
+    if(!quickColors.includes(customVal)) onQuickColors([customVal].concat(quickColors).slice(0,8));
     setTab("preset");
   }
   function remPreset(c){ savePresets(presets.filter(function(x){return x!==c;})); }
@@ -1369,7 +1369,7 @@ function DataChart(props){
   var onStrokeUpdate=props.onStrokeUpdate;  // (idx, newStroke) → 選択ストローク更新用
   var onStrokeDeleteMany=props.onStrokeDeleteMany;  // ([{side,idx}]) → 一括削除
   var onStrokeUpdateMany=props.onStrokeUpdateMany;  // ([{side,idx,stroke}]) → 一括更新
-  var quickColors=props.quickColors||['#ff0054','#11ded9','#ffcc00','#ff6600','#00cc66','#6366F1','#ffffff'];
+  var quickColors=props.quickColors||['#ff0054','#11ded9','#ffcc00','#ff6600','#00cc66','#6366F1','#ffffff','#9C27B0'];
   var barsKey=tf==='5m'?'bars_5m':'bars_1m';
   var bars=(data&&data[barsKey])||[];
 
@@ -5311,8 +5311,14 @@ function ImageAnnotator(props){
   var st1=useState("#E53935"); var color=st1[0],setColor=st1[1];
   var st2=useState([]);      var colorHist=st2[0],setColorHist=st2[1];
   var st3=useState(function(){
-    try{var q=JSON.parse(localStorage.getItem("annot_quickcolors_v1"));if(q&&q.length)return q;}catch(e){}
-    return["#E53935","#EC407A","#FF9800","#FFEB3B","#1565C0","#ffffff","#8BC34A"];
+    var DEFQC=["#E53935","#EC407A","#FF9800","#FFEB3B","#1565C0","#ffffff","#8BC34A","#9C27B0"];
+    try{var q=JSON.parse(localStorage.getItem("annot_quickcolors_v1"));
+      if(q&&q.length){ /* 旧7色保存値を8スロットに移行(不足分をDEFQCの未使用色で埋める) */
+        for(var _i=0;q.length<8&&_i<DEFQC.length;_i++){ if(q.indexOf(DEFQC[_i])<0)q.push(DEFQC[_i]); }
+        return q.slice(0,8);
+      }
+    }catch(e){}
+    return DEFQC;
   }); var quickColors=st3[0],setQuickColors=st3[1];
   function setQuickColorsAndSave(qc){
     setQuickColors(qc);
