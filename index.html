@@ -4751,7 +4751,10 @@ function getHandleAnchors(s){
    s.pointer = {rootSide:'top|right|bottom|left', rootFrac:0..1, tipTm:分, tipP:価格} */
 function snipTimeStr(tm){
   if(typeof tm!=='number'||isNaN(tm))return '';
-  var hh=Math.floor(tm/60), mm=((Math.round(tm)%60)+60)%60;
+  /* 先に分単位で1回だけ丸める。時=floor/分=round と別々に丸めると
+     tm=659.6 で hh=10・mm=0 となり 11:00 が "10:00" に化けるため(桁上げ不整合)。 */
+  var r=Math.round(tm);
+  var hh=Math.floor(r/60), mm=((r%60)+60)%60;
   return hh+':'+(mm<10?'0'+mm:mm);
 }
 /* スタンプ表示テキスト: pointer有時のみ時間プレフィックスを付ける (保存テキストは変更しない) */
