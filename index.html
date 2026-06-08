@@ -1870,17 +1870,6 @@ function DataChart(props){
       ctx.fillRect(mLx-4,mMidY-14,mTw+10,19);
       ctx.globalAlpha=0.95; ctx.fillStyle=mcol;
       ctx.fillText(mDiffStr,mLx,mMidY+1);
-      /* 開始点: 価格+時刻 (縦線の左側) */
-      var mHH=Math.floor(md2.startTm/60), mMM=md2.startTm%60;
-      var mTimeStr=mHH+':'+(mMM<10?'0'+mMM:mMM);
-      var mPriceLabel=Math.round(md2.startP*10)/10+'円  '+mTimeStr;
-      ctx.font='11px -apple-system,Helvetica,sans-serif';
-      var mTw2=ctx.measureText(mPriceLabel).width;
-      var mLx2=mX2-12-mTw2;
-      ctx.globalAlpha=0.7; ctx.fillStyle='rgba(0,0,0,0.8)';
-      ctx.fillRect(mLx2-4,mY1-17,mTw2+8,15);
-      ctx.globalAlpha=0.9; ctx.fillStyle='rgba(220,220,220,0.9)';
-      ctx.fillText(mPriceLabel,mLx2,mY1-5);
       ctx.restore();
     }
 
@@ -3954,8 +3943,6 @@ function DataChart(props){
       var colR='#4ade80';
       var topYR=Math.min(mY1R,mY2R);
       var hR=Math.max(Math.abs(mY2R-mY1R),2);
-      var hhR=Math.floor(msr.startTm/60), mmR=msr.startTm%60;
-      var timeStrR=hhR+':'+(mmR<10?'0'+mmR:mmR);
       var diffRndR=Math.round(Math.abs(diffR));
       var labelR=diffRndR+'円';
       return ce('div',{
@@ -4027,15 +4014,7 @@ function DataChart(props){
             style:{border:'none',background:'rgba(255,255,255,0.1)',color:'#888',
               fontSize:13,cursor:'pointer',padding:'1px 4px',borderRadius:3,lineHeight:1}
           },'×')
-        ),
-        /* 時刻ラベル (開始点付近) */
-        ce('div',{style:{
-          position:'absolute',left:14,
-          top:diffR>=0?(hR+4):-19,
-          fontSize:10,color:'rgba(180,180,180,0.8)',whiteSpace:'nowrap',
-          background:'rgba(0,0,0,0.55)',borderRadius:3,padding:'1px 5px',
-          pointerEvents:'none'
-        }},timeStrR)
+        )
       );
     })
   );
