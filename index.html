@@ -5542,6 +5542,60 @@ function ImageAnnotator(props){
                   ref側書込フローで refAnalysisRef.current=null による早期returnが発生 */
   var refAnalysisRef=useRef(refAnalysis);
   useEffect(function(){refAnalysisRef.current=refAnalysis;},[refAnalysis]);
+  /* ── EMA前日連続化(常時) ──
+     前日チャートを開いていなくても、前日の最終EMAを「種」にして当日EMAを連続計算で表示する
+     (HyperSBI2 と同じ連続したEMA)。前日のローソク自体は表示しない。VWAPは当日リセットのまま。
+     ・シミュ中 / 前日チャート表示中(refAnalysis) は描画側(computeEnhancedBars)で連続化されるので何もしない */
+  var stEMS=useState(null); var emaSeedData=stEMS[0],setEmaSeedData=stEMS[1];
+  var emaSeedTriedRef=useRef(false);
+  function loadEmaSeed(){
+    var ticker=img._ticker||(analysisData&&analysisData.ticker)||'';
+    var currentId=img._draftId||savedDraftIdRef.current||null;
+    var currentDate=(analysisData&&analysisData.date)||'';
+    if(!ticker||!currentDate)return;
+    var allMeta=caLoadMeta();
+    var candidates=allMeta.filter(function(m){return m.ticker===ticker&&m.id!==currentId;});
+    if(!candidates.length)return;
+    function _effDate(m){
+      var ad=m.analysisDate||'';
+      if(/^\d{4}-\d{2}-\d{2}$/.test(ad))return ad;
+      var r=ad.match(/^(\d{4})(\d{2})(\d{2})$/); if(r)return r[1]+'-'+r[2]+'-'+r[3];
+      var n=m.name||'';
+      var r2=n.match(/(?:^|[_\-])(\d{4})-(\d{2})-(\d{2})/); if(r2)return r2[1]+'-'+r2[2]+'-'+r2[3];
+      var r3=n.match(/_(\d{4})(\d{2})(\d{2})(?:[._]|$)/); if(r3)return r3[1]+'-'+r3[2]+'-'+r3[3];
+      return '';
+    }
+    /* 過去で最も近い日付(直前営業日)のチャートを選ぶ — loadPrevChart の strict 選定と同等 */
+    var prev=null, prevD='';
+    candidates.forEach(function(m){var d=_effDate(m); if(d&&d<currentDate&&d>prevD){prev=m;prevD=d;}});
+    if(!prev)return;
+    caLoadDataAsync(prev.id,function(d){
+      if(d&&d.analysisData){setEmaSeedData(d.analysisData);return;}
+      var cfg=props.fbCfg||{};
+      if(cfg.url){
+        var base=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
+        var auth=cfg.secret?'?auth='+cfg.secret:'';
+        fetch(base+'/'+prev.id+'.json'+auth).then(function(r){return r.ok?r.json():null;})
+          .then(function(fb){if(fb&&fb.analysisData)setEmaSeedData(fb.analysisData);}).catch(function(){});
+      }
+    });
+  }
+  useEffect(function(){
+    if(simMode||refAnalysis)return;        /* これらは描画側で連続化される */
+    if(emaSeedTriedRef.current)return;     /* 1チャートにつき1回だけ試行 */
+    if(!analysisData)return;
+    emaSeedTriedRef.current=true;
+    loadEmaSeed();
+  },[analysisData,refAnalysis,simMode]);
+  /* 表示用データ: 前日種があれば当日EMAを連続化 (前日ローソクは出さない)。
+     前日表示中/シミュ中/種なし は素の analysisData を返す */
+  var emaContinuedData=useMemo(function(){
+    if(simMode||refAnalysis||!analysisData||!emaSeedData)return analysisData;
+    return Object.assign({},analysisData,{
+      bars_1m:computeEnhancedBars(analysisData.bars_1m||[],emaSeedData.bars_1m||null),
+      bars_5m:computeEnhancedBars(analysisData.bars_5m||[],emaSeedData.bars_5m||null)
+    });
+  },[analysisData,emaSeedData,refAnalysis,simMode]);
   /* F1: 過去チャート選択モーダルの表示 */
   var stRPicker=useState(false); var showRefAnalysisPicker=stRPicker[0],setShowRefAnalysisPicker=stRPicker[1];
   /* F2: 両チャート連動用の共有 state */
@@ -5566,7 +5620,8 @@ function ImageAnnotator(props){
       setAnalysisPShift(0);
       setAnalysisZoom(null);
     }
-  },[analysisData,analysisTf,refAnalysis?refAnalysis.id:null]);
+    /* emaSeedData(前日連続EMAの種)読込時も再フィット — gap日でも連続EMAを含めてY軸を合わせる */
+  },[analysisData,analysisTf,refAnalysis?refAnalysis.id:null,emaSeedData]);
   /* F2: 十字カーソル共有 ({tm, yOffset}) — tmは絶対時刻(分)、yOffsetはpriceTop基準のcanvas内y */
   var analysisCursorRef=useRef(null);
   var stCB=useState(0); var cursorBump=stCB[0],setCursorBump=stCB[1];
@@ -6819,7 +6874,7 @@ function ImageAnnotator(props){
               )
             ),
             ce(DataChart,{
-              data:simMode?simDisplayData:analysisData, tf:analysisTf, showCrosshair:showCrosshair,
+              data:simMode?simDisplayData:emaContinuedData, tf:analysisTf, showCrosshair:showCrosshair,
               /* C1+: 過去chartデータを渡して同一キャンバスに連結描画 */
               refData:refAnalysis?refAnalysis.analysisData:null,
               /* C3+: 過去chart側ストロークも連結描画 (C6で書込対応) */
