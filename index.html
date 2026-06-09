@@ -1562,7 +1562,8 @@ function DataChart(props){
   // 2026-04-21: 地図モデルズーム化 — pricePx 縮減ロジック削除 (pricePx は最小ラベル間隔px に転用)
   //             priceRange = 外接そのまま、縦寸法は zoom と pxPerYen で決まる
   useEffect(function(){
-    if(!bars.length){setPriceRange(null);return;}
+    /* シミュレーション: 当日足0本でも refBars(前日) があれば前日のみで priceRange を算出して描画 */
+    if(!bars.length&&!hasRef){setPriceRange(null);return;}
     var mn=Infinity, mx=-Infinity;
     function scan(barsArr){
       barsArr.forEach(function(b){
@@ -1674,7 +1675,7 @@ function DataChart(props){
 
   // メインチャート描画
   useEffect(function(){
-    if(!bars.length||!priceRange)return;
+    if((!bars.length&&!hasRef)||!priceRange)return;
     /* 2026-04-20: iPad カクつき対策 — 連続する state 変更 (pan/pinch 中) を
        RAF にまとめて1フレームに1回だけ描画 */
     var rafId=requestAnimationFrame(function(){
@@ -3778,7 +3779,7 @@ function DataChart(props){
     );
   }
 
-  if(!data||!bars.length){
+  if(!data||(!bars.length&&!hasRef)){
     return ce("div",{ref:containerRef,style:{flex:1,display:"flex",alignItems:"center",justifyContent:"center",color:"#555"}},
       ce("div",null,"データなし"));
   }
@@ -5046,6 +5047,10 @@ function totalAnalysisStrokes(v){
 function ImageAnnotator(props){
   var img=props.img, onSave=props.onSave, onClose=props.onClose;
   var onSearchSimilar=props.onSearchSimilar||null;  /* 2026-04-30: C - 現在チャートをクエリに */
+  /* ── シミュレーション(練習)モード ──
+     img._sim=true で起動。当日足をカットオフ時刻まで開示(slice)して1本ずつ表示。
+     永続化は一切しない(draftId無し起動 + autosave gate)。前日チャートは自動でref連結。 */
+  var simMode=!!(img&&img._sim);
 
   /* 2026-04-20 Step3: 画像mode canvasRef 撤去 */
   /* B1: モードタブ — 2026-04-20: 画像mode完全撤去、常時 'analysis' */
@@ -5053,6 +5058,8 @@ function ImageAnnotator(props){
   var stAD=useState(function(){return (img&&img.analysisData)||null;});
   var analysisData=stAD[0],setAnalysisData=stAD[1];
   var stAT=useState('1m'); var analysisTf=stAT[0],setAnalysisTf=stAT[1];
+  /* シミュレーション: 当日足の開示カットオフ時刻(分)。-1=未開示(0本)。→/←/スライダーで変化 */
+  var sSimCut=useState(-1); var simCutoffTm=sSimCut[0],setSimCutoffTm=sSimCut[1];
   /* 書き込み表示/非表示トグル */
   var sSV=useState(true); var strokesVisible=sSV[0],setStrokesVisible=sSV[1];
   /* 分割表示 (似た形) */
@@ -5086,6 +5093,7 @@ function ImageAnnotator(props){
   /* C6: ref側analysisStrokesをFirebaseにPATCH (帯域抑制: analysisStrokesのみ送信)
      同時にローカル IDB/memキャッシュにも反映 (再ロード時の stale 回避) */
   function triggerRefAutoSave(){
+    if(simMode)return;  /* シミュレーション中は前日(ref)側も一切保存しない */
     var cfg=props.fbCfg;
     if(refAutoSaveTimerRef.current)clearTimeout(refAutoSaveTimerRef.current);
     refAutoSaveTimerRef.current=setTimeout(function(){
@@ -5153,17 +5161,19 @@ function ImageAnnotator(props){
     });
     triggerRefAutoSave();
   }
-  /* 前日チャート自動ロード */
-  function loadPrevChart(){
+  /* 前日チャート自動ロード
+     strictOnly=true: 現在より「過去日付」のチャートのみ採用(無ければ何もしない=ref無し)。シミュ用。
+     silent=true: トースト通知を出さない。 */
+  function loadPrevChart(strictOnly,silent){
     var ticker=img._ticker||(analysisData&&analysisData.ticker)||'';
     var currentId=img._draftId||savedDraftIdRef.current||null;
     var currentDate=(analysisData&&analysisData.date)||'';
-    if(!ticker){window.caToast('銘柄が設定されていません','info');return;}
+    if(!ticker){if(!silent)window.caToast('銘柄が設定されていません','info');return;}
     var allMeta=caLoadMeta();
     var candidates=allMeta.filter(function(m){
       return m.ticker===ticker&&m.id!==currentId;
     });
-    if(candidates.length===0){window.caToast('同銘柄の他のチャートがありません','info');return;}
+    if(candidates.length===0){if(!silent)window.caToast('同銘柄の他のチャートがありません','info');return;}
     /* meta から有効な YYYY-MM-DD を取り出すヘルパー
        優先順位: analysisDate(YYYY-MM-DD) → analysisDate(YYYYMMDD) → name内 YYYY-MM-DD → name内 _YYYYMMDD
        analysisDate が未設定の古いチャートでも name に日付が含まれていれば比較できる */
@@ -5195,15 +5205,16 @@ function ImageAnnotator(props){
         if(cd&&cd<currentDate){prev=candidates[i];break;}
       }
     }
-    if(!prev){
+    if(!prev&&!strictOnly){
       var curSavedAt=img.savedAt||0;
       var bySaved=candidates.slice().sort(function(a,b){return b.savedAt-a.savedAt;});
       for(var j=0;j<bySaved.length;j++){
         if(bySaved[j].savedAt<curSavedAt){prev=bySaved[j];break;}
       }
     }
-    if(!prev&&candidates.length>0)prev=candidates[candidates.length-1];
-    if(!prev){window.caToast('前日チャートが見つかりません','info');return;}
+    if(!prev&&!strictOnly&&candidates.length>0)prev=candidates[candidates.length-1];
+    /* strictOnly(シミュ)で過去日が無ければ ref 無しで開始(当日のみ) */
+    if(!prev){if(!silent)window.caToast('前日チャートが見つかりません','info');return;}
     function applyRef(d){
       setRefAnalysis({
         id:prev.id,ticker:prev.ticker,name:prev.name,
@@ -5227,6 +5238,65 @@ function ImageAnnotator(props){
         }).catch(function(){window.caToast('読込失敗','error');});
     });
   }
+
+  /* ───────── シミュレーション(練習)モード ───────── */
+  function _simTmin(t){var p=String(t).split(':');return (+p[0])*60+(+p[1]);}
+  function simBarsForTf(){
+    if(!analysisData)return [];
+    return (analysisTf==='5m'?analysisData.bars_5m:analysisData.bars_1m)||[];
+  }
+  /* 当日足を開示カットオフ時刻まで slice (指標線は各足が値を持つので自動追従) */
+  function simCutBars(arr){
+    if(!simMode)return arr;
+    if(simCutoffTm<0)return [];
+    return (arr||[]).filter(function(b){return _simTmin(b.t)<=simCutoffTm;});
+  }
+  /* 現在の時間足で何本開示済みか (足は時刻昇順前提) */
+  function simRevealedCount(){
+    var arr=simBarsForTf();
+    if(simCutoffTm<0)return 0;
+    var n=0; for(var i=0;i<arr.length;i++){ if(_simTmin(arr[i].t)<=simCutoffTm)n++; else break; }
+    return n;
+  }
+  /* n本目まで開示 (0=空)。カットオフは「時刻」で保持し tf切替でも整合 (スライダー用=絶対指定) */
+  function simStepTo(count){
+    var arr=simBarsForTf();
+    count=Math.max(0,Math.min(arr.length,count));
+    setSimCutoffTm(count<=0?-1:_simTmin(arr[count-1].t));
+  }
+  /* ←/→/キー用: 直近のカットオフ値から相対移動 (関数updaterで連打/オートリピートでもコマ落ちしない) */
+  function simStepBy(delta){
+    var arr=simBarsForTf();
+    setSimCutoffTm(function(prevCut){
+      var n=0;
+      if(prevCut>=0){for(var i=0;i<arr.length;i++){ if(_simTmin(arr[i].t)<=prevCut)n++; else break; }}
+      var nc=Math.max(0,Math.min(arr.length,n+delta));
+      return nc<=0?-1:_simTmin(arr[nc-1].t);
+    });
+  }
+  function simNext(){simStepBy(1);}
+  function simPrev(){simStepBy(-1);}
+  /* 起動時: 直前営業日を自動で ref(前日チャート) に連結 (過去日のみ・silent) */
+  var simInitRef=useRef(false);
+  useEffect(function(){
+    if(simMode&&analysisData&&!simInitRef.current){
+      simInitRef.current=true;
+      setSimCutoffTm(-1);                 /* 最初は空(0本)から */
+      loadPrevChart(true,true);           /* strictOnly + silent */
+    }
+  },[simMode,analysisData]);
+  /* キーボード ←/→ でコマ送り (テキスト入力中は無効) */
+  useEffect(function(){
+    if(!simMode)return;
+    function onKey(e){
+      var tg=e.target;
+      if(tg&&((/^(input|textarea|select)$/i).test(tg.tagName||'')||tg.isContentEditable))return;
+      if(e.key==='ArrowRight'){simNext();e.preventDefault();}
+      else if(e.key==='ArrowLeft'){simPrev();e.preventDefault();}
+    }
+    window.addEventListener('keydown',onKey);
+    return function(){window.removeEventListener('keydown',onKey);};
+  },[simMode,analysisTf,simCutoffTm]);
   /* 分割表示: 類似チャートをロードしてセット */
   function loadSplitChart(id){
     var allMeta=caLoadMeta();
@@ -5645,6 +5715,7 @@ function ImageAnnotator(props){
   /* 2026-04-20: compositeCanvas関数撤去 (画像mode廃止に伴い dead code 化) */
 
   function triggerAutoSave(){
+    if(simMode)return;  /* シミュレーション中は当日(cur)側も一切保存しない */
     var cfg=props.fbCfg; if(_fbIsPaused(cfg))return;
     if(autoSaveTimerRef.current)clearTimeout(autoSaveTimerRef.current);
     autoSaveTimerRef.current=setTimeout(function(){
@@ -6095,6 +6166,10 @@ function ImageAnnotator(props){
 
   var TS={padding:"5px 7px",fontSize:11,fontWeight:700,borderRadius:5,border:"none",cursor:"pointer",whiteSpace:"nowrap"};
 
+  /* シミュレーション: 当日足をカットオフ時刻まで slice した表示用データ (元 analysisData は不変) */
+  var simDisplayData=(simMode&&analysisData)
+    ? Object.assign({},analysisData,{bars_1m:simCutBars(analysisData.bars_1m),bars_5m:simCutBars(analysisData.bars_5m)})
+    : analysisData;
   return ce("div",{style:{position:"fixed",inset:0,background:"rgba(0,0,0,.94)",zIndex:10000,display:"flex",flexDirection:"column"}},
 
     /* ── Toolbar ── */
@@ -6181,6 +6256,18 @@ function ImageAnnotator(props){
             background:splitChart?"#16a34a":"#4a1e5f",
             color:splitChart?"#bbf7d0":"#c4a5f7"})
         },"🔎 似た形"),
+        /* シミュレーション: このチャートを練習モードで開く (前日自動連結・保存なし) */
+        analysisData && !simMode && ce("button",{
+          onClick:function(){
+            var ad=analysisDataRef.current||analysisData;
+            if(!ad){window.caToast('チャートデータがありません','error');return;}
+            if(props.onStartSim)props.onStartSim({analysisData:ad,_ticker:img._ticker||ad.ticker||'',_name:img._name||img.name||'',_sim:true});
+          },
+          title:"このチャートをシミュレーション(練習)モードで開く",
+          style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#7c2d12",color:"#fed7aa",fontWeight:700})
+        },"▶ シミュ"),
+        simMode && ce("span",{style:{fontSize:12,padding:"6px 10px",borderRadius:6,fontWeight:700,flexShrink:0,
+          background:"#7c2d12",color:"#fed7aa"}},"▶ シミュレーション中(保存しません)"),
         /* spacer */
         ce("div",{style:{flex:1}}),
         /* 手動保存 status badge */
@@ -6189,8 +6276,8 @@ function ImageAnnotator(props){
           color:fbStatus==='saving'?'#93c5fd':fbStatus==='ok'?'#86efac':'#fca5a5'}},
           fbStatus==='saving'?'⏳ 保存中…':fbStatus==='ok'?'✓ 保存完了':'✕ 保存失敗'
         ),
-        /* 自動保存インジケーター */
-        props.fbCfg&&props.fbCfg.url&&ce("span",{style:{
+        /* 自動保存インジケーター (シミュ中は非表示) */
+        !simMode&&props.fbCfg&&props.fbCfg.url&&ce("span",{style:{
           fontSize:10,padding:"3px 8px",borderRadius:5,fontWeight:700,flexShrink:0,
           background:_fbIsPaused(props.fbCfg)?'#7f1d1d':autoSaveStatus==='saving'?'#1e3a5f':autoSaveStatus==='ok'?'#14532d':autoSaveStatus==='err'?'#7f1d1d':'#431407',
           color:_fbIsPaused(props.fbCfg)?'#f87171':autoSaveStatus==='saving'?'#93c5fd':autoSaveStatus==='ok'?'#86efac':autoSaveStatus==='err'?'#fca5a5':'#fb923c'}},
@@ -6200,8 +6287,8 @@ function ImageAnnotator(props){
         ce("button",{onClick:function(){setShowDisplaySettings(true);},
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#1e3a5f",color:"#a5b4fc",fontWeight:700})},
           "📊 設定"),
-        ce("button",{onClick:function(){setCancelConfirm(true);},style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#333",color:"#ccc"})},"終了"),
-        ce("button",{onClick:saveAndExport,style:Object.assign({},TS,{fontSize:12,padding:"6px 12px",background:"#2563eb",color:"#fff",fontWeight:700})},"💾 保存・出力")
+        ce("button",{onClick:function(){setCancelConfirm(true);},style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#333",color:"#ccc"})},simMode?"シミュ終了":"終了"),
+        !simMode&&ce("button",{onClick:saveAndExport,style:Object.assign({},TS,{fontSize:12,padding:"6px 12px",background:"#2563eb",color:"#fff",fontWeight:700})},"💾 保存・出力")
       ),
       /* Row 2: color + lineW + opacity + zoom — C8a-fix3: PCでもhorizontal wheel scroll可
          2026-04-20: 横スワイプスクロール復活 */
@@ -6683,7 +6770,7 @@ function ImageAnnotator(props){
               )
             ),
             ce(DataChart,{
-              data:analysisData, tf:analysisTf, showCrosshair:showCrosshair,
+              data:simMode?simDisplayData:analysisData, tf:analysisTf, showCrosshair:showCrosshair,
               /* C1+: 過去chartデータを渡して同一キャンバスに連結描画 */
               refData:refAnalysis?refAnalysis.analysisData:null,
               /* C3+: 過去chart側ストロークも連結描画 (C6で書込対応) */
@@ -7630,6 +7717,33 @@ function ImageAnnotator(props){
       })(),
       document.body
     ),
+
+    /* ── シミュレーション操作バー (中央下部フローティング: ← / スライダー / →) ── */
+    simMode&&analysisData&&(function(){
+      var _arr=simBarsForTf(); var _tot=_arr.length; var _n=simRevealedCount();
+      var _lab=_n>0?String(_arr[_n-1].t):'--:--';
+      var _btn={width:56,height:46,borderRadius:11,border:"none",fontSize:24,fontWeight:900,
+        fontFamily:"inherit",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",
+        touchAction:"manipulation",userSelect:"none"};
+      return ce("div",{style:{position:"fixed",left:"50%",bottom:20,transform:"translateX(-50%)",
+        zIndex:11000,display:"flex",flexDirection:"column",alignItems:"center",gap:6,pointerEvents:"none"}},
+        ce("div",{style:{pointerEvents:"none",fontSize:12,color:"#fed7aa",fontWeight:700,
+          background:"rgba(20,20,22,0.85)",borderRadius:8,padding:"3px 12px",border:"1px solid #44403c",letterSpacing:0.3}},
+          "▶ "+_n+" / "+_tot+" 本　"+_lab),
+        ce("div",{style:{pointerEvents:"auto",display:"flex",alignItems:"center",gap:12,
+          background:"rgba(20,20,22,0.94)",border:"1px solid #44403c",borderRadius:14,padding:"9px 16px",
+          boxShadow:"0 8px 28px rgba(0,0,0,.55)"}},
+          ce("button",{onClick:simPrev,disabled:_n<=0,title:"1本戻す (←キー)",
+            style:Object.assign({},_btn,{background:_n<=0?"#262626":"#374151",color:_n<=0?"#555":"#fff"})},"←"),
+          ce("input",{type:"range",min:0,max:_tot,value:_n,
+            onChange:function(e){simStepTo(parseInt(e.target.value,10)||0);},
+            title:"任意の位置へジャンプ",
+            style:{width:210,accentColor:"#f97316",cursor:"pointer"}}),
+          ce("button",{onClick:simNext,disabled:_n>=_tot,title:"1本進める (→キー)",
+            style:Object.assign({},_btn,{background:_n>=_tot?"#262626":"#ea580c",color:_n>=_tot?"#555":"#fff"})},"→")
+        )
+      );
+    })(),
 
     /* ── キャンセル確認モーダル ── */
     cancelConfirm&&ce(CancelConfirmModal,{
@@ -10842,6 +10956,84 @@ function CaTagSearchModal(props){
 
 /* ページロード中に1回だけ Firebase 初期同期を行うためのフラグ */
 var _caFbInitDone=false;
+/* ─── CaSimPicker: シミュレーション対象の銘柄・日付を選ぶ ─── */
+function CaSimPicker(props){
+  var meta=props.meta||[], onPick=props.onPick, onClose=props.onClose;
+  var initialTicker=props.initialTicker||null;
+  var BT2={border:"none",cursor:"pointer",fontFamily:"inherit"};
+  /* meta から有効な YYYY-MM-DD を抽出 (analysisDate / name から) */
+  function _effDate(m){
+    var ad=m.analysisDate||'';
+    if(/^\d{4}-\d{2}-\d{2}$/.test(ad))return ad;
+    var r=ad.match(/^(\d{4})(\d{2})(\d{2})$/); if(r)return r[1]+'-'+r[2]+'-'+r[3];
+    var n=m.name||'';
+    var r2=n.match(/(?:^|[_\-])(\d{4})-(\d{2})-(\d{2})/); if(r2)return r2[1]+'-'+r2[2]+'-'+r2[3];
+    var r3=n.match(/_(\d{4})(\d{2})(\d{2})(?:[._]|$)/); if(r3)return r3[1]+'-'+r3[2]+'-'+r3[3];
+    return '';
+  }
+  var tickerSet={}; meta.forEach(function(m){if(m.ticker)tickerSet[m.ticker]=true;});
+  var tickerList=Object.keys(tickerSet).sort();
+  var sT=useState(initialTicker&&tickerSet[initialTicker]?initialTicker:(tickerList[0]||null));
+  var selT=sT[0],setSelT=sT[1];
+  var charts=meta.filter(function(m){return m.ticker===selT;}).sort(function(a,b){
+    var da=_effDate(a),db=_effDate(b);
+    if(da&&db)return db.localeCompare(da);
+    if(da)return -1; if(db)return 1;
+    return (b.savedAt||0)-(a.savedAt||0);
+  });
+  return ReactDOM.createPortal(
+    ce("div",{onClick:function(e){if(e.target===e.currentTarget)onClose();},
+      style:{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",zIndex:22000,
+        display:"flex",alignItems:"center",justifyContent:"center",padding:16}},
+      ce("div",{onClick:function(e){e.stopPropagation();},
+        style:{background:"#1c1c1e",borderRadius:18,width:"100%",maxWidth:720,maxHeight:"82vh",
+          boxShadow:"0 24px 64px rgba(0,0,0,.8)",border:"1px solid #2a2a2a",
+          display:"flex",flexDirection:"column",overflow:"hidden"}},
+        /* header */
+        ce("div",{style:{padding:"16px 18px",borderBottom:"1px solid #2a2a2a",display:"flex",alignItems:"center",gap:10,flexShrink:0}},
+          ce("span",{style:{fontSize:16,fontWeight:700,color:"#fff",flex:1}},"▶ シミュレーション — 銘柄・日付を選択"),
+          ce("button",{onClick:onClose,style:Object.assign({},BT2,{fontSize:13,fontWeight:700,
+            background:"#2a2a2a",color:"#aaa",padding:"7px 14px",borderRadius:8})},"閉じる")
+        ),
+        /* 銘柄セレクタ */
+        ce("div",{style:{padding:"10px 14px",borderBottom:"1px solid #2a2a2a",display:"flex",gap:6,
+          flexWrap:"wrap",flexShrink:0,maxHeight:100,overflowY:"auto"}},
+          tickerList.length===0
+            ?ce("span",{style:{color:"#888",fontSize:13}},"チャートがありません")
+            :tickerList.map(function(tk){
+              var on=tk===selT;
+              return ce("button",{key:tk,onClick:function(){setSelT(tk);},
+                style:Object.assign({},BT2,{fontSize:12,fontWeight:700,padding:"5px 12px",borderRadius:8,
+                  background:on?"#ea580c":"#2a2a2a",color:on?"#fff":"#bbb"})},tk);
+            })
+        ),
+        /* 日付カード一覧 */
+        ce("div",{style:{flex:1,overflowY:"auto",padding:14,display:"flex",flexWrap:"wrap",gap:10,alignContent:"flex-start"}},
+          charts.length===0
+            ?ce("div",{style:{width:"100%",textAlign:"center",color:"#888",fontSize:14,paddingTop:30}},"この銘柄のチャートがありません")
+            :charts.map(function(m){
+              var dd=_effDate(m)||'(日付不明)';
+              return ce("div",{key:m.id,onClick:function(){onPick(m);},
+                style:{width:200,background:"#1a1a1a",borderRadius:8,border:"1px solid #2a2a2a",
+                  overflow:"hidden",cursor:"pointer",flexShrink:0,transition:"border-color .15s"},
+                onMouseEnter:function(e){e.currentTarget.style.borderColor='#ea580c';},
+                onMouseLeave:function(e){e.currentTarget.style.borderColor='#2a2a2a';}},
+                (m.thumbUrl||_thumbMemCache[m.id]||m.thumb)
+                  ?ce("img",{src:_thumbMemCache[m.id]||m.thumbUrl||m.thumb,style:{width:"100%",display:"block",height:"auto"},draggable:false,onError:function(e){e.target.style.display="none";}})
+                  :ce("div",{style:{width:"100%",height:60,background:"#222",display:"flex",alignItems:"center",justifyContent:"center",color:"#555",fontSize:10}},"no preview"),
+                ce("div",{style:{padding:"6px 8px"}},
+                  ce("div",{style:{fontSize:12,fontWeight:700,color:"#fed7aa"}},dd),
+                  ce("div",{style:{fontSize:10,color:"#888",marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},m.name||'')
+                )
+              );
+            })
+        )
+      )
+    ),
+    document.body
+  );
+}
+
 function DraftLibrary(props){
   var onOpen=props.onOpen, onClose=props.onClose, fbCfg=props.fbCfg||{}, initialTicker=props.initialTicker||null;
   var highlightDate=props.highlightDate||null;
@@ -10939,6 +11131,26 @@ function DraftLibrary(props){
   var sPat=useState(false);      var showPatternSearch=sPat[0],setShowPatternSearch=sPat[1];
   /* 2026-04-30: C - エディタから起動された時の初期クエリ */
   var sPatQ=useState(null);      var patSearchInitQuery=sPatQ[0],setPatSearchInitQuery=sPatQ[1];
+  /* シミュレーション銘柄・日付選択モーダル */
+  var sSimP=useState(false);     var simPickerOpen=sSimP[0],setSimPickerOpen=sSimP[1];
+  /* 選択したチャートを「シミュレーション(練習)モード」で開く (保存なし・前日自動連結) */
+  function startSimulation(m){
+    if(!m||!m.id)return;
+    function launch(d){
+      if(!(d&&d.analysisData)){window.caToast('このチャートにはデータがありません','error');return;}
+      onOpen({analysisData:d.analysisData,_ticker:m.ticker||'',_name:m.name||'',_sim:true});
+    }
+    caLoadDataAsync(m.id,function(d){
+      if(d&&d.analysisData){launch(d);return;}
+      if(fbCfg.url){
+        var dataBase=fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
+        var auth=fbCfg.secret?'?auth='+fbCfg.secret:'';
+        fetch(dataBase+'/'+m.id+'.json'+auth).then(function(r){return r.ok?r.json():null;})
+          .then(function(fb){if(fb&&fb.analysisData)launch(fb);else window.caToast('データが見つかりません','error');})
+          .catch(function(){window.caToast('読込失敗','error');});
+      }else{window.caToast('データが見つかりません','error');}
+    });
+  }
 
   /* 2026-04-30: C - AnnotatorMain からの queryFromEditor を受け取り、PatternSearchModal を起動 */
   useEffect(function(){
@@ -12696,6 +12908,11 @@ function DraftLibrary(props){
             style:Object.assign({},BT,{fontSize:11,fontWeight:700,padding:"5px 10px",borderRadius:7,
               background:"#b45309",color:"#fff"})},
             "📍 スタンプ記録"),
+          /* シミュレーション (銘柄・日付を選んで練習モードで開く) */
+          ce("button",{onClick:function(){setSimPickerOpen(true);},
+            style:Object.assign({},BT,{fontSize:11,fontWeight:700,padding:"5px 10px",borderRadius:7,
+              background:"#ea580c",color:"#fff"})},
+            "▶ シミュレーション"),
           ce("button",{onClick:function(){addFileRef.current&&addFileRef.current.click();},
             style:Object.assign({},BT,{fontSize:11,fontWeight:700,padding:"5px 10px",borderRadius:7,
               background:"#16a34a",color:"#fff"})},
@@ -12845,6 +13062,13 @@ function DraftLibrary(props){
         charts:meta,
         onOpenChart:function(id){openChart(id);},
         onClose:function(){setStampLogOpen(false);}
+      }),
+      /* シミュレーション: 銘柄・日付選択モーダル */
+      simPickerOpen&&ce(CaSimPicker,{
+        meta:meta,
+        initialTicker:selTicker||null,
+        onPick:function(m){setSimPickerOpen(false);startSimulation(m);},
+        onClose:function(){setSimPickerOpen(false);}
       })
     )
   );
@@ -13146,8 +13370,13 @@ function App(){
   }
   if(img){
     return ce(ImageAnnotator,{
+      /* シミュ⇄通常 でインスタンスを作り直し、状態(ストローク等)をクリーンに開始
+         (通常編集中は常に 'imgann-edit' 固定 → 既存挙動を変えない) */
+      key:img._sim?'imgann-sim':'imgann-edit',
       img:img,
       fbCfg:fbCfg,
+      /* シミュレーション起動 (エディタの ▶シミュ ボタン → 同じ銘柄/日付を練習モードで開く) */
+      onStartSim:function(p){setImg(p);},
       onSave:function(saved){setImg(function(prev){return Object.assign({},prev,saved);});},
       onClose:function(ticker){
         try{sessionStorage.removeItem('ca_session');}catch(e){}
