@@ -5276,6 +5276,11 @@ function ImageAnnotator(props){
   }
   function simNext(){simStepBy(1);}
   function simPrev(){simStepBy(-1);}
+  /* シミュ終了: 元のチャート(_simReturn)へ戻る。無ければホームへ。保存は一切しない */
+  function exitSim(){
+    if(props.onExitSim){props.onExitSim((img&&img._simReturn)||null);return;}
+    onClose&&onClose();
+  }
   /* 起動時: 直前営業日を自動で ref(前日チャート) に連結 (過去日のみ・silent) */
   var simInitRef=useRef(false);
   useEffect(function(){
@@ -6261,13 +6266,17 @@ function ImageAnnotator(props){
           onClick:function(){
             var ad=analysisDataRef.current||analysisData;
             if(!ad){window.caToast('チャートデータがありません','error');return;}
-            if(props.onStartSim)props.onStartSim({analysisData:ad,_ticker:img._ticker||ad.ticker||'',_name:img._name||img.name||'',_sim:true});
+            /* _simReturn: シミュ終了時に戻る「元のチャート」。現在のエディタの最新状態
+               (analysisData / analysisStrokes) を保持して復元する */
+            var retImg=Object.assign({},img,{analysisData:ad,analysisStrokes:analysisStrokesRef.current||img.analysisStrokes});
+            if(props.onStartSim)props.onStartSim({analysisData:ad,_ticker:img._ticker||ad.ticker||'',_name:img._name||img.name||'',_sim:true,_simReturn:retImg});
           },
           title:"このチャートをシミュレーション(練習)モードで開く",
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#7c2d12",color:"#fed7aa",fontWeight:700})
         },"▶ シミュ"),
-        simMode && ce("span",{style:{fontSize:12,padding:"6px 10px",borderRadius:6,fontWeight:700,flexShrink:0,
-          background:"#7c2d12",color:"#fed7aa"}},"▶ シミュレーション中(保存しません)"),
+        /* シミュ中の「終了」ボタン (バッジ位置に配置)。押すと元のチャートに戻る */
+        simMode && ce("button",{onClick:exitSim,
+          style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#333",color:"#ccc"})},"終了"),
         /* spacer */
         ce("div",{style:{flex:1}}),
         /* 手動保存 status badge */
@@ -6287,7 +6296,7 @@ function ImageAnnotator(props){
         ce("button",{onClick:function(){setShowDisplaySettings(true);},
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#1e3a5f",color:"#a5b4fc",fontWeight:700})},
           "📊 設定"),
-        ce("button",{onClick:function(){setCancelConfirm(true);},style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#333",color:"#ccc"})},simMode?"シミュ終了":"終了"),
+        !simMode&&ce("button",{onClick:function(){setCancelConfirm(true);},style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#333",color:"#ccc"})},"終了"),
         !simMode&&ce("button",{onClick:saveAndExport,style:Object.assign({},TS,{fontSize:12,padding:"6px 12px",background:"#2563eb",color:"#fff",fontWeight:700})},"💾 保存・出力")
       ),
       /* Row 2: color + lineW + opacity + zoom — C8a-fix3: PCでもhorizontal wheel scroll可
@@ -11138,7 +11147,10 @@ function DraftLibrary(props){
     if(!m||!m.id)return;
     function launch(d){
       if(!(d&&d.analysisData)){window.caToast('このチャートにはデータがありません','error');return;}
-      onOpen({analysisData:d.analysisData,_ticker:m.ticker||'',_name:m.name||'',_sim:true});
+      /* _simReturn: シミュ終了時に開く「元のチャート」(通常エディタとして開く img) */
+      var extra={_draftId:m.id,_ticker:m.ticker||'',_name:m.name||'',_thumb:m.thumb||'',_savedAt:m.savedAt||0};
+      var returnImg=Object.assign({},d,extra);
+      onOpen({analysisData:d.analysisData,_ticker:m.ticker||'',_name:m.name||'',_sim:true,_simReturn:returnImg});
     }
     caLoadDataAsync(m.id,function(d){
       if(d&&d.analysisData){launch(d);return;}
@@ -13377,6 +13389,8 @@ function App(){
       fbCfg:fbCfg,
       /* シミュレーション起動 (エディタの ▶シミュ ボタン → 同じ銘柄/日付を練習モードで開く) */
       onStartSim:function(p){setImg(p);},
+      /* シミュ終了 → 元のチャート(returnImg)を復元。null ならホームへ */
+      onExitSim:function(returnImg){setImg(returnImg||null);},
       onSave:function(saved){setImg(function(prev){return Object.assign({},prev,saved);});},
       onClose:function(ticker){
         try{sessionStorage.removeItem('ca_session');}catch(e){}
