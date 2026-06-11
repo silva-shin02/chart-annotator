@@ -1032,6 +1032,16 @@ function caLoadSnippets(){
 function caSaveSnippets(arr){
   try{localStorage.setItem(CA_SNIPPETS_KEY,JSON.stringify(arr));}catch(e){}
 }
+/* 2026-06-11: テキスト検索「よく使うワード」 (localStorage) */
+var CA_SEARCH_WORDS_KEY='ca_search_words_v1';
+function caLoadSearchWords(){
+  try{var v=JSON.parse(localStorage.getItem(CA_SEARCH_WORDS_KEY));
+    if(Array.isArray(v))return v.filter(function(x){return typeof x==='string'&&x.trim();});}catch(e){}
+  return [];
+}
+function caSaveSearchWords(arr){
+  try{localStorage.setItem(CA_SEARCH_WORDS_KEY,JSON.stringify(arr||[]));}catch(e){}
+}
 /* 2026-04-26: 銘柄別メモ (localStorage + Firebase) */
 var CA_TICKER_NOTES_KEY='ca_ticker_notes_v1';
 function caLoadTickerNotes(){
@@ -9442,6 +9452,8 @@ function caSnipEffText(s, byId){
   if(s&&s._snippet&&s.snipId&&byId&&byId[s.snipId]&&!s._editedText)t=byId[s.snipId].text||t;
   return t;
 }
+/* スタンプ配置をスタンプ種別ごとに束ねるキー (snipId優先・無ければテキスト) */
+function _caStampGroupKey(p){ return p&&p.snipId?('id:'+p.snipId):('txt:'+((p&&p.text)||'')); }
 /* 全チャートを走査し、矢印(pointer)付きスタンプの配置を収集 (非同期)
    cb(placements[]) : {chartId,ticker,date,tf,tipTm,time,snipId,text,color} */
 function caCollectStampPlacements(charts, snippetsById, cb){
@@ -11237,6 +11249,23 @@ function DraftLibrary(props){
   var sSelTags=useState([]);         var selTagIds=sSelTags[0],setSelTagIds=sSelTags[1];
   var sTagMode=useState('or');       var tagMode=sTagMode[0],setTagMode=sTagMode[1];
   var sTagGroupBy=useState('ticker');var tagGroupBy=sTagGroupBy[0],setTagGroupBy=sTagGroupBy[1];
+  /* 2026-06-11: スタンプ検索タブ */
+  var sStampSel=useState([]);          var stampSelIds=sStampSel[0],setStampSelIds=sStampSel[1]; /* 選択中スタンプ種別キー */
+  var sStampGroupBy=useState('ticker');var stampGroupBy=sStampGroupBy[0],setStampGroupBy=sStampGroupBy[1];
+  var sStampPl=useState(null);         var stampPlacements=sStampPl[0],setStampPlacements=sStampPl[1]; /* null=未ロード */
+  var sStampLoading=useState(false);   var stampLoading=sStampLoading[0],setStampLoading=sStampLoading[1];
+  /* 2026-06-11: テキスト検索「よく使うワード」 */
+  var sFavWords=useState(caLoadSearchWords); var favWords=sFavWords[0],setFavWords=sFavWords[1];
+  function addFavWord(w){
+    w=(w||'').trim(); if(!w)return;
+    setFavWords(function(prev){
+      var next=[w].concat(prev.filter(function(x){return x!==w;})).slice(0,40);
+      caSaveSearchWords(next); return next;
+    });
+  }
+  function removeFavWord(w){
+    setFavWords(function(prev){var next=prev.filter(function(x){return x!==w;});caSaveSearchWords(next);return next;});
+  }
   /* カレンダー検索モーダル */
   var sCal=useState(false); var calOpen=sCal[0],setCalOpen=sCal[1];
   /* タグ検索モーダル */
@@ -11342,6 +11371,20 @@ function DraftLibrary(props){
       });
     });
   }
+  /* 2026-06-11: スタンプ検索タブを開いた時に全チャートを走査 (初回のみ) */
+  useEffect(function(){
+    if(!showSearch||searchTab!=='stamp')return;
+    if(stampPlacements!==null||stampLoading)return;
+    var alive=true; setStampLoading(true);
+    var byId={}; caLoadSnippets().forEach(function(s){if(s&&s.id)byId[s.id]=s;});
+    caCollectStampPlacements(meta, byId, function(res){
+      if(!alive)return;
+      setStampPlacements(res); setStampLoading(false);
+    });
+    return function(){alive=false;};
+  },[showSearch,searchTab]);
+  /* 検索を閉じたら配置キャッシュを破棄 (次回開いた時に再集計し最新化) */
+  useEffect(function(){ if(!showSearch&&stampPlacements!==null)setStampPlacements(null); },[showSearch]);
   /* チャートメモを Firebase から取得 (ページロード中1回のみ) */
   useEffect(function(){
     if(_caFbInitDone)return;
@@ -12413,6 +12456,43 @@ function DraftLibrary(props){
   }else{
     _tagSearchGroups=[{key:null,items:_tagSearchFiltered}];
   }
+  /* 2026-06-11: スタンプ検索 事前計算 (stampPlacements がロード済みの時のみ意味を持つ) */
+  var _stampPl=stampPlacements||[];
+  var _stampTypeMap={}, _stampTypeOrder=[];
+  _stampPl.forEach(function(p){
+    var k=_caStampGroupKey(p);
+    if(!_stampTypeMap[k]){_stampTypeMap[k]={key:k,label:p.text||'(無題)',color:p.color||'#ff9500',count:0};_stampTypeOrder.push(k);}
+    _stampTypeMap[k].count++;
+  });
+  _stampTypeOrder.sort(function(a,b){
+    var d=_stampTypeMap[b].count-_stampTypeMap[a].count; if(d!==0)return d;
+    return _stampTypeMap[a].label.localeCompare(_stampTypeMap[b].label,'ja');
+  });
+  var _stampFiltered=stampSelIds.length===0?_stampPl.slice():_stampPl.filter(function(p){return stampSelIds.indexOf(_caStampGroupKey(p))>=0;});
+  _stampFiltered.sort(function(a,b){
+    var dc=(b.date||'').localeCompare(a.date||''); if(dc!==0)return dc;
+    return (a.tipTm||0)-(b.tipTm||0);
+  });
+  var _stampGroups=[];
+  if(stampGroupBy==='ticker'){
+    var _stTk={};
+    _stampFiltered.forEach(function(p){
+      var tk=p.ticker||'(不明)';
+      if(!_stTk[tk]){_stTk[tk]=[];_stampGroups.push({key:tk,items:_stTk[tk]});}
+      _stTk[tk].push(p);
+    });
+    _stampGroups.sort(function(a,b){return a.key.localeCompare(b.key,'ja');});
+  }else if(stampGroupBy==='date'){
+    var _stDt={};
+    _stampFiltered.forEach(function(p){
+      var dt=p.date||'(日付不明)';
+      if(!_stDt[dt]){_stDt[dt]=[];_stampGroups.push({key:dt,items:_stDt[dt]});}
+      _stDt[dt].push(p);
+    });
+  }else{
+    _stampGroups=[{key:null,items:_stampFiltered}];
+  }
+  var _stampReady=(stampPlacements!==null&&!stampLoading);
   var BT={border:"none",cursor:"pointer",fontFamily:"inherit"};
 
   return ce("div",{style:{position:"fixed",inset:0,background:"#111",zIndex:9000,
@@ -12531,6 +12611,11 @@ function DraftLibrary(props){
             borderBottom:searchTab==='tag'?"2px solid #58a6ff":"2px solid transparent",
             color:searchTab==='tag'?"#58a6ff":"#8b949e",borderRadius:0,background:"none"})},
           "🏷 タグ検索"),
+        ce("button",{onClick:function(){setSearchTab('stamp');},
+          style:Object.assign({},BT,{padding:"10px 14px",fontSize:13,fontWeight:700,
+            borderBottom:searchTab==='stamp'?"2px solid #58a6ff":"2px solid transparent",
+            color:searchTab==='stamp'?"#58a6ff":"#8b949e",borderRadius:0,background:"none"})},
+          "📍 スタンプ"),
         ce("button",{onClick:function(){setSearchTab('text');},
           style:Object.assign({},BT,{padding:"10px 14px",fontSize:13,fontWeight:700,
             borderBottom:searchTab==='text'?"2px solid #58a6ff":"2px solid transparent",
@@ -12656,6 +12741,89 @@ function DraftLibrary(props){
         )
       ),
 
+      /* ── スタンプ検索タブ (2026-06-11) ── */
+      searchTab==='stamp'&&ce("div",{style:{display:"flex",flexDirection:"column",flex:1,overflow:"hidden"}},
+        /* スタンプ選択肢 (チップ) */
+        ce("div",{style:{padding:"8px 10px",borderBottom:"1px solid #1e2d3d",background:"#0d1117",flexShrink:0}},
+          !_stampReady
+            ?ce("div",{style:{fontSize:12,color:"#8b949e",padding:"4px 2px"}},"スタンプを集計中…")
+            :_stampTypeOrder.length===0
+              ?ce("div",{style:{fontSize:12,color:"#8b949e",padding:"4px 2px"}},"矢印付きスタンプがまだありません")
+              :ce("div",{style:{display:"flex",flexWrap:"wrap",gap:6,alignItems:"center"}},
+                  _stampTypeOrder.map(function(k){
+                    var g=_stampTypeMap[k]; var sel=stampSelIds.indexOf(k)>=0;
+                    return ce("button",{key:k,
+                      onClick:function(){setStampSelIds(function(prev){
+                        return sel?prev.filter(function(x){return x!==k;}):prev.concat([k]);
+                      });},
+                      style:{display:"flex",alignItems:"center",gap:5,padding:"4px 11px",fontSize:12,fontWeight:700,
+                        borderRadius:20,cursor:"pointer",outline:"none",
+                        border:"1.5px solid "+(sel?g.color:'#30363d'),
+                        background:sel?(g.color+'2b'):'transparent',
+                        color:sel?'#e6edf3':'#8b949e'}},
+                      ce("span",{style:{width:8,height:8,borderRadius:"50%",flexShrink:0,background:g.color}}),
+                      ce("span",{style:{maxWidth:170,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},g.label),
+                      ce("span",{style:{fontSize:10,color:sel?'#c9d1d9':'#6e7681',fontWeight:400}},g.count));
+                  }),
+                  stampSelIds.length>0&&ce("button",{
+                    onClick:function(){setStampSelIds([]);},
+                    style:{padding:"4px 9px",fontSize:11,borderRadius:20,cursor:"pointer",
+                      border:"1px solid #444",background:"transparent",color:"#666",outline:"none"}},
+                    "✕ クリア")
+                )
+        ),
+        /* グループバー */
+        _stampReady&&_stampTypeOrder.length>0&&ce("div",{style:{padding:"5px 10px",borderBottom:"1px solid #1e2d3d",flexShrink:0,
+          display:"flex",alignItems:"center",gap:6,background:"#0d1117",flexWrap:"wrap",minHeight:34}},
+          ce("div",{style:{marginLeft:"auto",display:"flex",alignItems:"center",gap:3}},
+            ce("span",{style:{fontSize:11,color:"#555",marginRight:2}},"グループ:"),
+            [['ticker','銘柄別'],['date','日付別'],['none','なし']].map(function(g){
+              return ce("button",{key:g[0],
+                onClick:function(){setStampGroupBy(g[0]);},
+                style:{padding:"3px 9px",fontSize:11,borderRadius:6,cursor:"pointer",
+                  border:"1px solid "+(stampGroupBy===g[0]?"#30363d":"transparent"),
+                  background:stampGroupBy===g[0]?"#1e2d3d":"transparent",
+                  color:stampGroupBy===g[0]?"#93c5fd":"#555",
+                  outline:"none",fontWeight:stampGroupBy===g[0]?700:400}},
+                g[1]);
+            })
+          ),
+          ce("span",{style:{fontSize:11,color:"#8b949e",marginLeft:6}},_stampFiltered.length+"件")
+        ),
+        /* 結果リスト */
+        ce("div",{style:{flex:1,overflowY:"auto",padding:8}},
+          (_stampReady&&_stampTypeOrder.length>0&&_stampFiltered.length===0)
+            ?ce("div",{style:{textAlign:"center",color:"#8b949e",padding:30,fontSize:13}},
+                "該当するスタンプがありません")
+            :_stampGroups.map(function(grp){
+              return ce("div",{key:grp.key||'__all__',style:{marginBottom:8}},
+                grp.key&&ce("div",{style:{fontSize:11,color:"#8b949e",fontWeight:700,
+                  padding:"3px 8px",marginTop:10,marginBottom:4,
+                  borderLeft:"2px solid #30363d",background:"#0d1117"}},
+                  (stampGroupBy==='date'?(grp.key+_dowLabel(grp.key)):grp.key)
+                  +" · "+grp.items.length+"件"),
+                grp.items.map(function(p,i){
+                  return ce("div",{key:p.chartId+'_'+p.tf+'_'+p.tipTm+'_'+i,
+                    onClick:function(){openChart(p.chartId);setShowSearch(false);},
+                    style:{display:"flex",gap:9,padding:"7px 10px",background:"#161b22",
+                      borderRadius:7,border:"1px solid #21262d",marginBottom:4,cursor:"pointer",
+                      alignItems:"center"}},
+                    ce("span",{style:{fontSize:13,fontWeight:700,color:p.color||'#ff9500',
+                      minWidth:44,flexShrink:0}},p.time||'--:--'),
+                    stampGroupBy!=='ticker'&&ce("span",{style:{fontSize:11,padding:"1px 6px",borderRadius:4,
+                      background:"#1f2937",color:"#9ca3af",fontWeight:700,flexShrink:0}},p.ticker||'?'),
+                    ce("span",{style:{fontSize:12,color:"#e6edf3",flex:1,minWidth:0,
+                      overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},p.text||'(無題)'),
+                    stampGroupBy!=='date'&&p.date&&ce("span",{style:{fontSize:10,color:"#8b949e",flexShrink:0}},
+                      p.date+_dowLabel(p.date)),
+                    ce("span",{style:{fontSize:10,color:"#555",flexShrink:0}},p.tf)
+                  );
+                })
+              );
+            })
+        )
+      ),
+
       /* ── テキスト検索タブ ── */
       searchTab==='text'&&ce("div",{style:{display:"flex",flexDirection:"column",flex:1,overflow:"hidden"}},
         ce("div",{style:{padding:"8px 12px",display:"flex",gap:6,alignItems:"center",
@@ -12670,6 +12838,29 @@ function DraftLibrary(props){
           ce("button",{onClick:function(){doSearch(searchQuery);},
             style:Object.assign({},BT,{padding:"7px 14px",fontSize:12,fontWeight:700,
               background:"#1f6feb",color:"#fff",borderRadius:8})},"検索")
+        ),
+        /* よく使うワード (2026-06-11) */
+        ce("div",{style:{padding:"7px 12px",borderBottom:"1px solid #1e2d3d",background:"#0d1117",flexShrink:0,
+          display:"flex",flexWrap:"wrap",gap:6,alignItems:"center"}},
+          ce("span",{style:{fontSize:11,color:"#6e7681",fontWeight:700,marginRight:2}},"よく使うワード"),
+          favWords.length===0&&ce("span",{style:{fontSize:11,color:"#555"}},"（未登録）"),
+          favWords.map(function(w){
+            return ce("span",{key:w,
+              style:{display:"inline-flex",alignItems:"center",gap:3,padding:"3px 4px 3px 10px",fontSize:12,
+                borderRadius:14,border:"1px solid #30363d",background:"#161b22",color:"#c9d1d9"}},
+              ce("button",{onClick:function(){setSearchQuery(w);doSearch(w);},
+                style:Object.assign({},BT,{background:"none",color:"inherit",fontSize:12,padding:0,fontWeight:600})},w),
+              ce("button",{onClick:function(){removeFavWord(w);},title:"削除",
+                style:Object.assign({},BT,{background:"none",color:"#6e7681",fontSize:14,lineHeight:1,padding:"0 2px"})},"×")
+            );
+          }),
+          ce("button",{onClick:function(){addFavWord(searchQuery);},
+            disabled:!searchQuery.trim(),
+            style:Object.assign({},BT,{padding:"3px 10px",fontSize:11,fontWeight:700,borderRadius:14,
+              border:"1px dashed "+(searchQuery.trim()?"#1f6feb":"#30363d"),
+              background:"transparent",color:searchQuery.trim()?"#58a6ff":"#484f58",
+              cursor:searchQuery.trim()?"pointer":"default"})},
+            "＋ 現在の語を登録")
         ),
         searching&&ce("div",{style:{textAlign:"center",color:"#8b949e",padding:30,fontSize:13}},"検索中…"),
         !searching&&searchResults.length===0&&searchQuery&&ce("div",{style:{textAlign:"center",color:"#8b949e",padding:30,fontSize:13}},"該当なし"),
