@@ -1691,7 +1691,7 @@ function DataChart(props){
     var rafId=requestAnimationFrame(function(){
       /* 2026-04-21: 地図モデルズーム化 — dim に zoom を追加 (drawDataChart 内で派生値計算)
          pricePx は最小ラベル間隔px として転用 */
-      var dimWithPx=Object.assign({},dim,{pricePx:pricePx,zoom:zoom});
+      var dimWithPx=Object.assign({},dim,{pricePx:pricePx,zoom:zoom,fitBarW:props.fitBarW});
       var canvas=canvasRef.current; if(!canvas)return;
       /* 2026-04-23: iPad DPR上限2 (1では描画がぼやける、3以上はメモリ過大のためcap) */
       var origDPR=window.devicePixelRatio||1;
@@ -4091,6 +4091,9 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
        - pStep = 10 固定 (価格軸ラベル密度切替 OFF)
        - pShift = 0 強制、uS=0, uE=uTotal */
   var isThumbnail=!!(dim&&dim.thumbnail);
+  /* 2026-06-15: stackMode 5m足のローソク本体を「時間枠フィット幅」(サムネ式)で太く描く。
+     位置(uPxUnit)・縦ズーム(pxPerYen)は不変、本体幅と端マージンのみ枠埋めにする。 */
+  var fitBarW=!!(dim&&dim.fitBarW);
   /* 地図モデル zoom (通常モード用、サムネモードでは未使用) */
   var zoom=(dim&&typeof dim.zoom==='number'&&dim.zoom>0)?dim.zoom:1.0;
   /* 2026-04-22: 出来高エリア高さを 13%→18% に拡大 (getFitZoom側1484行と同値) */
@@ -4171,7 +4174,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
      2026-04-21: halfBarPx = barW/2 (地図モデル、zoom連動)
      2026-04-22: サムネモードは halfBarPx を uSpan 派生で算出 (従来式) */
   var _halfBarPx;
-  if(isThumbnail){
+  if(isThumbnail||fitBarW){
     _halfBarPx=Math.min((chartW/uSpan)*_baseStep*0.5, chartW*0.04);
   }else{
     _halfBarPx=Math.min((Z_BASE_BAR_PX*zoom)*0.5, chartW*0.04);
@@ -4323,7 +4326,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   // 2026-04-21: barW = Z_BASE_BAR_PX * zoom (地図モデル、チャート幅uSpan非依存)
   // 2026-04-22: サムネモードは従来式 (chartW/uSpan * baseStep * 0.8) で画面幅フィット
   var barW;
-  if(isThumbnail){
+  if(isThumbnail||fitBarW){
     barW=Math.max(1,(chartW/uSpan)*_baseStep*0.8);
   }else{
     barW=Math.max(1, Z_BASE_BAR_PX*zoom);
@@ -5085,6 +5088,10 @@ function ImageAnnotator(props){
   var sSP=useState(false); var showSplitPicker=sSP[0],setShowSplitPicker=sSP[1];
   var splitContainerRef=useRef(null);
   var splitDragRef=useRef(null);
+  /* 2026-06-15: 1分足+5分足の上下同時表示 (stackMode)。splitChart(似た形)と排他。
+     上=1m(controlled view) / 下=5m(uncontrolled self-fit)。tap-to-focusでanalysisTfを切替し、
+     非フォーカス側はdrawTool='pan'で描画不可 (既存splitと同じ作法)。 */
+  var sStk=useState(false); var stackMode=sStk[0],setStackMode=sStk[1];
   /* ジョイスティック表示状態 (タッチのみ) */
   var sJH=useState(function(){return localStorage.getItem('ca_js_hidden')==='1';});
   var jsHidden=sJH[0],setJsHidden=sJH[1];
@@ -5362,6 +5369,7 @@ function ImageAnnotator(props){
       setSplitStrokes(migrateAnalysisStrokes(d.analysisStrokes,'cur'));
       setShowSplitPicker(false);
       setSplitActive('top');
+      setStackMode(false); /* 2026-06-15: 似た形とstackModeは排他 */
     }
     caLoadDataAsync(id,function(d){
       if(d&&d.analysisData){apply(d);return;}
@@ -5606,6 +5614,13 @@ function ImageAnnotator(props){
       bars_5m:computeEnhancedBars(analysisData.bars_5m||[],emaSeedData.bars_5m||null)
     });
   },[analysisData,emaSeedData,refAnalysis,simMode]);
+  /* 2026-06-15: simMode表示データもメモ化 — 参照が毎レンダー変わると stackModeの下5m(uncontrolled)が
+     無関係な再描画のたびに getFitZoom で再フィットしズーム/パンが飛ぶため。simCutoffTm変化時のみ更新。 */
+  var simDisplayData=useMemo(function(){
+    return (simMode&&analysisData)
+      ? Object.assign({},analysisData,{bars_1m:simCutBars(analysisData.bars_1m),bars_5m:simCutBars(analysisData.bars_5m)})
+      : analysisData;
+  },[simMode,analysisData,simCutoffTm]);
   /* F1: 過去チャート選択モーダルの表示 */
   var stRPicker=useState(false); var showRefAnalysisPicker=stRPicker[0],setShowRefAnalysisPicker=stRPicker[1];
   /* F2: 両チャート連動用の共有 state */
@@ -5626,12 +5641,14 @@ function ImageAnnotator(props){
      2026-04-21: zoom も null にリセット (子側 getFitZoom で再算出) */
   useEffect(function(){
     if(analysisData){
-      setAnalysisView({uS:0,uE:getUTotalIA(analysisTf,!!refAnalysis)});
+      /* 2026-06-15: stackMode時は上ペインが常に1mなのでフィット計算も'1m'基準。
+         focus(analysisTf)を1m⇄5m切替してもviewをリセットしない (deps値が'1m'のまま動かない)。 */
+      setAnalysisView({uS:0,uE:getUTotalIA(stackMode?'1m':analysisTf,!!refAnalysis)});
       setAnalysisPShift(0);
       setAnalysisZoom(null);
     }
     /* emaSeedData(前日連続EMAの種)読込時も再フィット — gap日でも連続EMAを含めてY軸を合わせる */
-  },[analysisData,analysisTf,refAnalysis?refAnalysis.id:null,emaSeedData]);
+  },[analysisData,stackMode?'1m':analysisTf,refAnalysis?refAnalysis.id:null,emaSeedData,stackMode]);
   /* F2: 十字カーソル共有 ({tm, yOffset}) — tmは絶対時刻(分)、yOffsetはpriceTop基準のcanvas内y */
   var analysisCursorRef=useRef(null);
   var stCB=useState(0); var cursorBump=stCB[0],setCursorBump=stCB[1];
@@ -5727,6 +5744,12 @@ function ImageAnnotator(props){
   var atiMoveHandleRef=useRef(null);
   /* 2026-04-20: DataChart内のpxToTimePrice/anchorToScreenを親から呼ぶためのAPI ref */
   var chartAPIRefAnalysis=useRef(null);
+  /* 2026-06-15: stackMode下段(5m)用の独立ref。上段(1m)のchartAPI/計測controlと衝突させないため別ref。
+     stackModeがfalseの時は一切使われない (既存挙動に影響なし)。 */
+  var chartAPIRefStack5m=useRef(null);
+  var measuresControlRefStack5m=useRef(null);
+  /* 2026-06-15: 計測スナップショットも5m用に分離 (stackModeで1m↔5mの計測がundo履歴経由で混ざるのを防ぐ) */
+  var measuresRefStack5m=useRef([]);
   /* 2026-04-22: textarea のサイズ/位置変更時に overlay/両ハンドル/「…」ボタンを追従させる。
      各要素の ref callback は初回マウント時しか発火しないので、onInput 等で明示的に呼ぶ必要がある。 */
   function syncAtiOverlays(){
@@ -6021,7 +6044,7 @@ function ImageAnnotator(props){
     }
     var refTfArr=((refSrc&&refSrc[tk])||[]).slice();
     var hist=analysisHistRef.current[tk]||[];
-    analysisHistRef.current[tk]=hist.slice(-19).concat([{cur:curTfArr,ref:refTfArr,measures:measuresRef.current.slice()}]);
+    analysisHistRef.current[tk]=hist.slice(-19).concat([{cur:curTfArr,ref:refTfArr,measures:((stackMode&&tk==='5m')?measuresRefStack5m:measuresRef).current.slice()}]);
     analysisFutRef.current[tk]=[];
     setCanUndo(analysisHistRef.current[tk].length>1);
     setCanRedo(false);
@@ -6030,8 +6053,8 @@ function ImageAnnotator(props){
   }
   /* 計測の追加/削除/移動確定をアンドゥ履歴に登録する */
   function measureCommit(newMeasures){
-    measuresRef.current=newMeasures;
     var tk=analysisTfRef.current||'1m';
+    ((stackMode&&tk==='5m')?measuresRefStack5m:measuresRef).current=newMeasures;
     var curTfArr=((analysisStrokesRef.current&&analysisStrokesRef.current[tk])||[]).slice();
     var ra=refAnalysisRef.current;
     var refTfArr=(ra&&ra.analysisStrokes&&(ra.analysisStrokes[tk]||[]).slice())||[];
@@ -6051,7 +6074,7 @@ function ImageAnnotator(props){
     var ra=refAnalysisRef.current;
     var refTfArrNow=(ra&&ra.analysisStrokes&&(ra.analysisStrokes[tk]||[]).slice())||[];
     /* 現状をfutureへ退避 (計測も保存) */
-    analysisFutRef.current[tk]=[{cur:curTfArrNow,ref:refTfArrNow,measures:measuresRef.current.slice()}].concat((analysisFutRef.current[tk]||[]).slice(0,19));
+    analysisFutRef.current[tk]=[{cur:curTfArrNow,ref:refTfArrNow,measures:((stackMode&&tk==='5m')?measuresRefStack5m:measuresRef).current.slice()}].concat((analysisFutRef.current[tk]||[]).slice(0,19));
     analysisHistRef.current[tk]=hist.slice(0,-1);
     /* cur/ref 両方復元 */
     var nextCurObj=Object.assign({},curObj);
@@ -6066,8 +6089,10 @@ function ImageAnnotator(props){
     /* 計測を復元 (measuresControlRef.current = DataChart の setMeasures) */
     if(prev.measures!==undefined){
       var _prevMs=(prev.measures||[]).slice();
-      measuresRef.current=_prevMs;
-      if(measuresControlRef.current)measuresControlRef.current(_prevMs);
+      ((stackMode&&tk==='5m')?measuresRefStack5m:measuresRef).current=_prevMs;
+      /* 2026-06-15: stackMode時、5mフォーカス中なら下段の計測controlへ復元 */
+      var _mcU=(stackMode&&analysisTfRef.current==='5m')?measuresControlRefStack5m:measuresControlRef;
+      if(_mcU.current)_mcU.current(_prevMs);
     }
     setCanUndo(analysisHistRef.current[tk].length>1);
     setCanRedo((analysisFutRef.current[tk]||[]).length>0);
@@ -6093,8 +6118,10 @@ function ImageAnnotator(props){
     /* 計測を復元 */
     if(next.measures!==undefined){
       var _nextMs=(next.measures||[]).slice();
-      measuresRef.current=_nextMs;
-      if(measuresControlRef.current)measuresControlRef.current(_nextMs);
+      ((stackMode&&tk==='5m')?measuresRefStack5m:measuresRef).current=_nextMs;
+      /* 2026-06-15: stackMode時、5mフォーカス中なら下段の計測controlへ復元 */
+      var _mcR=(stackMode&&analysisTfRef.current==='5m')?measuresControlRefStack5m:measuresControlRef;
+      if(_mcR.current)_mcR.current(_nextMs);
     }
     setCanUndo((analysisHistRef.current[tk]||[]).length>1);
     setCanRedo(restFut.length>0);
@@ -6277,9 +6304,9 @@ function ImageAnnotator(props){
   var TS={padding:"5px 7px",fontSize:11,fontWeight:700,borderRadius:5,border:"none",cursor:"pointer",whiteSpace:"nowrap"};
 
   /* シミュレーション: 当日足をカットオフ時刻まで slice した表示用データ (元 analysisData は不変) */
-  var simDisplayData=(simMode&&analysisData)
-    ? Object.assign({},analysisData,{bars_1m:simCutBars(analysisData.bars_1m),bars_5m:simCutBars(analysisData.bars_5m)})
-    : analysisData;
+  /* simDisplayData は上の useMemo で定義済み (2026-06-15: 参照安定化) */
+  /* 2026-06-15: stackMode時、上ペインは常に1m。単独モードでは従来どおりanalysisTf。 */
+  var topTf=stackMode?'1m':analysisTf;
   return ce("div",{style:{position:"fixed",inset:0,background:"rgba(0,0,0,.94)",zIndex:10000,display:"flex",flexDirection:"column"}},
 
     /* ── Toolbar ── */
@@ -6339,12 +6366,21 @@ function ImageAnnotator(props){
         },"👁"),
         analysisData && ce("div",{style:{display:"flex",gap:2,flexShrink:0}},
           ['1m','5m'].map(function(t){
-            return ce("button",{key:t,onClick:function(){setAnalysisTf(t);},
+            return ce("button",{key:t,onClick:function(){setStackMode(false);setAnalysisTf(t);},
               style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",
-                background:analysisTf===t?'#10b981':'#2a2a2a',
-                color:analysisTf===t?'#fff':'#aaa'})},
+                background:(!stackMode&&analysisTf===t)?'#10b981':'#2a2a2a',
+                color:(!stackMode&&analysisTf===t)?'#fff':'#aaa'})},
               t==='1m'?'1分':'5分');
-          })
+          }).concat([
+            /* 2026-06-15: 1分足を上・5分足を下に同時表示するトグル */
+            ce("button",{key:'stack',
+              onClick:function(){if(splitChart){closeSplitView();}setStackMode(true);},
+              title:"1分足を上・5分足を下に同時表示",
+              style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",
+                background:stackMode?'#10b981':'#2a2a2a',
+                color:stackMode?'#fff':'#aaa'})},
+              "1分+5分")
+          ])
         ),
         analysisData && ce("button",{
           onClick:function(){
@@ -6474,7 +6510,7 @@ function ImageAnnotator(props){
           ce("button",{
             onClick:function(){
               setAnalysisZoom(null);
-              setAnalysisView({uS:0,uE:getUTotalIA(analysisTf,!!refAnalysis)});
+              setAnalysisView({uS:0,uE:getUTotalIA(stackMode?'1m':analysisTf,!!refAnalysis)});
               setAnalysisPShift(0);
             },
             title:"1日分の全データを画面に収めるフィット倍率に戻す",
@@ -6774,15 +6810,15 @@ function ImageAnnotator(props){
       analysisData && ce(Fragment,null,
         /* 横並び/縦並びコンテナ (splitChart時は縦2分割) */
         ce("div",{ref:splitContainerRef,style:{flex:1,minHeight:0,display:"flex",
-          flexDirection:splitChart?"column":"row",
-          overflowX:splitChart?"hidden":"auto",overflowY:"hidden",WebkitOverflowScrolling:"touch"}},
+          flexDirection:(splitChart||stackMode)?"column":"row",
+          overflowX:(splitChart||stackMode)?"hidden":"auto",overflowY:"hidden",WebkitOverflowScrolling:"touch"}},
           /* ── 現在チャート (統合chart: refAnalysis有でも全幅、同一キャンバスに連結描画) ── */
           ce("div",{
-            style:splitChart
-              /* splitChart時: flex-grow比率で高さ配分 (% や px 不使用 → 親height不要) */
+            style:(splitChart||stackMode)
+              /* splitChart/stackMode時: flex-grow比率で高さ配分 (% や px 不使用 → 親height不要) */
               ?{display:"flex",flexDirection:"column",
                 flexGrow:splitRatio,flexShrink:1,flexBasis:0,minHeight:0,
-                outline:splitActive==='top'?'2px solid #3b82f6':'none',outlineOffset:'-2px',
+                outline:(stackMode?(analysisTf==='1m'):(splitActive==='top'))?'2px solid #3b82f6':'none',outlineOffset:'-2px',
                 boxSizing:'border-box',cursor:'default',overflow:'hidden'}
               :{display:"flex",flexDirection:"column",
                 // バグA根治: 幅を flex-basis で明示指定 — minWidth:auto + flex:0 0 auto の循環参照でタブレットcanvas width暴走 (33M px化) を防ぐ
@@ -6790,7 +6826,7 @@ function ImageAnnotator(props){
                 alignSelf:"stretch",    // 親flex row経由で高さ継承
                 minHeight:0,            // flex child のminHeight default 'auto' を上書き
                 borderRight:"none"},
-            onClick:splitChart?function(e){setSplitActive('top');}:undefined
+            onClick:stackMode?function(e){setAnalysisTf('1m');}:(splitChart?function(e){setSplitActive('top');}:undefined)
           },
             /* メタ行 (ticker + date + チャートメモ/タグ) — 2026-05-21 */
             ce("div",{style:{background:"#111",borderBottom:"1px solid #222",flexShrink:0}},
@@ -6884,12 +6920,12 @@ function ImageAnnotator(props){
               )
             ),
             ce(DataChart,{
-              data:simMode?simDisplayData:emaContinuedData, tf:analysisTf, showCrosshair:showCrosshair,
+              data:simMode?simDisplayData:emaContinuedData, tf:topTf, showCrosshair:showCrosshair,
               /* C1+: 過去chartデータを渡して同一キャンバスに連結描画 */
               refData:refAnalysis?refAnalysis.analysisData:null,
               /* C3+: 過去chart側ストロークも連結描画 (C6で書込対応) */
-              refStrokes:strokesVisible?((refAnalysis&&refAnalysis.analysisStrokes)?(refAnalysis.analysisStrokes[analysisTf]||[]):null):null,
-              drawTool:tool, drawColor:color, drawWidth:lineW, drawOpacity:opacity,
+              refStrokes:strokesVisible?((refAnalysis&&refAnalysis.analysisStrokes)?(refAnalysis.analysisStrokes[topTf]||[]):null):null,
+              drawTool:(stackMode&&analysisTf!=='1m')?'pan':tool, drawColor:color, drawWidth:lineW, drawOpacity:opacity,
               drawFontSize:fontSize, drawFontBold:fontBold,
               snippetObj:(tool==='snippet'&&snippets.length)?snippets[selSnipIdx%snippets.length]:null,
               snippetsById:(function(){var m={};snippets.forEach(function(sn){if(sn&&sn.id)m[sn.id]=sn;});return m;})(),
@@ -6902,7 +6938,7 @@ function ImageAnnotator(props){
               /* F2: 十字カーソル連動 */
               externalCursorRef:analysisCursorRef, externalCursorBump:cursorBump,
               onExternalCursorChange:notifyAnalysisCursor,
-              strokes:strokesVisible?((analysisStrokes&&analysisStrokes[analysisTf])||[]):[],
+              strokes:strokesVisible?((analysisStrokes&&analysisStrokes[topTf])||[]):[],
               quickColors:quickColors,
               /* 2026-04-23: 2本指ダブルタップで現ツール⇄消しゴム入れ替え */
               onTwoFingerDoubleTap:function(){
@@ -6928,8 +6964,9 @@ function ImageAnnotator(props){
                   switchTool('pan');
                 }
               },
-              /* C6: editingTextInfo={side,idx} or null を渡す */
-              editingTextIdx:(analysisTextInput&&analysisTextInput.editIdx>=0)
+              /* C6: editingTextInfo={side,idx} or null を渡す
+                 2026-06-15: stackMode時、5mのテキスト編集中は上(1m)ペインで該当indexをゴースト非表示にしない */
+              editingTextIdx:(analysisTextInput&&analysisTextInput.editIdx>=0&&(!stackMode||analysisTextInput.tf==='1m'))
                 ?{side:(analysisTextInput.side||'cur'),idx:analysisTextInput.editIdx}
                 :null,
               textInputActive:!!analysisTextInput,
@@ -7138,6 +7175,244 @@ function ImageAnnotator(props){
           }
         })
         ), /* end 現在チャート container div (統合chart: refAnalysis有でもこの1つに集約) */
+          /* 2026-06-15: stackMode ディバイダ (上1m / 下5m、splitと同じ作法でリサイズ) */
+          stackMode&&ce("div",{
+            style:{height:10,flexShrink:0,cursor:'row-resize',background:'#292929',
+              display:'flex',alignItems:'center',justifyContent:'center',userSelect:'none'},
+            onMouseDown:onDividerMouseDown
+          },
+            ce("div",{style:{display:'flex',gap:5}},
+              [0,1,2,3,4].map(function(i){return ce("div",{key:i,style:{width:5,height:5,borderRadius:'50%',background:'#6b7280'}});})
+            )
+          ),
+          /* 2026-06-15: stackMode 下段 = 同一チャートの5m足。
+             ストロークは splitStrokes ではなく既存 analysisStrokes['5m'] 経路へ。
+             非フォーカス時(analysisTf!=='5m')は drawTool='pan' で描画不可 (tap-to-focus)。
+             view/zoom/pShift は渡さず uncontrolled (子の getFitZoom で自動フィット)。 */
+          stackMode&&ce("div",{
+            style:{flexGrow:1-splitRatio,flexShrink:1,flexBasis:0,
+              display:"flex",flexDirection:"column",minHeight:0,overflow:'hidden',
+              outline:analysisTf==='5m'?'2px solid #3b82f6':'none',outlineOffset:'-2px',
+              boxSizing:'border-box',cursor:'default'},
+            onClick:function(e){setAnalysisTf('5m');}
+          },
+            ce("div",{style:{display:"flex",alignItems:"center",padding:"4px 10px",
+              background:"#111",borderBottom:"1px solid #222",flexShrink:0,gap:8}},
+              ce("span",{style:{fontSize:11,color:"#888",fontWeight:700}},"5分足")
+            ),
+            ce(DataChart,{
+              data:simMode?simDisplayData:emaContinuedData, tf:'5m', showCrosshair:showCrosshair,
+              /* 2026-06-15: 5m足のローソクを「1分足5本分=時間枠フィット幅」で太く描く */
+              fitBarW:true,
+              drawTool:analysisTf==='5m'?tool:'pan', drawColor:color, drawWidth:lineW, drawOpacity:opacity,
+              drawFontSize:fontSize, drawFontBold:fontBold,
+              snippetObj:(analysisTf==='5m'&&tool==='snippet'&&snippets.length)?snippets[selSnipIdx%snippets.length]:null,
+              snippetsById:(function(){var m={};snippets.forEach(function(sn){if(sn&&sn.id)m[sn.id]=sn;});return m;})(),
+              tradeDir:tradeDir,
+              horiz:horiz,
+              strokes:strokesVisible?((analysisStrokes&&analysisStrokes['5m'])||[]):[],
+              quickColors:quickColors,
+              onTwoFingerDoubleTap:function(){
+                if(tool==='eraser'){var prev=prevToolBeforeEraserRef.current||'pan';switchTool(prev);}
+                else{prevToolBeforeEraserRef.current=tool;switchTool('eraser');}
+              },
+              onThreeFingerDoubleTap:function(){
+                if(tool==='pan'){var prev=prevToolBeforePanRef.current;if(prev)switchTool(prev);}
+                else{prevToolBeforePanRef.current=tool;switchTool('pan');}
+              },
+              /* 5mテキスト編集中のみ下段でゴースト非表示 (side:'cur'のみ。'split'/'ref'は対象外) */
+              editingTextIdx:(analysisTextInput&&analysisTextInput.editIdx>=0&&analysisTextInput.tf==='5m'&&(analysisTextInput.side||'cur')==='cur')
+                ?{side:'cur',idx:analysisTextInput.editIdx}
+                :null,
+              textInputActive:!!analysisTextInput,
+              measuresControlRef:measuresControlRefStack5m,
+              onMeasureCommit:measureCommit,
+              chartAPIRef:chartAPIRefStack5m,
+              /* 以下のストローク系ハンドラは上段(1m)と同一実装の複製。
+                 analysisTf は 5mフォーカス時に '5m' なので analysisStrokes['5m'] を操作する。 */
+              onStrokeAdd:function(s){
+                var side=s.side||'cur';
+                if(side==='ref'){
+                  var ra=refAnalysisRef.current;
+                  if(!ra)return;
+                  var rObj=ra.analysisStrokes||{'1m':[],'5m':[]};
+                  var rArr=(rObj[analysisTf]||[]).slice();
+                  rArr.push(s);
+                  var nextRef=Object.assign({},rObj,(function(){var o={};o[analysisTf]=rArr;return o;})());
+                  setRefAnalysis(Object.assign({},ra,{analysisStrokes:nextRef}));
+                  triggerRefAutoSave();
+                  analysisCommit(analysisStrokesRef.current, nextRef);
+                }else{
+                  var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
+                  var curArr=(curObj[analysisTf]||[]).slice();
+                  curArr.push(s);
+                  var next=Object.assign({},curObj,(function(){var o={};o[analysisTf]=curArr;return o;})());
+                  setAnalysisStrokes(next);
+                  analysisCommit(next);
+                }
+                if(caLoadAutoPan()&&['line','dotted','arrow','rect','circle','marker','text'].indexOf(tool)>=0){
+                  switchTool('pan');
+                }
+              },
+              onStrokeDelete:function(side, idx, silent){
+                if(side==='ref'){
+                  var ra=refAnalysisRef.current;
+                  if(!ra)return;
+                  var rObj=ra.analysisStrokes||{'1m':[],'5m':[]};
+                  var rArr=(rObj[analysisTf]||[]).slice();
+                  rArr.splice(idx,1);
+                  var nextRef=Object.assign({},rObj,(function(){var o={};o[analysisTf]=rArr;return o;})());
+                  setRefAnalysis(Object.assign({},ra,{analysisStrokes:nextRef}));
+                  triggerRefAutoSave();
+                  if(!silent)analysisCommit(analysisStrokesRef.current, nextRef);
+                }else{
+                  var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
+                  var curArr=(curObj[analysisTf]||[]).slice();
+                  curArr.splice(idx,1);
+                  var next=Object.assign({},curObj,(function(){var o={};o[analysisTf]=curArr;return o;})());
+                  setAnalysisStrokes(next);
+                  if(!silent)analysisCommit(next);
+                }
+              },
+              onEraserSessionEnd:function(){
+                analysisCommit(analysisStrokesRef.current);
+              },
+              onStrokeDeleteMany:function(items){
+                if(!items||!items.length)return;
+                var curIdxs=[], refIdxs=[];
+                items.forEach(function(it){
+                  if(!it)return;
+                  if(typeof it==='number'){curIdxs.push(it);return;}
+                  if(it.side==='ref')refIdxs.push(it.idx);
+                  else curIdxs.push(it.idx);
+                });
+                var nextCur=null, nextRef=null;
+                if(curIdxs.length){
+                  var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
+                  var curArr=curObj[analysisTf]||[];
+                  var skipC=new Set(curIdxs);
+                  var newCurArr=curArr.filter(function(_,i){return !skipC.has(i);});
+                  if(newCurArr.length!==curArr.length){
+                    nextCur=Object.assign({},curObj,(function(){var o={};o[analysisTf]=newCurArr;return o;})());
+                    setAnalysisStrokes(nextCur);
+                  }
+                }
+                if(refIdxs.length){
+                  var ra=refAnalysisRef.current;
+                  if(ra){
+                    var rObj=ra.analysisStrokes||{'1m':[],'5m':[]};
+                    var rArr=rObj[analysisTf]||[];
+                    var skipR=new Set(refIdxs);
+                    var newRArr=rArr.filter(function(_,i){return !skipR.has(i);});
+                    if(newRArr.length!==rArr.length){
+                      nextRef=Object.assign({},rObj,(function(){var o={};o[analysisTf]=newRArr;return o;})());
+                      setRefAnalysis(Object.assign({},ra,{analysisStrokes:nextRef}));
+                      triggerRefAutoSave();
+                    }
+                  }
+                }
+                analysisCommit(
+                  nextCur||analysisStrokesRef.current,
+                  nextRef||(refAnalysisRef.current?refAnalysisRef.current.analysisStrokes:null)
+                );
+              },
+              onStrokeUpdate:function(side,idx,newStroke){
+                if(side==='ref'){
+                  var ra=refAnalysisRef.current;
+                  if(!ra)return;
+                  var rObj=ra.analysisStrokes||{'1m':[],'5m':[]};
+                  var rArr=(rObj[analysisTf]||[]).slice();
+                  rArr[idx]=Object.assign({},newStroke,{side:'ref'});
+                  var nextRef=Object.assign({},rObj,(function(){var o={};o[analysisTf]=rArr;return o;})());
+                  setRefAnalysis(Object.assign({},ra,{analysisStrokes:nextRef}));
+                  triggerRefAutoSave();
+                  analysisCommit(analysisStrokesRef.current, nextRef);
+                }else{
+                  var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
+                  var curArr=(curObj[analysisTf]||[]).slice();
+                  curArr[idx]=Object.assign({},newStroke,{side:'cur'});
+                  var next=Object.assign({},curObj,(function(){var o={};o[analysisTf]=curArr;return o;})());
+                  setAnalysisStrokes(next);
+                  analysisCommit(next);
+                }
+              },
+              onStrokeUpdateMany:function(items){
+                if(!items||!items.length)return;
+                var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
+                var curArr=(curObj[analysisTf]||[]).slice();
+                var ra=refAnalysisRef.current;
+                var rObj=ra?(ra.analysisStrokes||{'1m':[],'5m':[]}):null;
+                var rArr=rObj?(rObj[analysisTf]||[]).slice():null;
+                var curChanged=false, refChanged=false;
+                items.forEach(function(it){
+                  if(it.side==='ref'&&rArr){
+                    rArr[it.idx]=Object.assign({},it.stroke,{side:'ref'});
+                    refChanged=true;
+                  }else{
+                    curArr[it.idx]=Object.assign({},it.stroke,{side:'cur'});
+                    curChanged=true;
+                  }
+                });
+                var nextCur=null, nextRefObj=null;
+                if(curChanged){
+                  nextCur=Object.assign({},curObj,(function(){var o={};o[analysisTf]=curArr;return o;})());
+                  setAnalysisStrokes(nextCur);
+                }
+                if(refChanged&&rObj&&ra){
+                  nextRefObj=Object.assign({},rObj,(function(){var o={};o[analysisTf]=rArr;return o;})());
+                  setRefAnalysis(Object.assign({},ra,{analysisStrokes:nextRefObj}));
+                  triggerRefAutoSave();
+                }
+                analysisCommit(
+                  nextCur||analysisStrokesRef.current,
+                  nextRefObj||(ra?ra.analysisStrokes:null)
+                );
+              },
+              onRequestTextInput:analysisTf==='5m'?function(req){
+                var initText='', initFS=fontSize, initBold=fontBold, initColor=color, initOp=opacity, initBoxW=null;
+                var initSnippet=false;
+                var reqSide=req.side||'cur';
+                var initTm=req.tm, initP=req.p;
+                if(req.editIdx>=0){
+                  var srcObj;
+                  if(reqSide==='ref'){
+                    var ra=refAnalysisRef.current;
+                    srcObj=ra?ra.analysisStrokes:null;
+                  }else{
+                    srcObj=analysisStrokesRef.current;
+                  }
+                  srcObj=srcObj||{'1m':[],'5m':[]};
+                  var es=(srcObj[analysisTf]||[])[req.editIdx];
+                  if(es){
+                    initText=es.text||'';
+                    initFS=es.fontSize||fontSize;
+                    initBold=!!es.fontBold;
+                    initColor=es.color||color;
+                    initOp=es.opacity!=null?es.opacity:opacity;
+                    initBoxW=es.boxW||null;
+                    initSnippet=!!es._snippet;
+                    if(es.anchors&&es.anchors[0]){
+                      initTm=es.anchors[0].tm;
+                      initP=es.anchors[0].p;
+                    }
+                  }
+                }
+                setAnalysisTextInput({
+                  tm:initTm, p:initP,
+                  screenX:req.screenX, screenY:req.screenY,
+                  text:initText,
+                  fontSize:initFS, fontBold:initBold,
+                  color:initColor, opacity:initOp,
+                  boxW:initBoxW,
+                  editIdx: req.editIdx>=0?req.editIdx:-1,
+                  side: reqSide,
+                  tf:analysisTf,
+                  _snippet:initSnippet,
+                  _openedAt:Date.now()
+                });
+              }:null
+            })
+          ),
           /* Divider - split mode only */
           splitChart&&ce("div",{
             style:{height:10,flexShrink:0,cursor:'row-resize',background:'#292929',
@@ -7232,7 +7507,7 @@ function ImageAnnotator(props){
           onPanDelta:function(dx,dy){
             // C-uaxis+C8a: u軸上で pan (1400px swipe = 1 uSpan分の pan) — tf依存uTotal
             setAnalysisView(function(v){
-              var uTotal=getUTotalIA(analysisTf,!!refAnalysisRef.current);
+              var uTotal=getUTotalIA(stackMode?'1m':analysisTf,!!refAnalysisRef.current);
               var uS=v.uS||0, uE=v.uE||uTotal;
               var uSpan=uE-uS;
               var dU=dx*(uSpan/1400);  // バグB: 速度半減
@@ -7338,7 +7613,8 @@ function ImageAnnotator(props){
         /* 2026-04-22: 地図モデルズーム対応 — 表示時に fontSize/boxW を zoom 倍、
            保存時は生値 (ati.fontSize/boxW) のまま、ハンドルドラッグ差分は /zoom で生値化 */
         /* 2026-05-21: split時はzoom=1 (分割チャートはzoom未対応) */
-        var atiZoom=atiSide==='split'?1.0:((analysisZoom!=null&&analysisZoom>0)?analysisZoom:1.0);
+        /* 2026-06-15: stackModeの5m(uncontrolled)はsplitと同様zoom=1.0扱い(textarea寸法を実描画に近づける) */
+        var atiZoom=(atiSide==='split'||(stackMode&&tfKey==='5m'))?1.0:((analysisZoom!=null&&analysisZoom>0)?analysisZoom:1.0);
         /* C6: side別の strokes対象取得/setter (2026-05-21: 'split' 追加) */
         function getTfArr(){
           if(atiSide==='split'){
@@ -7503,7 +7779,8 @@ function ImageAnnotator(props){
           function onEnd(){
             /* 最終 screen座標 を tm/p に変換して ati に反映 */
             var cur=analysisTextInputRef.current;
-            var api=chartAPIRefAnalysis.current;
+            /* 2026-06-15: stackMode下で5mテキストをドラッグした時は下段(5m)の座標変換APIを使う */
+            var api=(stackMode&&cur&&cur.tf==='5m')?chartAPIRefStack5m.current:chartAPIRefAnalysis.current;
             if(cur&&api&&api.pxToTimePrice){
               var newTp=api.pxToTimePrice(cur.screenX,cur.screenY);
               if(newTp&&newTp.tm!=null&&newTp.p!=null){
