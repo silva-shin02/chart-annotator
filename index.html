@@ -9697,7 +9697,15 @@ function TagManagerPage(props){
             onDragStart:function(e){catDragRef.current.src=ci;e.dataTransfer.effectAllowed='move';},
             onDragEnd:function(){catDragRef.current.src=null;setCatDragOverIdx(null);},
             onDragEnter:function(e){e.preventDefault();setCatDragOverIdx(ci);},
-            onDrop:function(e){e.preventDefault();var src=catDragRef.current.src;catDragRef.current.src=null;setCatDragOverIdx(null);
+            onDrop:function(e){e.preventDefault();
+              /* タグ行をタブにドロップ → そのカテゴリへ移動 (dragRef=タグ, catDragRef=タブ並び替え) */
+              if(dragRef.current.src!=null){
+                var dd=shown[dragRef.current.src];
+                dragRef.current.src=null;setDragOverIdx(null);setCatDragOverIdx(null);
+                if(dd)moveTagToCategory(dd.id,c.id);
+                return;
+              }
+              var src=catDragRef.current.src;catDragRef.current.src=null;setCatDragOverIdx(null);
               if(src===null||src===ci)return;var next=cats.slice();next.splice(ci,0,next.splice(src,1)[0]);saveCats(next);},
             onClick:function(){if(!isRen)setActiveCat(c.id);},
             onDoubleClick:function(){setCatRenId(c.id);setCatRenTxt(c.name);},
@@ -9722,8 +9730,16 @@ function TagManagerPage(props){
               style:{fontSize:15,color:'#f87171',lineHeight:1}},'×')
           );
         }),
-        /* 未分類タブ (常時表示・改名/削除/ドラッグ不可) */
+        /* 未分類タブ (常時表示・改名/削除/タブ並び替え不可。タグのドロップは受け付ける) */
         ce('div',{onClick:function(){setActiveCat('__uncat');},
+          onDragEnter:function(e){if(dragRef.current.src!=null)e.preventDefault();},
+          onDrop:function(e){
+            if(dragRef.current.src==null)return;
+            e.preventDefault();
+            var dd=shown[dragRef.current.src];
+            dragRef.current.src=null;setDragOverIdx(null);
+            if(dd)moveTagToCategory(dd.id,'__uncat');
+          },
           style:{flexShrink:0,cursor:'pointer',padding:'6px 10px',borderRadius:8,whiteSpace:'nowrap',
             border:'1px solid '+(activeCat==='__uncat'?'#2563eb':'#333'),
             background:activeCat==='__uncat'?'#1e3a5f':'#1a1a1a',
@@ -9771,8 +9787,8 @@ function TagManagerPage(props){
                 /* ドラッグハンドル */
                 ce('span',{draggable:true,
                   onDragStart:function(e){dragRef.current.src=idx;e.dataTransfer.effectAllowed='move';},
-                  onDragEnd:function(){dragRef.current.src=null;setDragOverIdx(null);},
-                  title:'ドラッグして並び替え',
+                  onDragEnd:function(){dragRef.current.src=null;setDragOverIdx(null);setCatDragOverIdx(null);},
+                  title:'ドラッグ: 上下で並び替え / カテゴリタブに乗せると移動',
                   style:{cursor:'grab',color:'#555',fontSize:15,userSelect:'none',flexShrink:0}},'☰'),
                 /* カラードット */
                 ce('button',{onClick:function(){setEditColorId(isEditingColor?null:d.id);},
