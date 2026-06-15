@@ -8851,6 +8851,8 @@ function caSetChartMemo(id,html){
    ───────────────────────────────────────────────────────────────── */
 var CA_CHART_TAG_DEFS_KEY='ca_chart_tag_defs_v1';
 var CA_CHART_TAG_MAP_KEY='ca_chart_tag_map_v1';
+/* 2026-06-16: タグのカテゴリ (順序付き [{id,name}])。未分類は保存せず render時の擬似グループ '__uncat' で表現 */
+var CA_CHART_TAG_CATS_KEY='ca_chart_tag_cats_v1';
 var CA_TAG_COLORS=['#ef4444','#f97316','#eab308','#22c55e','#06b6d4','#6366f1','#ec4899','#a855f7'];
 function caLoadTagDefs(){
   try{var v=JSON.parse(localStorage.getItem(CA_CHART_TAG_DEFS_KEY));if(Array.isArray(v))return v;}catch(e){}
@@ -8858,6 +8860,14 @@ function caLoadTagDefs(){
 }
 function caSaveTagDefs(arr){
   try{localStorage.setItem(CA_CHART_TAG_DEFS_KEY,JSON.stringify(arr));}catch(e){}
+}
+/* 2026-06-16: タグカテゴリ定義 (順序付き [{id,name}]) */
+function caLoadTagCats(){
+  try{var v=JSON.parse(localStorage.getItem(CA_CHART_TAG_CATS_KEY));if(Array.isArray(v))return v;}catch(e){}
+  return [];
+}
+function caSaveTagCats(arr){
+  try{localStorage.setItem(CA_CHART_TAG_CATS_KEY,JSON.stringify(arr));}catch(e){}
 }
 function caLoadTagMap(){
   try{var v=JSON.parse(localStorage.getItem(CA_CHART_TAG_MAP_KEY));if(v&&typeof v==='object')return v;}catch(e){}
@@ -8878,6 +8888,31 @@ function caSetChartTags(id,tagIds){
 }
 function caNewTagId(){
   return 'tag_'+Date.now()+'_'+Math.floor(Math.random()*1e6);
+}
+function caNewCatId(){
+  return 'cat_'+Date.now()+'_'+Math.floor(Math.random()*1e6);
+}
+/* 2026-06-16: タグ定義の所属カテゴリを解決。catId が現存カテゴリを指していればその id、
+   無い/null/不明(削除済み等) は全て '__uncat'(未分類) に落とす。全表示サイト共通の単一ルール。 */
+function caTagBucket(def, cats){
+  var cid=def&&def.catId;
+  if(cid&&cats&&cats.some(function(c){return c.id===cid;}))return cid;
+  return '__uncat';
+}
+/* タグ定義をカテゴリ順にグループ化。返り値 [{cat:{id,name}|null, items:[def...]}]。
+   空カテゴリは省き、未分類(cat:null)は要素がある時のみ末尾に付ける。 */
+function caGroupDefsByCat(defs, cats){
+  defs=defs||[]; cats=cats||[];
+  var groups=[], byId={};
+  cats.forEach(function(c){var g={cat:c,items:[]};byId[c.id]=g;groups.push(g);});
+  var uncat={cat:null,items:[]};
+  defs.forEach(function(d){
+    var b=caTagBucket(d,cats);
+    if(b==='__uncat')uncat.items.push(d); else byId[b].items.push(d);
+  });
+  var out=groups.filter(function(g){return g.items.length>0;});
+  if(uncat.items.length>0)out.push(uncat);
+  return out;
 }
 
 /* 画像ファイル → {base64, mt} */
@@ -9462,12 +9497,31 @@ function CaTagSelector(props){
 
   var sDefs=useState(function(){return caLoadTagDefs();});
   var defs=sDefs[0];
+  var sCats=useState(function(){return caLoadTagCats();});
+  var cats=sCats[0];
 
   function toggleTag(id){
     var newSel=selectedIds.indexOf(id)>=0
       ?selectedIds.filter(function(x){return x!==id;})
       :selectedIds.concat([id]);
     onChangeTags(newSel);
+  }
+  /* 2026-06-16: タグ1行 (フラット/グループ両方で共用) */
+  function renderTagRow(d){
+    var sel=selectedIds.indexOf(d.id)>=0;
+    return ce('div',{key:d.id,
+        onClick:function(){toggleTag(d.id);},
+        style:{display:'flex',alignItems:'center',gap:6,marginBottom:6,cursor:'pointer'}},
+      ce('div',{style:{width:13,height:13,borderRadius:3,flexShrink:0,
+        background:sel?d.color:'transparent',
+        border:'2px solid '+(sel?d.color:'#555'),
+        transition:'background .12s,border-color .12s'}}),
+      ce('div',{style:{width:9,height:9,borderRadius:'50%',flexShrink:0,
+        background:d.color,boxShadow:'0 1px 3px rgba(0,0,0,.5)'}}),
+      ce('span',{style:{flex:1,fontSize:11,color:sel?'#eee':'#888',
+        overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},
+        d.name)
+    );
   }
 
   var BS3={border:'none',background:'none',cursor:'pointer',fontFamily:'inherit',padding:0};
@@ -9481,26 +9535,20 @@ function CaTagSelector(props){
       ce('button',{style:Object.assign({},BS3,{fontSize:13,color:'#555',lineHeight:1}),
         onClick:onClose},'✕')
     ),
-    /* タグ一覧 (選択のみ) */
+    /* タグ一覧 (選択のみ・カテゴリ見出しでグループ化) */
     defs.length===0
       ?ce('div',{style:{fontSize:11,color:'#555',padding:'4px 0'}},
           'タグなし。ホーム画面「タグ管理」から追加できます。')
-      :defs.map(function(d){
-          var sel=selectedIds.indexOf(d.id)>=0;
-          return ce('div',{key:d.id,
-              onClick:function(){toggleTag(d.id);},
-              style:{display:'flex',alignItems:'center',gap:6,marginBottom:6,cursor:'pointer'}},
-            ce('div',{style:{width:13,height:13,borderRadius:3,flexShrink:0,
-              background:sel?d.color:'transparent',
-              border:'2px solid '+(sel?d.color:'#555'),
-              transition:'background .12s,border-color .12s'}}),
-            ce('div',{style:{width:9,height:9,borderRadius:'50%',flexShrink:0,
-              background:d.color,boxShadow:'0 1px 3px rgba(0,0,0,.5)'}}),
-            ce('span',{style:{flex:1,fontSize:11,color:sel?'#eee':'#888',
-              overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},
-              d.name)
-          );
-        })
+      :(cats.length===0
+          ?defs.map(renderTagRow)
+          :caGroupDefsByCat(defs,cats).map(function(g){
+              return ce('div',{key:g.cat?g.cat.id:'__uncat',style:{marginBottom:2}},
+                ce('div',{style:{fontSize:10,fontWeight:700,color:'#666',margin:'7px 0 4px',
+                  letterSpacing:0.3}},g.cat?g.cat.name:'未分類'),
+                g.items.map(renderTagRow)
+              );
+            })
+        )
   );
 }
 
@@ -9519,12 +9567,25 @@ function TagManagerPage(props){
   var newInputRef=useRef(null);
   var dragRef=useRef({src:null});
   var sDO=useState(null); var dragOverIdx=sDO[0],setDragOverIdx=sDO[1];
+  /* 2026-06-16: カテゴリ (タブ) */
+  var sCats=useState(function(){return caLoadTagCats();}); var cats=sCats[0],setCats=sCats[1];
+  var sAC=useState(function(){var c=caLoadTagCats();return c.length?c[0].id:'__uncat';}); var activeCat=sAC[0],setActiveCat=sAC[1];
+  var sCatRen=useState(null); var catRenId=sCatRen[0],setCatRenId=sCatRen[1];
+  var sCatRenTxt=useState(''); var catRenTxt=sCatRenTxt[0],setCatRenTxt=sCatRenTxt[1];
+  var sAddCat=useState(false); var addingCat=sAddCat[0],setAddingCat=sAddCat[1];
+  var sNewCatTxt=useState(''); var newCatTxt=sNewCatTxt[0],setNewCatTxt=sNewCatTxt[1];
+  var catDragRef=useRef({src:null});
+  var sCatDO=useState(null); var catDragOverIdx=sCatDO[0],setCatDragOverIdx=sCatDO[1];
 
   useEffect(function(){
     function onBack(){onClose();}
     window.addEventListener('ca_back',onBack);
     return function(){window.removeEventListener('ca_back',onBack);};
   },[]);
+  /* activeCat が消えたカテゴリを指していたら未分類へ (削除/FB pull後の空表示防止) */
+  useEffect(function(){
+    if(activeCat!=='__uncat'&&!cats.some(function(c){return c.id===activeCat;}))setActiveCat('__uncat');
+  },[cats,activeCat]);
 
   function saveTagQC(qc){setTagQC(qc);try{localStorage.setItem('ca_tag_qc_v1',JSON.stringify(qc));}catch(e){}}
   function pushTagCH(c){var nh=[c].concat(tagCH.filter(function(x){return x!==c;})).slice(0,16);setTagCH(nh);try{localStorage.setItem('ca_tag_ch_v1',JSON.stringify(nh));}catch(e){}}
@@ -9542,12 +9603,51 @@ function TagManagerPage(props){
         body:JSON.stringify({updatedAt:ut})}).catch(function(){});
     }
   }
+  /* 2026-06-16: カテゴリ保存 (saveDefs と同形、専用ノード/専用watermark)。
+     ※catId変更は saveDefs を通す(defsに乗る)。saveCats は名前/順序のみ。両方同時に呼ばない。 */
+  function saveCats(arr){
+    caSaveTagCats(arr);setCats(arr);
+    if(fbCfg&&fbCfg.url&&!fbCfg.paused){
+      var a=fbCfg.secret?'?auth='+fbCfg.secret:'';
+      var base=fbCfg.url.replace(/\/$/,'');
+      var ut=Date.now();
+      try{localStorage.setItem('ca_tag_cats_ut_v1',String(ut));}catch(e){}
+      fetch(base+'/ca-tag-cats.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({cats:arr,updatedAt:ut})}).catch(function(){});
+      fetch(base+'/ca-tag-cats-v.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({updatedAt:ut})}).catch(function(){});
+    }
+  }
 
   function createTag(){
     var n=newName.trim();if(!n)return;
     var color=CA_TAG_COLORS[defs.length%CA_TAG_COLORS.length];
-    saveDefs(defs.concat([{id:caNewTagId(),name:n,color:color}]));
+    saveDefs(defs.concat([{id:caNewTagId(),name:n,color:color,catId:(activeCat==='__uncat'?null:activeCat)}]));
     setNewName('');if(newInputRef.current)newInputRef.current.focus();
+  }
+  /* 2026-06-16: カテゴリ操作 */
+  function addCategory(){
+    var n=newCatTxt.trim();if(!n)return;
+    var id=caNewCatId();
+    saveCats(cats.concat([{id:id,name:n}]));
+    setActiveCat(id);setNewCatTxt('');setAddingCat(false);
+  }
+  function commitCatRename(id){
+    var n=catRenTxt.trim();
+    if(n)saveCats(cats.map(function(c){return c.id===id?Object.assign({},c,{name:n}):c;}));
+    setCatRenId(null);setCatRenTxt('');
+  }
+  function deleteCategory(id){
+    var c=cats.find(function(x){return x.id===id;});
+    window.caConfirm('カテゴリ「'+((c&&c.name)||'')+'」を削除しますか？\n(中のタグは未分類へ移動します)',function(){
+      /* 先に所属タグを未分類へ退避してからカテゴリ削除 (deleteTag と同じ「掃除してから消す」作法) */
+      saveDefs(defs.map(function(d){return d.catId===id?Object.assign({},d,{catId:null}):d;}));
+      saveCats(cats.filter(function(x){return x.id!==id;}));
+      if(activeCat===id)setActiveCat('__uncat');
+    },null,{yesLabel:'削除',noLabel:'キャンセル',danger:true});
+  }
+  function moveTagToCategory(id,newCatId){
+    saveDefs(defs.map(function(d){return d.id===id?Object.assign({},d,{catId:(newCatId==='__uncat'?null:newCatId)}):d;}));
   }
   function deleteTag(id){
     window.caConfirm('タグ「'+((defs.find(function(d){return d.id===id;})||{}).name||'')+'」を削除しますか？',function(){
@@ -9571,6 +9671,8 @@ function TagManagerPage(props){
 
   var BS3={border:'none',background:'none',cursor:'pointer',fontFamily:'inherit',padding:0};
   var editColorDef=editColorId?defs.find(function(d){return d.id===editColorId;})||null:null;
+  /* 2026-06-16: アクティブカテゴリのタグのみ表示 (未分類含む) */
+  var shown=defs.filter(function(d){return caTagBucket(d,cats)===activeCat;});
 
   return ce('div',{style:{position:'fixed',inset:0,background:'#111',color:'#fff',
     display:'flex',flexDirection:'column',zIndex:100,overflow:'hidden'}},
@@ -9585,14 +9687,67 @@ function TagManagerPage(props){
     ),
     /* タグ一覧 + 入力欄 */
     ce('div',{style:{flex:1,overflowY:'auto',padding:'12px 14px',display:'flex',flexDirection:'column',gap:0}},
+      /* 2026-06-16: カテゴリタブ (ドラッグで並び替え / ダブルクリックで改名 / × で削除) */
+      ce('div',{onDragOver:function(e){e.preventDefault();},
+        style:{display:'flex',gap:6,overflowX:'auto',flexShrink:0,marginBottom:10,paddingBottom:4,alignItems:'center'}},
+        cats.map(function(c,ci){
+          var act=activeCat===c.id, isRen=catRenId===c.id, isOver=catDragOverIdx===ci;
+          return ce('div',{key:c.id,
+            draggable:!isRen,
+            onDragStart:function(e){catDragRef.current.src=ci;e.dataTransfer.effectAllowed='move';},
+            onDragEnd:function(){catDragRef.current.src=null;setCatDragOverIdx(null);},
+            onDragEnter:function(e){e.preventDefault();setCatDragOverIdx(ci);},
+            onDrop:function(e){e.preventDefault();var src=catDragRef.current.src;catDragRef.current.src=null;setCatDragOverIdx(null);
+              if(src===null||src===ci)return;var next=cats.slice();next.splice(ci,0,next.splice(src,1)[0]);saveCats(next);},
+            onClick:function(){if(!isRen)setActiveCat(c.id);},
+            onDoubleClick:function(){setCatRenId(c.id);setCatRenTxt(c.name);},
+            style:{display:'flex',alignItems:'center',gap:5,flexShrink:0,cursor:'pointer',
+              padding:'6px 10px',borderRadius:8,whiteSpace:'nowrap',
+              border:'1px solid '+(isOver?'#6366f1':(act?'#2563eb':'#333')),
+              background:act?'#1e3a5f':'#1a1a1a',color:act?'#dbeafe':'#aaa',fontSize:13,fontWeight:700}},
+            isRen
+              ?ce('input',{ref:function(el){if(el)el.focus();},value:catRenTxt,
+                  onClick:function(e){e.stopPropagation();},
+                  onChange:function(e){setCatRenTxt(e.target.value);},
+                  onKeyDown:function(e){if(e.key==='Enter')commitCatRename(c.id);if(e.key==='Escape'){setCatRenId(null);setCatRenTxt('');}},
+                  onBlur:function(){commitCatRename(c.id);},
+                  style:{width:84,background:'#222',border:'1px solid #555',color:'#ddd',fontSize:13,borderRadius:4,padding:'2px 6px',outline:'none'}})
+              :ce('span',null,c.name),
+            !isRen&&act&&ce('span',{title:'カテゴリ名を変更',
+              onClick:function(e){e.stopPropagation();setCatRenId(c.id);setCatRenTxt(c.name);},
+              style:{fontSize:11,color:'#93c5fd',lineHeight:1}},
+              ce('span',{style:{display:'inline-block',transform:'rotate(-45deg)'}},'✏')),
+            !isRen&&act&&ce('span',{title:'カテゴリを削除',
+              onClick:function(e){e.stopPropagation();deleteCategory(c.id);},
+              style:{fontSize:15,color:'#f87171',lineHeight:1}},'×')
+          );
+        }),
+        /* 未分類タブ (常時表示・改名/削除/ドラッグ不可) */
+        ce('div',{onClick:function(){setActiveCat('__uncat');},
+          style:{flexShrink:0,cursor:'pointer',padding:'6px 10px',borderRadius:8,whiteSpace:'nowrap',
+            border:'1px solid '+(activeCat==='__uncat'?'#2563eb':'#333'),
+            background:activeCat==='__uncat'?'#1e3a5f':'#1a1a1a',
+            color:activeCat==='__uncat'?'#dbeafe':'#777',fontSize:13,fontWeight:700}},'未分類'),
+        /* ＋ カテゴリ追加 */
+        addingCat
+          ?ce('input',{ref:function(el){if(el)el.focus();},value:newCatTxt,placeholder:'カテゴリ名…',
+              onChange:function(e){setNewCatTxt(e.target.value);},
+              onKeyDown:function(e){if(e.key==='Enter')addCategory();if(e.key==='Escape'){setAddingCat(false);setNewCatTxt('');}},
+              onBlur:function(){if(newCatTxt.trim())addCategory();else setAddingCat(false);},
+              style:{flexShrink:0,width:104,background:'#1a1a1a',border:'1px solid #2563eb',color:'#ddd',
+                fontSize:13,borderRadius:8,padding:'6px 8px',outline:'none'}})
+          :ce('button',{onClick:function(){setAddingCat(true);},title:'カテゴリを追加',
+              style:{flexShrink:0,cursor:'pointer',padding:'6px 12px',borderRadius:8,
+                border:'1px dashed #444',background:'transparent',color:'#888',fontSize:14,fontFamily:'inherit'}},'＋')
+      ),
       /* ドラッグ対応コンテナ */
       ce('div',{onDragOver:function(e){e.preventDefault();}},
-        defs.length===0
+        shown.length===0
           ?ce('div',{style:{textAlign:'center',color:'#444',fontSize:14,marginTop:60,lineHeight:2.2}},
               ce('div',{style:{fontSize:40,marginBottom:8}},'🏷'),
               ce('div',null,'タグがありません'),
               ce('div',{style:{fontSize:12,color:'#333'}},'下の入力欄から追加できます'))
-          :defs.map(function(d,idx){
+          :shown.map(function(d,idx){
               var isEditingColor=editColorId===d.id;
               var isDragOver=dragOverIdx===idx;
               return ce('div',{key:d.id,
@@ -9602,7 +9757,10 @@ function TagManagerPage(props){
                     var src=dragRef.current.src;
                     dragRef.current.src=null;setDragOverIdx(null);
                     if(src===null||src===idx)return;
-                    var next=defs.slice();next.splice(idx,0,next.splice(src,1)[0]);
+                    /* src/idx は絞り込み後(shown)の位置。実 defs index に変換してから並び替え (全体順序の破壊防止) */
+                    var realSrc=defs.indexOf(shown[src]), realIdx=defs.indexOf(shown[idx]);
+                    if(realSrc<0||realIdx<0)return;
+                    var next=defs.slice();next.splice(realIdx,0,next.splice(realSrc,1)[0]);
                     saveDefs(next);
                   },
                   style:{background:'#1a1a1a',
@@ -9640,6 +9798,16 @@ function TagManagerPage(props){
                 renId!==d.id&&ce('button',{onClick:function(){startRename(d.id,d.name);},title:'名前変更',
                   style:Object.assign({},BS3,{fontSize:11,color:'#555',lineHeight:1,flexShrink:0})},
                   ce('span',{style:{display:'inline-block',transform:'rotate(-45deg)'}},'✏')),
+                /* カテゴリ移動 (2026-06-16) */
+                cats.length>0&&ce('select',{value:caTagBucket(d,cats),
+                  onChange:function(e){moveTagToCategory(d.id,e.target.value);},
+                  onClick:function(e){e.stopPropagation();},
+                  title:'カテゴリを移動',
+                  style:{flexShrink:0,background:'#222',color:'#bbb',border:'1px solid #333',
+                    borderRadius:5,fontSize:11,padding:'3px 4px',outline:'none',maxWidth:100,fontFamily:'inherit'}},
+                  cats.map(function(c){return ce('option',{key:c.id,value:c.id},c.name);})
+                    .concat([ce('option',{key:'__uncat',value:'__uncat'},'未分類')])
+                ),
                 /* 削除ボタン */
                 ce('button',{onClick:function(){deleteTag(d.id);},title:'削除',
                   style:Object.assign({},BS3,{color:'#ef4444',fontSize:16,lineHeight:1,flexShrink:0,marginLeft:2})},'×')
@@ -11117,6 +11285,7 @@ function CaTagSearchModal(props){
   /* CA タグ定義 & マップ (1回だけ読む) */
   var tagDefs=useMemo(function(){return caLoadTagDefs();},[]);
   var tagMap =useMemo(function(){return caLoadTagMap(); },[]);
+  var tagCats=useMemo(function(){return caLoadTagCats();},[]);
 
   /* CA タグ → チャートリスト */
   var caTagCharts=useMemo(function(){
@@ -11194,6 +11363,23 @@ function CaTagSearchModal(props){
 
   var hasTags=activeCaTags.length>0||snTagKeys.length>0||stampKeys.length>0;
   var BT={border:'none',cursor:'pointer',fontFamily:'inherit'};
+  /* 2026-06-16: CAタグ1ボタン (カテゴリ・グループ描画で共用) */
+  function renderCaTagBtn(td){
+    var isSel=selTag&&selTag.type==='ca'&&selTag.id===td.id;
+    var cnt=(caTagCharts[td.id]||[]).length;
+    return ce('button',{key:td.id,
+      onClick:function(){setSelTag({type:'ca',id:td.id});},
+      style:Object.assign({},BT,{display:'flex',alignItems:'center',gap:7,
+        width:'100%',padding:'7px 12px',textAlign:'left',
+        background:isSel?'#1e2a3a':'transparent'})},
+      ce('span',{style:{width:9,height:9,borderRadius:'50%',flexShrink:0,
+        background:td.color,display:'inline-block'}}),
+      ce('span',{style:{fontSize:12,flex:1,
+        color:isSel?'#93c5fd':'#ccc',
+        overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},td.name),
+      ce('span',{style:{fontSize:10,color:'#555',flexShrink:0}},cnt)
+    );
+  }
 
   return ce('div',{onClick:onClose,
       style:{position:'fixed',inset:0,background:'rgba(0,0,0,.78)',zIndex:10500,
@@ -11229,22 +11415,16 @@ function CaTagSearchModal(props){
               activeCaTags.length>0&&ce('div',null,
                 ce('div',{style:{padding:'4px 12px 5px',fontSize:10,fontWeight:700,
                   color:'#555',letterSpacing:1,textTransform:'uppercase'}},'CA タグ'),
-                activeCaTags.map(function(td){
-                  var isSel=selTag&&selTag.type==='ca'&&selTag.id===td.id;
-                  var cnt=(caTagCharts[td.id]||[]).length;
-                  return ce('button',{key:td.id,
-                    onClick:function(){setSelTag({type:'ca',id:td.id});},
-                    style:Object.assign({},BT,{display:'flex',alignItems:'center',gap:7,
-                      width:'100%',padding:'7px 12px',textAlign:'left',
-                      background:isSel?'#1e2a3a':'transparent'})},
-                    ce('span',{style:{width:9,height:9,borderRadius:'50%',flexShrink:0,
-                      background:td.color,display:'inline-block'}}),
-                    ce('span',{style:{fontSize:12,flex:1,
-                      color:isSel?'#93c5fd':'#ccc',
-                      overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},td.name),
-                    ce('span',{style:{fontSize:10,color:'#555',flexShrink:0}},cnt)
-                  );
-                })
+                (tagCats.length===0
+                  ?activeCaTags.map(renderCaTagBtn)
+                  :caGroupDefsByCat(activeCaTags,tagCats).map(function(g){
+                      return ce('div',{key:g.cat?g.cat.id:'__uncat'},
+                        ce('div',{style:{padding:'3px 12px 2px',fontSize:9,fontWeight:700,
+                          color:'#444',letterSpacing:0.5}},g.cat?g.cat.name:'未分類'),
+                        g.items.map(renderCaTagBtn)
+                      );
+                    })
+                )
               ),
               snTagKeys.length>0&&ce('div',null,
                 activeCaTags.length>0&&ce('div',{style:{margin:'6px 12px',borderTop:'1px solid #2a2a2a'}}),
@@ -11707,6 +11887,32 @@ function DraftLibrary(props){
           fetch(base+'/ca-tag-defs.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
             body:JSON.stringify({defs:localDefs,updatedAt:ut})}).catch(function(){});
           fetch(base+'/ca-tag-defs-v.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({updatedAt:ut})}).catch(function(){});
+        }
+      }).catch(function(){});
+
+    /* 2026-06-16: タグカテゴリ — defsと独立した版管理マージ (専用watermark / 欠落してもdefs同期を止めない別チェーン) */
+    var localCatsUt=0;
+    try{var _tc=parseInt(localStorage.getItem('ca_tag_cats_ut_v1')||'0',10);if(!isNaN(_tc))localCatsUt=_tc;}catch(e){}
+    var localCats=caLoadTagCats();
+    fetch(base+'/ca-tag-cats-v.json'+a)
+      .then(function(r){return r.ok?r.json():null;})
+      .then(function(v){
+        var remUt=(v&&typeof v.updatedAt==='number')?v.updatedAt:0;
+        if(remUt>localCatsUt){
+          return fetch(base+'/ca-tag-cats.json'+a)
+            .then(function(r){return r.ok?r.json():null;})
+            .then(function(d){
+              if(!d||!Array.isArray(d.cats))return;
+              caSaveTagCats(d.cats);
+              try{localStorage.setItem('ca_tag_cats_ut_v1',String(d.updatedAt||remUt));}catch(e){}
+            });
+        } else if(localCats.length>0){
+          var ut=localCatsUt||Date.now();
+          try{localStorage.setItem('ca_tag_cats_ut_v1',String(ut));}catch(e){}
+          fetch(base+'/ca-tag-cats.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({cats:localCats,updatedAt:ut})}).catch(function(){});
+          fetch(base+'/ca-tag-cats-v.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
             body:JSON.stringify({updatedAt:ut})}).catch(function(){});
         }
       }).catch(function(){});
@@ -12691,6 +12897,20 @@ function DraftLibrary(props){
   var _srchTagMap=caLoadTagMap();
   var _srchTagDefsById={};
   _srchTagDefs.forEach(function(d){_srchTagDefsById[d.id]=d;});
+  /* 2026-06-16: タグフィルタchipsのカテゴリ・グループ化用 */
+  var _srchTagCats=caLoadTagCats();
+  var _srchBuildChip=function(td){
+    var sel=selTagIds.indexOf(td.id)>=0;
+    return ce("button",{key:td.id,
+      onClick:function(){setSelTagIds(function(prev){
+        return sel?prev.filter(function(x){return x!==td.id;}):prev.concat([td.id]);
+      });},
+      style:{padding:"4px 12px",fontSize:12,fontWeight:700,borderRadius:20,cursor:"pointer",
+        border:"1.5px solid "+(sel?td.color:'#30363d'),
+        background:sel?(td.color+'33'):'transparent',
+        color:sel?td.color:'#8b949e',outline:"none"}},
+      td.name);
+  };
   var _srchEffDate=function(m){
     var ad=m.analysisDate||'';
     if(/^\d{4}-\d{2}-\d{2}$/.test(ad))return ad;
@@ -12914,22 +13134,22 @@ function DraftLibrary(props){
           _srchTagDefs.length===0
             ?ce("div",{style:{fontSize:12,color:"#555",fontStyle:"italic",padding:"4px 0"}},
               "タグが未定義です（チャートカードのタグボタンから作成できます）")
-            :ce("div",{style:{display:"flex",flexWrap:"wrap",gap:5}},
-              _srchTagDefs.map(function(td){
-                var sel=selTagIds.indexOf(td.id)>=0;
-                return ce("button",{key:td.id,
-                  onClick:function(){setSelTagIds(function(prev){
-                    return sel?prev.filter(function(x){return x!==td.id;}):prev.concat([td.id]);
-                  });},
-                  style:{padding:"4px 12px",fontSize:12,fontWeight:700,borderRadius:20,cursor:"pointer",
-                    border:"1.5px solid "+(sel?td.color:'#30363d'),
-                    background:sel?(td.color+'33'):'transparent',
-                    color:sel?td.color:'#8b949e',outline:"none"}},
-                  td.name);
-              }),
+            :ce("div",{style:{display:"flex",flexDirection:"column",gap:6}},
+              (_srchTagCats.length===0
+                ?[ce("div",{key:'__flat',style:{display:"flex",flexWrap:"wrap",gap:5}},
+                    _srchTagDefs.map(_srchBuildChip))]
+                :caGroupDefsByCat(_srchTagDefs,_srchTagCats).map(function(g){
+                    return ce("div",{key:g.cat?g.cat.id:'__uncat'},
+                      ce("div",{style:{fontSize:11,color:"#8b949e",fontWeight:700,marginBottom:4}},
+                        g.cat?g.cat.name:'未分類'),
+                      ce("div",{style:{display:"flex",flexWrap:"wrap",gap:5}},
+                        g.items.map(_srchBuildChip))
+                    );
+                  })
+              ),
               selTagIds.length>0&&ce("button",{
                 onClick:function(){setSelTagIds([]);},
-                style:{padding:"4px 9px",fontSize:11,borderRadius:20,cursor:"pointer",
+                style:{alignSelf:"flex-start",padding:"4px 9px",fontSize:11,borderRadius:20,cursor:"pointer",
                   border:"1px solid #444",background:"transparent",color:"#666",outline:"none"}},
                 "✕ クリア")
             )
