@@ -1032,6 +1032,15 @@ function caLoadSnippets(){
 function caSaveSnippets(arr){
   try{localStorage.setItem(CA_SNIPPETS_KEY,JSON.stringify(arr));}catch(e){}
 }
+/* 2026-06-16: スタンプのカテゴリ (順序付き [{id,name}])。未分類は保存せず render時の擬似グループ '__uncat' */
+var CA_SNIPPET_CATS_KEY='ca_snippet_cats_v1';
+function caLoadSnipCats(){
+  try{var v=JSON.parse(localStorage.getItem(CA_SNIPPET_CATS_KEY));if(Array.isArray(v))return v;}catch(e){}
+  return [];
+}
+function caSaveSnipCats(arr){
+  try{localStorage.setItem(CA_SNIPPET_CATS_KEY,JSON.stringify(arr));}catch(e){}
+}
 /* 2026-06-11: テキスト検索「よく使うワード」 (localStorage) */
 var CA_SEARCH_WORDS_KEY='ca_search_words_v1';
 function caLoadSearchWords(){
@@ -5452,6 +5461,17 @@ function ImageAnnotator(props){
   var stSnipNE=useState({idx:null,value:''}); var snipNameEdit=stSnipNE[0],setSnipNameEdit=stSnipNE[1];
   var stSnipPI=useState(null); var snipPaletteIdx=stSnipPI[0],setSnipPaletteIdx=stSnipPI[1];
   var stSnipDrag=useState({drag:null,over:null}); var snipDragSt=stSnipDrag[0],setSnipDragSt=stSnipDrag[1];
+  /* 2026-06-16: スタンプのカテゴリ (アコーディオン) */
+  var stSnipCats=useState(caLoadSnipCats); var snipCats=stSnipCats[0],setSnipCats=stSnipCats[1];
+  var stSnipCatRen=useState(null); var snipCatRenId=stSnipCatRen[0],setSnipCatRenId=stSnipCatRen[1];
+  var stSnipCatRenTxt=useState(''); var snipCatRenTxt=stSnipCatRenTxt[0],setSnipCatRenTxt=stSnipCatRenTxt[1];
+  var stAddSnipCat=useState(false); var addingSnipCat=stAddSnipCat[0],setAddingSnipCat=stAddSnipCat[1];
+  var stNewSnipCatTxt=useState(''); var newSnipCatTxt=stNewSnipCatTxt[0],setNewSnipCatTxt=stNewSnipCatTxt[1];
+  var snipCatDragRef=useRef({src:null});
+  var stSnipCatDO=useState(null); var snipCatDragOverIdx=stSnipCatDO[0],setSnipCatDragOverIdx=stSnipCatDO[1];
+  var stSnipCatOpen=useState(function(){try{var v=JSON.parse(localStorage.getItem('ca_snip_cat_open_v1'));if(v&&typeof v==='object')return v;}catch(e){}return {};}); var snipCatOpen=stSnipCatOpen[0],setSnipCatOpen=stSnipCatOpen[1];
+  function isCatOpen(id){return snipCatOpen[id]!==false;}
+  function toggleCat(id){var m=Object.assign({},snipCatOpen);m[id]=!isCatOpen(id);setSnipCatOpen(m);try{localStorage.setItem('ca_snip_cat_open_v1',JSON.stringify(m));}catch(e){}}
   /* 2026-04-27: スタンプ Firebase 同期 (銘柄メモと同じパターン、last-write-wins) */
   var snipSaveTimerRef=useRef(null);
   function updateSnippets(nArr){
@@ -5467,6 +5487,44 @@ function ImageAnnotator(props){
       }
     },1000);
   }
+  /* 2026-06-16: スタンプカテゴリ保存 (専用ノード/専用watermark)。
+     ※catId変更は updateSnippets を通す(snippets配列に乗る)。saveSnipCats は名前/順序のみ。両方同時に呼ばない。 */
+  function saveSnipCats(arr){
+    setSnipCats(arr); caSaveSnipCats(arr);
+    var cfg=props.fbCfg;
+    if(!_fbIsPaused(cfg)&&cfg.url){
+      var auth=cfg.secret?'?auth='+cfg.secret:'';
+      var base=cfg.url.replace(/\/$/,'');
+      var ut=Date.now();
+      try{localStorage.setItem('ca_snip_cats_ut_v1',String(ut));}catch(e){}
+      fetch(base+'/ca-snippet-cats.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({cats:arr,updatedAt:ut})}).catch(function(){});
+      fetch(base+'/ca-snippet-cats-v.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({updatedAt:ut})}).catch(function(){});
+    }
+  }
+  function moveSnipToCat(snipId,newCatId){
+    updateSnippets(snippets.map(function(s){return s.id===snipId?Object.assign({},s,{catId:(newCatId==='__uncat'?null:newCatId)}):s;}));
+  }
+  function addSnipCategory(){
+    var n=newSnipCatTxt.trim();if(!n)return;
+    var id=caNewSnipCatId();
+    saveSnipCats(snipCats.concat([{id:id,name:n}]));
+    setNewSnipCatTxt('');setAddingSnipCat(false);
+  }
+  function commitSnipCatRename(id){
+    var n=snipCatRenTxt.trim();
+    if(n)saveSnipCats(snipCats.map(function(c){return c.id===id?Object.assign({},c,{name:n}):c;}));
+    setSnipCatRenId(null);setSnipCatRenTxt('');
+  }
+  function deleteSnipCategory(id){
+    var c=snipCats.find(function(x){return x.id===id;});
+    window.caConfirm('カテゴリ「'+((c&&c.name)||'')+'」を削除しますか？\n(中のスタンプは未分類へ移動します)',function(){
+      /* 先に所属スタンプを未分類へ退避してからカテゴリ削除 */
+      updateSnippets(snippets.map(function(s){return s.catId===id?Object.assign({},s,{catId:null}):s;}));
+      saveSnipCats(snipCats.filter(function(x){return x.id!==id;}));
+    },null,{yesLabel:'削除',noLabel:'キャンセル',danger:true});
+  }
   /* マウント時に Firebase からスタンプ取得 (取得できればローカルを上書き) */
   useEffect(function(){
     var cfg=props.fbCfg;
@@ -5477,11 +5535,29 @@ function ImageAnnotator(props){
         if(d&&d.snippets&&Array.isArray(d.snippets)&&d.snippets.length>0){
           var arr=d.snippets.map(function(s){
             if(typeof s==='string')return {id:caUid(),text:s,color:'#ff9500'};
-            return {id:s.id||caUid(),text:s.text||'',color:s.color||'#ff9500'};
+            return {id:s.id||caUid(),text:s.text||'',color:s.color||'#ff9500',catId:(s.catId||null)};
           }).filter(function(s){return s.text;});
           if(arr.length>0){ setSnippets(arr); caSaveSnippets(arr); }
         }
       }).catch(function(){});
+      /* 2026-06-16: カテゴリ名/順序もここで取得 (DraftLibrary未マウントの直接起動・別端末初回でも反映)。
+         読み取り専用 (remが新しい時だけpull) なので single-writer を乱さない。 */
+      var _scLocalUt=0;
+      try{var _scv=parseInt(localStorage.getItem('ca_snip_cats_ut_v1')||'0',10);if(!isNaN(_scv))_scLocalUt=_scv;}catch(e){}
+      fetch(cfg.url.replace(/\/$/,'')+'/ca-snippet-cats-v.json'+auth)
+        .then(function(r){return r.ok?r.json():null;})
+        .then(function(v){
+          var remUt=(v&&typeof v.updatedAt==='number')?v.updatedAt:0;
+          if(remUt>_scLocalUt){
+            return fetch(cfg.url.replace(/\/$/,'')+'/ca-snippet-cats.json'+auth)
+              .then(function(r){return r.ok?r.json():null;})
+              .then(function(d){
+                if(!d||!Array.isArray(d.cats))return;
+                setSnipCats(d.cats); caSaveSnipCats(d.cats);
+                try{localStorage.setItem('ca_snip_cats_ut_v1',String(d.updatedAt||remUt));}catch(e){}
+              });
+          }
+        }).catch(function(){});
     }
     return function(){if(snipSaveTimerRef.current)clearTimeout(snipSaveTimerRef.current);};
   },[]);
@@ -6307,6 +6383,175 @@ function ImageAnnotator(props){
   /* simDisplayData は上の useMemo で定義済み (2026-06-15: 参照安定化) */
   /* 2026-06-15: stackMode時、上ペインは常に1m。単独モードでは従来どおりanalysisTf。 */
   var topTf=stackMode?'1m':analysisTf;
+  /* 2026-06-16: スタンプ配置パレットの1チップ (フラット/アコーディオン共用、絶対indexで選択) */
+  function renderPaletteChip(sn){
+    var snColor=sn.color||'#ff9500';
+    var abs=snippets.indexOf(sn);
+    return ce("button",{key:'snip_'+(sn.id||abs),
+      onClick:function(){setSelSnipIdx(abs);},
+      style:{padding:"4px 10px",fontSize:11,fontWeight:selSnipIdx===abs?700:400,
+        borderRadius:12,
+        border:selSnipIdx===abs?"2px solid "+snColor:"1px solid #555",
+        background:selSnipIdx===abs?snColor+"22":"#2a2a2a",
+        color:selSnipIdx===abs?snColor:"#ccc",
+        cursor:"pointer",whiteSpace:"nowrap",flexShrink:0,display:"flex",alignItems:"center",gap:4}},
+      ce("span",{style:{width:8,height:8,borderRadius:"50%",background:snColor,flexShrink:0,display:"inline-block"}}),
+      sn.text);
+  }
+  /* 2026-06-16: フラット配列上の並び替え (絶対index)。選択indexも追従。 */
+  function reorderSnip(from,to){
+    if(from==null||to==null||from<0||to<0||from===to)return;
+    var nArr=snippets.slice();
+    var r=nArr.splice(from,1)[0];
+    nArr.splice(to,0,r);
+    updateSnippets(nArr);
+    if(selSnipIdx===from)setSelSnipIdx(to);
+    else if(from<selSnipIdx&&to>=selSnipIdx)setSelSnipIdx(selSnipIdx-1);
+    else if(from>selSnipIdx&&to<=selSnipIdx)setSelSnipIdx(selSnipIdx+1);
+  }
+  /* 2026-06-16: スタンプ編集の1行 (フラット/アコーディオン共用)。abs=flat絶対index、▲▼はgroupItems内で完結。 */
+  function renderSnipRow(sn, groupItems){
+    var abs=snippets.indexOf(sn);
+    var ix=groupItems.indexOf(sn);
+    var isDrag=snipDragSt.drag===abs;
+    var isOver=snipDragSt.over===abs&&snipDragSt.drag!==null&&snipDragSt.drag!==abs;
+    var isNameEdit=snipNameEdit.idx===abs;
+    var isPaletteOpen=snipPaletteIdx===abs;
+    var snColor=sn.color||'#ff9500';
+    return ce("div",{key:'snipe_'+(sn.id||abs),
+      style:{display:"flex",flexDirection:"column",gap:2,
+        border:isOver?"2px dashed #007AFF":"2px solid transparent",
+        borderRadius:6,opacity:isDrag?0.3:1,padding:isOver?2:4,
+        background:isOver?"rgba(0,122,255,0.08)":"transparent",
+        transition:"background .1s"}},
+      ce("div",{style:{display:"flex",gap:6,alignItems:"center"}},
+        ce("span",{
+          draggable:!isNameEdit,
+          onDragStart:function(e){
+            if(isNameEdit)return;
+            try{e.dataTransfer.setData("t","");}catch(err){}
+            setSnipDragSt({drag:abs,over:null});
+          },
+          onDragOver:function(e){
+            e.preventDefault();
+            if(snipDragSt.drag!==null&&snipDragSt.drag!==abs)setSnipDragSt({drag:snipDragSt.drag,over:abs});
+          },
+          onDrop:function(e){
+            e.preventDefault();
+            /* 同カテゴリ内のみ並び替え (別カテゴリへはmove選択で) */
+            if(snipDragSt.drag!==null){
+              var dn=snippets[snipDragSt.drag];
+              if(dn&&caSnipBucket(dn,snipCats)===caSnipBucket(sn,snipCats))reorderSnip(snipDragSt.drag,abs);
+            }
+            setSnipDragSt({drag:null,over:null});
+          },
+          onDragEnd:function(){setSnipDragSt({drag:null,over:null});},
+          style:{width:18,height:18,display:"flex",alignItems:"center",justifyContent:"center",
+            cursor:isNameEdit?"default":"grab",fontSize:14,color:"#666",
+            userSelect:"none",flexShrink:0,borderRadius:3,background:"#1a1a2e"}
+        },"⠿"),
+        ce("div",{style:{display:"flex",flexDirection:"column",gap:1,flexShrink:0}},
+          ce("button",{disabled:ix<=0,onClick:function(){
+            reorderSnip(abs,snippets.indexOf(groupItems[ix-1]));
+          },style:{padding:"0 4px",fontSize:8,background:"none",border:"none",color:ix<=0?"#333":"#888",cursor:ix<=0?"default":"pointer",lineHeight:1}},"▲"),
+          ce("button",{disabled:ix>=groupItems.length-1,onClick:function(){
+            reorderSnip(abs,snippets.indexOf(groupItems[ix+1]));
+          },style:{padding:"0 4px",fontSize:8,background:"none",border:"none",color:ix>=groupItems.length-1?"#333":"#888",cursor:ix>=groupItems.length-1?"default":"pointer",lineHeight:1}},"▼")
+        ),
+        ce("span",{onClick:function(){
+          setSnipPaletteIdx(isPaletteOpen?null:abs);
+        },style:{width:18,height:18,borderRadius:"50%",background:snColor,
+          border:isPaletteOpen?"2px solid #007AFF":"2px solid #444",cursor:"pointer",flexShrink:0,
+          boxSizing:"border-box"}}),
+        isNameEdit
+          ? ce("input",{type:"text",autoFocus:true,
+              value:snipNameEdit.value,
+              onChange:function(e){setSnipNameEdit({idx:abs,value:e.target.value});},
+              onKeyDown:function(e){
+                if(e.key==='Enter'){
+                  var v=snipNameEdit.value.trim();
+                  if(v&&v!==sn.text){
+                    var nArr=snippets.slice();
+                    nArr[abs]=Object.assign({},sn,{text:v});
+                    updateSnippets(nArr);
+                  }
+                  setSnipNameEdit({idx:null,value:''});
+                } else if(e.key==='Escape'){
+                  setSnipNameEdit({idx:null,value:''});
+                }
+              },
+              onBlur:function(){
+                var v=snipNameEdit.value.trim();
+                if(v&&v!==sn.text){
+                  var nArr=snippets.slice();
+                  nArr[abs]=Object.assign({},sn,{text:v});
+                  updateSnippets(nArr);
+                }
+                setSnipNameEdit({idx:null,value:''});
+              },
+              style:{flex:1,padding:"3px 6px",fontSize:11,borderRadius:4,
+                border:"2px solid #007AFF",background:"#000",color:"#fff",outline:"none",
+                fontFamily:"inherit",fontWeight:600}})
+          : ce("span",{onClick:function(){
+              setSnipNameEdit({idx:abs,value:sn.text});
+              setSnipPaletteIdx(null);
+            },
+            title:"タップで編集",
+            style:{flex:1,fontSize:11,color:snColor,fontWeight:600,
+              overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
+              cursor:"text",padding:"3px 6px",borderRadius:4,
+              background:"rgba(255,255,255,0.03)"}},sn.text),
+        snipCats.length>0&&ce("select",{value:caSnipBucket(sn,snipCats),
+          onChange:function(e){moveSnipToCat(sn.id,e.target.value);},
+          onClick:function(e){e.stopPropagation();},
+          title:"カテゴリを移動",
+          style:{flexShrink:0,background:"#1a1a2e",color:"#bbb",border:"1px solid #444",
+            borderRadius:5,fontSize:10,padding:"2px 3px",outline:"none",maxWidth:88,fontFamily:"inherit"}},
+          snipCats.map(function(c){return ce("option",{key:c.id,value:c.id},c.name);})
+            .concat([ce("option",{key:'__uncat',value:'__uncat'},'未分類')])
+        ),
+        ce("button",{onClick:function(){
+          if(window.confirm('「'+sn.text+'」を削除しますか?')){
+            var nArr=snippets.slice(); nArr.splice(abs,1);
+            updateSnippets(nArr);
+            if(selSnipIdx>=nArr.length&&nArr.length>0)setSelSnipIdx(nArr.length-1);
+            if(snipNameEdit.idx===abs)setSnipNameEdit({idx:null,value:''});
+            if(snipPaletteIdx===abs)setSnipPaletteIdx(null);
+          }
+        },style:{padding:"2px 8px",fontSize:10,borderRadius:4,border:"none",
+          background:"#7f1d1d",color:"#fca5a5",cursor:"pointer",flexShrink:0}},"✕")
+      ),
+      isPaletteOpen && ce("div",{
+        style:{display:"flex",gap:6,padding:"4px 6px 4px 50px",alignItems:"center",
+          background:"rgba(0,0,0,0.2)",borderRadius:4,flexWrap:"wrap"}
+      },
+        SNIP_COLORS.map(function(c){
+          var isSel=snColor===c;
+          return ce("span",{key:'snc_'+c,
+            onClick:function(){
+              var nArr=snippets.slice();
+              nArr[abs]=Object.assign({},sn,{color:c});
+              updateSnippets(nArr);
+              setSnipPaletteIdx(null);
+            },
+            style:{width:20,height:20,borderRadius:"50%",background:c,
+              border:isSel?"3px solid #007AFF":"1.5px solid rgba(255,255,255,0.3)",
+              cursor:"pointer",flexShrink:0,boxSizing:"border-box",
+              boxShadow:isSel?"0 0 0 1px #000":"none"}});
+        })
+      )
+    );
+  }
+  /* 2026-06-16: 編集パネル用グループ (空カテゴリも表示=作成直後に追加できるよう)。
+     パレット/表示サイトは caGroupSnipsByCat (空カテゴリ省略) を使う。 */
+  function snipEditGroups(){
+    var out=snipCats.map(function(c){
+      return {cat:c, items:snippets.filter(function(s){return caSnipBucket(s,snipCats)===c.id;})};
+    });
+    var un=snippets.filter(function(s){return caSnipBucket(s,snipCats)==='__uncat';});
+    if(un.length)out.push({cat:null,items:un});
+    return out;
+  }
   return ce("div",{style:{position:"fixed",inset:0,background:"rgba(0,0,0,.94)",zIndex:10000,display:"flex",flexDirection:"column"}},
 
     /* ── Toolbar ── */
@@ -6537,34 +6782,44 @@ function ImageAnnotator(props){
       ),
       /* Row 3: スニペットパレット (snippetツール選択時のみ表示) */
       (analysisData && tool==='snippet') && ce("div",{
-        style:{display:"flex",gap:4,alignItems:"center",padding:"5px 8px",
-        flexWrap:"nowrap",overflowX:"auto",overflowY:"hidden",WebkitOverflowScrolling:"touch",
-        borderTop:"1px solid #2a2a2a",background:"#1a1025",touchAction:"pan-x"}},
-        snippets.map(function(sn,si){
-          var snColor=sn.color||'#ff9500';
-          return ce("button",{key:'snip_'+si,
-            onClick:function(){setSelSnipIdx(si);},
-            style:{padding:"4px 10px",fontSize:11,fontWeight:selSnipIdx===si?700:400,
-              borderRadius:12,
-              border:selSnipIdx===si?"2px solid "+snColor:"1px solid #555",
-              background:selSnipIdx===si?snColor+"22":"#2a2a2a",
-              color:selSnipIdx===si?snColor:"#ccc",
-              cursor:"pointer",whiteSpace:"nowrap",flexShrink:0,display:"flex",alignItems:"center",gap:4}},
-            ce("span",{style:{width:8,height:8,borderRadius:"50%",background:snColor,flexShrink:0,display:"inline-block"}}),
-            sn.text);
-        }),
-        ce("div",{style:{width:1,height:18,background:"#444",flexShrink:0,margin:"0 4px"}}),
+        style: snipCats.length===0
+          ?{display:"flex",gap:4,alignItems:"center",padding:"5px 8px",
+            flexWrap:"nowrap",overflowX:"auto",overflowY:"hidden",WebkitOverflowScrolling:"touch",
+            borderTop:"1px solid #2a2a2a",background:"#1a1025",touchAction:"pan-x"}
+          :{display:"flex",flexDirection:"column",gap:2,padding:"5px 8px",maxHeight:200,overflowY:"auto",
+            borderTop:"1px solid #2a2a2a",background:"#1a1025"}},
+        /* カテゴリ無し=従来のフラット / 有り=カテゴリ見出しのアコーディオン */
+        snipCats.length===0
+          ? snippets.map(renderPaletteChip)
+          : caGroupSnipsByCat(snippets,snipCats).map(function(g){
+              var cid=g.cat?g.cat.id:'__uncat';
+              var open=isCatOpen(cid);
+              return ce("div",{key:cid},
+                ce("div",{onClick:function(){toggleCat(cid);},
+                  style:{display:"flex",alignItems:"center",gap:5,cursor:"pointer",
+                    padding:"3px 2px",fontSize:11,fontWeight:700,color:"#c4b5fd",userSelect:"none"}},
+                  ce("span",{style:{fontSize:9,width:9,display:"inline-block",color:"#8b7fb0"}},open?"▼":"▶"),
+                  ce("span",null,g.cat?g.cat.name:'未分類'),
+                  ce("span",{style:{fontSize:10,color:"#7c6f9c",fontWeight:400}},'('+g.items.length+')')
+                ),
+                open&&ce("div",{style:{display:"flex",flexWrap:"wrap",gap:4,padding:"1px 0 4px 14px"}},
+                  g.items.map(renderPaletteChip))
+              );
+            }),
+        snipCats.length===0&&ce("div",{style:{width:1,height:18,background:"#444",flexShrink:0,margin:"0 4px"}}),
         ce("button",{onClick:function(){setSnippetEditing(!snippetEditing);},
           style:{padding:"4px 8px",fontSize:11,borderRadius:8,border:"1px solid #555",
             background:snippetEditing?"#4c1d95":"#2a2a2a",color:snippetEditing?"#c4b5fd":"#aaa",
-            cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}},
+            cursor:"pointer",whiteSpace:"nowrap",flexShrink:0,
+            alignSelf:snipCats.length===0?"auto":"flex-start",marginTop:snipCats.length===0?0:2}},
           snippetEditing?"✓ 完了":ce(Fragment,null,ce('span',{style:{display:'inline-block',transform:'rotate(-45deg)'}},'✏'),' 編集'))
       ),
       /* スニペット編集パネル (編集モード時のみ) */
       (analysisData && tool==='snippet' && snippetEditing) && ce("div",{
         style:{display:"flex",flexDirection:"column",gap:4,padding:"6px 10px",
         borderTop:"1px solid #2a2a2a",background:"#0f0a1a",maxHeight:280,overflowY:"auto",flexShrink:0}},
-        snippets.map(function(sn,si){
+        /* カテゴリ無し=従来のフラット行 / 有り=カテゴリ・アコーディオン */
+        (snipCats.length===0?snippets.map(function(sn,si){
           var isDrag=snipDragSt.drag===si;
           var isOver=snipDragSt.over===si&&snipDragSt.drag!==null&&snipDragSt.drag!==si;
           var isNameEdit=snipNameEdit.idx===si;
@@ -6690,7 +6945,57 @@ function ImageAnnotator(props){
               })
             )
           );
-        }),
+        })
+        :snipEditGroups().map(function(g){
+            var cid=g.cat?g.cat.id:'__uncat';
+            var open=isCatOpen(cid);
+            var isCatRen=g.cat&&snipCatRenId===g.cat.id;
+            var catIdx=g.cat?snipCats.map(function(c){return c.id;}).indexOf(g.cat.id):-1;
+            return ce("div",{key:cid,style:{borderTop:"1px solid #241a33",paddingTop:3,marginTop:2}},
+              ce("div",{style:{display:"flex",alignItems:"center",gap:4,padding:"1px 0"}},
+                ce("span",{onClick:function(){toggleCat(cid);},style:{cursor:"pointer",fontSize:9,width:11,color:"#8b7fb0",flexShrink:0,textAlign:"center"}},open?"▼":"▶"),
+                isCatRen
+                  ?ce("input",{autoFocus:true,value:snipCatRenTxt,
+                      onChange:function(e){setSnipCatRenTxt(e.target.value);},
+                      onKeyDown:function(e){if(e.key==='Enter')commitSnipCatRename(g.cat.id);if(e.key==='Escape'){setSnipCatRenId(null);setSnipCatRenTxt('');}},
+                      onBlur:function(){commitSnipCatRename(g.cat.id);},
+                      style:{flex:1,background:"#222",border:"1px solid #555",color:"#ddd",fontSize:11,borderRadius:4,padding:"2px 5px",outline:"none"}})
+                  :ce("span",{onClick:function(){toggleCat(cid);},
+                      onDoubleClick:function(){if(g.cat){setSnipCatRenId(g.cat.id);setSnipCatRenTxt(g.cat.name);}},
+                      style:{flex:1,cursor:"pointer",fontSize:11,fontWeight:700,color:"#c4b5fd",userSelect:"none",
+                        overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},
+                      (g.cat?g.cat.name:'未分類')+' ('+g.items.length+')'),
+                (g.cat&&!isCatRen)&&ce("button",{onClick:function(){setSnipCatRenId(g.cat.id);setSnipCatRenTxt(g.cat.name);},title:"カテゴリ名を変更",
+                  style:{padding:"0 3px",fontSize:10,background:"none",border:"none",color:"#93c5fd",cursor:"pointer",lineHeight:1,flexShrink:0}},
+                  ce('span',{style:{display:'inline-block',transform:'rotate(-45deg)'}},'✏')),
+                (g.cat&&!isCatRen)&&ce("button",{disabled:catIdx<=0,onClick:function(){if(catIdx>0){var n=snipCats.slice();var t=n[catIdx];n[catIdx]=n[catIdx-1];n[catIdx-1]=t;saveSnipCats(n);}},title:"カテゴリを上へ",
+                  style:{padding:"0 2px",fontSize:9,background:"none",border:"none",color:catIdx<=0?"#333":"#888",cursor:catIdx<=0?"default":"pointer",lineHeight:1,flexShrink:0}},"▲"),
+                (g.cat&&!isCatRen)&&ce("button",{disabled:catIdx>=snipCats.length-1,onClick:function(){if(catIdx<snipCats.length-1){var n=snipCats.slice();var t=n[catIdx];n[catIdx]=n[catIdx+1];n[catIdx+1]=t;saveSnipCats(n);}},title:"カテゴリを下へ",
+                  style:{padding:"0 2px",fontSize:9,background:"none",border:"none",color:catIdx>=snipCats.length-1?"#333":"#888",cursor:catIdx>=snipCats.length-1?"default":"pointer",lineHeight:1,flexShrink:0}},"▼"),
+                (g.cat&&!isCatRen)&&ce("button",{onClick:function(){deleteSnipCategory(g.cat.id);},title:"カテゴリを削除",
+                  style:{padding:"0 4px",fontSize:13,background:"none",border:"none",color:"#f87171",cursor:"pointer",lineHeight:1,flexShrink:0}},"×")
+              ),
+              open&&ce("div",{style:{paddingLeft:4}},
+                g.items.map(function(sn){return renderSnipRow(sn,g.items);}),
+                ce("div",{style:{display:"flex",gap:4,alignItems:"center",marginTop:1,marginBottom:3}},
+                  ce("input",{type:"text",placeholder:"＋このカテゴリに追加…",
+                    onKeyDown:function(e){if(e.key==='Enter'){var v=e.target.value.trim();if(v){updateSnippets(snippets.concat([{id:caUid(),text:v,color:'#ff9500',catId:(g.cat?g.cat.id:null)}]));e.target.value='';}}},
+                    style:{flex:1,padding:"3px 7px",fontSize:10,borderRadius:6,border:"1px solid #3a3050",background:"#1a1a2e",color:"#ccc",outline:"none",fontFamily:"inherit"}})
+                )
+              )
+            );
+          })),
+        /* +カテゴリ追加 (フラット時もここから最初のカテゴリを作成可能) */
+        ce("div",{style:{display:"flex",gap:4,alignItems:"center",marginTop:4}},
+          addingSnipCat
+            ?ce("input",{autoFocus:true,value:newSnipCatTxt,placeholder:"カテゴリ名…",
+                onChange:function(e){setNewSnipCatTxt(e.target.value);},
+                onKeyDown:function(e){if(e.key==='Enter')addSnipCategory();if(e.key==='Escape'){setAddingSnipCat(false);setNewSnipCatTxt('');}},
+                onBlur:function(){if(newSnipCatTxt.trim())addSnipCategory();else setAddingSnipCat(false);},
+                style:{flex:1,padding:"4px 8px",fontSize:11,borderRadius:6,border:"1px solid #6366f1",background:"#1a1a2e",color:"#ddd",outline:"none"}})
+            :ce("button",{onClick:function(){setAddingSnipCat(true);},
+                style:{padding:"4px 10px",fontSize:11,borderRadius:6,border:"1px dashed #555",background:"transparent",color:"#a78bfa",cursor:"pointer",fontFamily:"inherit",flexShrink:0}},"＋カテゴリ")
+        ),
         ce("div",{style:{display:"flex",gap:4,alignItems:"center",marginTop:2}},
           ce("input",{id:"ca_snip_add_input",type:"text",placeholder:"新しいスタンプを追加…",
             onKeyDown:function(e){
@@ -8914,6 +9219,12 @@ function caGroupDefsByCat(defs, cats){
   if(uncat.items.length>0)out.push(uncat);
   return out;
 }
+/* 2026-06-16: スタンプ用カテゴリ id/解決/グループ化 (タグの汎用helperを再利用) */
+function caNewSnipCatId(){
+  return 'scat_'+Date.now()+'_'+Math.floor(Math.random()*1e6);
+}
+function caSnipBucket(s, cats){ return caTagBucket(s, cats); }
+function caGroupSnipsByCat(snips, cats){ return caGroupDefsByCat(snips, cats); }
 
 /* 画像ファイル → {base64, mt} */
 function caFileToImg(file){
@@ -11929,6 +12240,32 @@ function DraftLibrary(props){
           fetch(base+'/ca-tag-cats.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
             body:JSON.stringify({cats:localCats,updatedAt:ut})}).catch(function(){});
           fetch(base+'/ca-tag-cats-v.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({updatedAt:ut})}).catch(function(){});
+        }
+      }).catch(function(){});
+
+    /* 2026-06-16: スタンプカテゴリ — snippet同期と独立した版管理マージ (専用watermark / 別チェーン) */
+    var localSnipCatsUt=0;
+    try{var _sc=parseInt(localStorage.getItem('ca_snip_cats_ut_v1')||'0',10);if(!isNaN(_sc))localSnipCatsUt=_sc;}catch(e){}
+    var localSnipCats=caLoadSnipCats();
+    fetch(base+'/ca-snippet-cats-v.json'+a)
+      .then(function(r){return r.ok?r.json():null;})
+      .then(function(v){
+        var remUt=(v&&typeof v.updatedAt==='number')?v.updatedAt:0;
+        if(remUt>localSnipCatsUt){
+          return fetch(base+'/ca-snippet-cats.json'+a)
+            .then(function(r){return r.ok?r.json():null;})
+            .then(function(d){
+              if(!d||!Array.isArray(d.cats))return;
+              caSaveSnipCats(d.cats);
+              try{localStorage.setItem('ca_snip_cats_ut_v1',String(d.updatedAt||remUt));}catch(e){}
+            });
+        } else if(localSnipCats.length>0){
+          var ut=localSnipCatsUt||Date.now();
+          try{localStorage.setItem('ca_snip_cats_ut_v1',String(ut));}catch(e){}
+          fetch(base+'/ca-snippet-cats.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({cats:localSnipCats,updatedAt:ut})}).catch(function(){});
+          fetch(base+'/ca-snippet-cats-v.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
             body:JSON.stringify({updatedAt:ut})}).catch(function(){});
         }
       }).catch(function(){});
