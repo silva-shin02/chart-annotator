@@ -6794,15 +6794,18 @@ function ImageAnnotator(props){
           : caGroupSnipsByCat(snippets,snipCats).map(function(g){
               var cid=g.cat?g.cat.id:'__uncat';
               var open=isCatOpen(cid);
-              return ce("div",{key:cid},
+              /* 2026-06-17: カテゴリ毎に「見出し＋チップ横スクロール」を1行に (縦幅圧縮) */
+              return ce("div",{key:cid,style:{display:"flex",alignItems:"center",gap:6,minWidth:0}},
                 ce("div",{onClick:function(){toggleCat(cid);},
-                  style:{display:"flex",alignItems:"center",gap:5,cursor:"pointer",
+                  style:{display:"flex",alignItems:"center",gap:4,cursor:"pointer",flexShrink:0,whiteSpace:"nowrap",
                     padding:"3px 2px",fontSize:11,fontWeight:700,color:"#c4b5fd",userSelect:"none"}},
                   ce("span",{style:{fontSize:9,width:9,display:"inline-block",color:"#8b7fb0"}},open?"▼":"▶"),
                   ce("span",null,g.cat?g.cat.name:'未分類'),
                   ce("span",{style:{fontSize:10,color:"#7c6f9c",fontWeight:400}},'('+g.items.length+')')
                 ),
-                open&&ce("div",{style:{display:"flex",flexWrap:"wrap",gap:4,padding:"1px 0 4px 14px"}},
+                open&&ce("div",{style:{display:"flex",flexWrap:"nowrap",gap:4,flex:"1 1 auto",minWidth:0,
+                  overflowX:"auto",overflowY:"hidden",WebkitOverflowScrolling:"touch",touchAction:"pan-x",
+                  padding:"1px 0 2px 0"}},
                   g.items.map(renderPaletteChip))
               );
             }),
