@@ -9132,6 +9132,45 @@ function extractOpeningOutcome(analysisData, tf){
     ret15:retAt(15), ret30:retAt(30)};
 }
 
+/* ─── 2026-06-18: 範囲指定から検索 (サブシーケンス一致) 純関数 ─────
+   任意区間(枠)の値動きを、各チャートを窓スライドして最も似た位置を探す。
+   path: 窓先頭からの %変化(pct) or z-score(z)。比較: euclid(RMSE,%変化向き)/cos(z-score向き)/dtw。 */
+/* 全日1mの {closes, times} を抽出 (サブシーケンス検索＋一致箇所表示用にキャッシュ) */
+function extractSeries1m(analysisData){
+  var bars=(analysisData&&analysisData.bars_1m)||[];
+  var closes=[], times=[];
+  for(var i=0;i<bars.length;i++){
+    var b=bars[i];
+    if(typeof b.c==='number'){closes.push(b.c); times.push(b.t||'');}
+  }
+  return {closes:closes, times:times};
+}
+/* closes[i0..i1] を path 化 (norm 'pct'=窓先頭比%変化 / 'z'=z-score) */
+function patPathFromCloses(closes, i0, i1, norm){
+  if(!closes||i1<i0||i0<0||i1>=closes.length)return null;
+  var seg=closes.slice(i0, i1+1);
+  if(seg.length<2)return null;
+  if(norm==='z'){ var z=_patZscore(seg); return z.normalized; }
+  var base=seg[0]; if(!(base>0))return null;
+  var out=new Array(seg.length);
+  for(var i=0;i<seg.length;i++)out[i]=(seg[i]-base)/base;
+  return out;
+}
+/* candCloses を queryPath.length 本の窓でスライドし最も似た位置を返す。{score, offset, len} | null */
+function patSubseqBest(queryPath, candCloses, norm, algo){
+  if(!queryPath||!queryPath.length||!candCloses)return null;
+  var L=queryPath.length;
+  if(candCloses.length<L)return null;
+  var best=null;
+  for(var j=0; j+L<=candCloses.length; j++){
+    var w=patPathFromCloses(candCloses, j, j+L-1, norm);
+    if(!w)continue;
+    var s=patSignatureScore(w, queryPath, algo);
+    if(!best||s.score>best.score)best={score:s.score, offset:j, len:L};
+  }
+  return best;
+}
+
 /* C8a: 起動時に旧 ca_data_* localStorageエントリを一括削除 (容量解放) */
 (function _cleanupLegacyCaData(){
   try{
@@ -10748,6 +10787,117 @@ function CaChartCard(props){
    - クエリ: meta から1件選択 (プルダウン or エディタからの自動指定)
    - 類似度: コサイン or DTW (アルゴリズム切替UI)
    - サムネ: 結果リスト・クエリプレビューとも 160×100 (旧80×50の2倍) */
+/* ─── 2026-06-18: 範囲指定ビュー — クエリchartのローソクを静的描画し、移動/リサイズ可能なHTML枠で区間を選ぶ ───
+   props: queryId, fbCfg, onSelect({i0,i1,closes,times,t0,t1}) */
+function PatRangeBox(props){
+  var queryId=props.queryId, onSelect=props.onSelect||function(){};
+  var sBars=useState(null); var bars=sBars[0], setBars=sBars[1];
+  var canvasRef=useRef(null), wrapRef=useRef(null), dragRef=useRef(null), onSelRef=useRef(onSelect);
+  onSelRef.current=onSelect;
+  var W=560, H=240, padL=8, padR=8, padT=8, padB=8;
+  var plotL=padL, plotW=W-padL-padR, plotT=padT, plotH=H-padT-padB;
+  var sBox=useState({x:plotL+plotW*0.34, y:plotT+plotH*0.18, w:plotW*0.3, h:plotH*0.6});
+  var box=sBox[0], setBox=sBox[1];
+  /* クエリデータ読込 */
+  useEffect(function(){
+    if(!queryId){setBars(null);return;}
+    var cancelled=false;
+    caLoadDataAsync(queryId, function(d){ if(cancelled)return; setBars((d&&d.analysisData&&d.analysisData.bars_1m)||[]); });
+    return function(){cancelled=true;};
+  },[queryId]);
+  var closes=[], times=[];
+  (bars||[]).forEach(function(b){ if(typeof b.c==='number'){closes.push(b.c);times.push(b.t||'');} });
+  var N=closes.length;
+  function xToIdx(x){ if(N<2)return 0; var r=(x-plotL)/plotW; return Math.max(0,Math.min(N-1,Math.round(r*(N-1)))); }
+  /* 枠変化→選択を親へ通知 */
+  useEffect(function(){
+    if(N<2){onSelRef.current(null);return;}
+    var i0=xToIdx(box.x), i1=xToIdx(box.x+box.w);
+    if(i1<i0){var t=i0;i0=i1;i1=t;}
+    if(i1-i0<1)i1=Math.min(N-1,i0+1);
+    onSelRef.current({i0:i0,i1:i1,closes:closes.slice(),times:times.slice(),t0:times[i0],t1:times[i1]});
+  },[box, N]);
+  /* キャンバス描画 (ローソク) */
+  useEffect(function(){
+    var cv=canvasRef.current; if(!cv)return;
+    var dpr=window.devicePixelRatio||1;
+    cv.width=W*dpr; cv.height=H*dpr;
+    var ctx=cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.fillStyle='#08080a'; ctx.fillRect(0,0,W,H);
+    if(N<2){ctx.fillStyle='#555';ctx.font='12px sans-serif';ctx.fillText('読み込み中…',12,20);return;}
+    var mn=Infinity,mx=-Infinity;
+    (bars||[]).forEach(function(b){ var l=(typeof b.l==='number')?b.l:Math.min(b.o,b.c), h=(typeof b.h==='number')?b.h:Math.max(b.o,b.c); if(l<mn)mn=l; if(h>mx)mx=h; });
+    if(!(mx>mn))mx=mn+1;
+    function yv(p){return plotT+(mx-p)/(mx-mn)*plotH;}
+    var bw=plotW/N;
+    for(var i=0;i<N;i++){
+      var b=bars[i]; if(!b)continue;
+      var cx=plotL+bw*(i+0.5), up=(b.c>=b.o), col=up?'#ff0054':'#11ded9';
+      var hh=(typeof b.h==='number')?b.h:Math.max(b.o,b.c), ll=(typeof b.l==='number')?b.l:Math.min(b.o,b.c);
+      ctx.strokeStyle=col; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(cx,yv(hh)); ctx.lineTo(cx,yv(ll)); ctx.stroke();
+      ctx.fillStyle=col; var yo=yv(b.o),yc=yv(b.c), top=Math.min(yo,yc), bh2=Math.max(1,Math.abs(yo-yc));
+      ctx.fillRect(cx-Math.max(0.5,bw*0.3), top, Math.max(1,bw*0.6), bh2);
+    }
+  },[bars, N]);
+  function evtXY(e){
+    var t=(e.touches&&e.touches[0])||(e.changedTouches&&e.changedTouches[0])||e;
+    var r=wrapRef.current?wrapRef.current.getBoundingClientRect():{left:0,top:0};
+    return {x:t.clientX-r.left, y:t.clientY-r.top};
+  }
+  function onMove(e){
+    var d=dragRef.current; if(!d)return; e.preventDefault();
+    var p=evtXY(e), dx=p.x-d.sx, dy=p.y-d.sy, nx=d.ox,ny=d.oy,nw=d.ow,nh=d.oh, MIN=18;
+    if(d.mode==='move'){ nx=d.ox+dx; ny=d.oy+dy; }
+    else{ var h=d.handle;
+      if(h.indexOf('w')>=0){ nx=d.ox+dx; nw=d.ow-dx; }
+      if(h.indexOf('e')>=0){ nw=d.ow+dx; }
+      if(h.indexOf('n')>=0){ ny=d.oy+dy; nh=d.oh-dy; }
+      if(h.indexOf('s')>=0){ nh=d.oh+dy; }
+      if(nw<MIN){ if(h.indexOf('w')>=0)nx=d.ox+d.ow-MIN; nw=MIN; }
+      if(nh<MIN){ if(h.indexOf('n')>=0)ny=d.oy+d.oh-MIN; nh=MIN; }
+    }
+    if(nx<plotL)nx=plotL; if(ny<plotT)ny=plotT;
+    if(nx+nw>plotL+plotW)nx=plotL+plotW-nw; if(ny+nh>plotT+plotH)ny=plotT+plotH-nh;
+    if(nx<plotL)nx=plotL; if(ny<plotT)ny=plotT;
+    setBox({x:nx,y:ny,w:nw,h:nh});
+  }
+  function onUp(){
+    dragRef.current=null;
+    window.removeEventListener('mousemove',onMove); window.removeEventListener('mouseup',onUp);
+    window.removeEventListener('touchmove',onMove); window.removeEventListener('touchend',onUp);
+  }
+  function onDown(e, mode, handle){
+    e.preventDefault(); e.stopPropagation();
+    var p=evtXY(e);
+    dragRef.current={mode:mode, handle:handle, sx:p.x, sy:p.y, ox:box.x, oy:box.y, ow:box.w, oh:box.h};
+    window.addEventListener('mousemove',onMove); window.addEventListener('mouseup',onUp);
+    window.addEventListener('touchmove',onMove,{passive:false}); window.addEventListener('touchend',onUp);
+  }
+  var i0=xToIdx(box.x), i1=xToIdx(box.x+box.w);
+  var hStyle={position:'absolute',width:10,height:10,background:'#3b82f6',border:'1px solid #fff',borderRadius:2,zIndex:3,boxSizing:'border-box'};
+  function handle(h, cx, cy, cur){
+    return ce('div',{key:h, onMouseDown:function(e){onDown(e,'resize',h);}, onTouchStart:function(e){onDown(e,'resize',h);},
+      style:Object.assign({},hStyle,{left:cx-5,top:cy-5,cursor:cur})});
+  }
+  return ce('div',{ref:wrapRef, style:{position:'relative',width:W,height:H,maxWidth:'100%',userSelect:'none',touchAction:'none',
+    borderRadius:8,overflow:'hidden',border:'1px solid #2a2a33',flexShrink:0}},
+    ce('canvas',{ref:canvasRef, style:{width:W,height:H,display:'block'}}),
+    ce('div',{onMouseDown:function(e){onDown(e,'move');}, onTouchStart:function(e){onDown(e,'move');},
+      style:{position:'absolute',left:box.x,top:box.y,width:box.w,height:box.h,
+        background:'rgba(59,130,246,0.12)',border:'2px solid #3b82f6',cursor:'move',zIndex:2,boxSizing:'border-box'}}),
+    handle('nw',box.x,box.y,'nwse-resize'),
+    handle('ne',box.x+box.w,box.y,'nesw-resize'),
+    handle('sw',box.x,box.y+box.h,'nesw-resize'),
+    handle('se',box.x+box.w,box.y+box.h,'nwse-resize'),
+    handle('n',box.x+box.w/2,box.y,'ns-resize'),
+    handle('s',box.x+box.w/2,box.y+box.h,'ns-resize'),
+    handle('w',box.x,box.y+box.h/2,'ew-resize'),
+    handle('e',box.x+box.w,box.y+box.h/2,'ew-resize'),
+    (N>=2)&&ce('div',{style:{position:'absolute',left:6,bottom:4,fontSize:10,color:'#93c5fd',
+      background:'rgba(0,0,0,0.55)',padding:'2px 6px',borderRadius:4,zIndex:4}},
+      '選択: '+(times[i0]||'?')+' 〜 '+(times[i1]||'?')+' ('+(i1-i0+1)+'本)')
+  );
+}
 function PatternSearchModal(props){
   var open=props.open, onClose=props.onClose, meta=props.meta||[], fbCfg=props.fbCfg||{};
   var tickersList=props.tickers||[];  /* 2026-05-03: 対象銘柄選択用 */
@@ -10766,6 +10916,11 @@ function PatternSearchModal(props){
   var sFM=useState('move');      var featMode=sFM[0], setFeatMode=sFM[1];    /* move(足の動き)/close(終値) */
   var sNM=useState('pct');       var normMode=sNM[0], setNormMode=sNM[1];    /* pct(%変化)/z(z-score) */
   var sAlgo=useState('euclid');  var simAlgo=sAlgo[0], setSimAlgo=sAlgo[1];  /* euclid/cos/dtw */
+  /* 2026-06-18: 範囲指定から検索 (サブシーケンス) */
+  var sRM=useState(false);       var rangeMode=sRM[0], setRangeMode=sRM[1];
+  var sRSel=useState(null);      var rangeSel=sRSel[0], setRangeSel=sRSel[1];     /* {i0,i1,closes,times,t0,t1} */
+  var sRRes=useState(null);      var rangeResults=sRRes[0], setRangeResults=sRRes[1];
+  var sRSearch=useState(false);  var rSearching=sRSearch[0], setRSearching=sRSearch[1];
   /* クエリ draft id */
   var sQ=useState(null);   var queryDraftId=sQ[0], setQueryDraftId=sQ[1];
   /* 2026-05-03: B1 - クエリ選択UI 状態 (null=非表示, 'tickers'=銘柄一覧, 'charts'=チャート一覧) */
@@ -10833,7 +10988,8 @@ function PatternSearchModal(props){
                     && cached.vec_features_1m!==undefined
                     && cached.vec_features_5m!==undefined
                     && cached.head_ohlc_1m!==undefined
-                    && cached.outcome_1m!==undefined;
+                    && cached.outcome_1m!==undefined
+                    && cached.series_1m!==undefined;
         if(cacheValid){
           featsRef.current[m.id]=cached;
           setDoneCount(i);
@@ -10859,6 +11015,7 @@ function PatternSearchModal(props){
               vec_features_1m:c1m, vec_features_5m:c5m,
               head_ohlc_1m:extractHeadOhlc(d.analysisData,'1m',150),
               outcome_1m:extractOpeningOutcome(d.analysisData,'1m'),
+              series_1m:extractSeries1m(d.analysisData),
               computedAt:Date.now()
             };
             featsRef.current[m.id]=rec;
@@ -10974,6 +11131,101 @@ function PatternSearchModal(props){
     }
     return ce("svg",{width:MINI_W,height:MINI_H,viewBox:"0 0 "+MINI_W+" "+MINI_H,
       style:{borderRadius:6,background:"#08080a",flexShrink:0,border:"1px solid #2a2a33"}}, els);
+  }
+  /* 2026-06-18: 範囲検索結果ミニ — 候補の終値ラインに一致区間[offset,offset+len)を赤枠表示 */
+  var MM_W=200, MM_H=72;
+  function renderMatchMini(closes, offset, len){
+    var cl=closes||[];
+    if(cl.length<2)return ce("div",{style:{width:MM_W,height:MM_H,background:"#0a0a0a",borderRadius:6,flexShrink:0}});
+    var mn=Infinity,mx=-Infinity,i;
+    for(i=0;i<cl.length;i++){if(cl[i]<mn)mn=cl[i];if(cl[i]>mx)mx=cl[i];}
+    if(!(mx>mn))mx=mn+1;
+    var n=cl.length, padY=4;
+    function X(k){return (k/(n-1))*MM_W;}
+    function Yv(p){return padY+(mx-p)/(mx-mn)*(MM_H-padY*2);}
+    var pts=[];
+    for(i=0;i<n;i++)pts.push(X(i).toFixed(1)+","+Yv(cl[i]).toFixed(1));
+    var bx=X(offset), bx2=X(Math.min(n-1,offset+len-1));
+    return ce("svg",{width:MM_W,height:MM_H,viewBox:"0 0 "+MM_W+" "+MM_H,
+      style:{borderRadius:6,background:"#08080a",flexShrink:0,border:"1px solid #2a2a33"}},
+      ce("rect",{x:bx,y:0,width:Math.max(2,bx2-bx),height:MM_H,fill:"#ef4444",fillOpacity:0.16,stroke:"#ef4444",strokeWidth:1.5}),
+      ce("polyline",{points:pts.join(" "),fill:"none",stroke:"#c9c9d2",strokeWidth:1})
+    );
+  }
+  /* 枠の選択区間を全候補にスライド一致させる (サブシーケンス検索) */
+  function runRangeSearch(){
+    if(!rangeSel)return;
+    var qPath=patPathFromCloses(rangeSel.closes, rangeSel.i0, rangeSel.i1, normMode);
+    if(!qPath){setRangeResults([]);return;}
+    setRSearching(true);
+    setTimeout(function(){
+      var out=[];
+      for(var k in featsRef.current){
+        if(k===queryDraftId)continue;
+        var rec=featsRef.current[k];
+        if(!rec||!rec.series_1m||!rec.series_1m.closes)continue;
+        if(rec.ticker && !selectedTickers[rec.ticker])continue;
+        var best=patSubseqBest(qPath, rec.series_1m.closes, normMode, simAlgo);
+        if(!best)continue;
+        var tt=rec.series_1m.times||[];
+        out.push({rec:rec, score:best.score, offset:best.offset, len:best.len,
+          t0:tt[best.offset]||'', t1:tt[Math.min(tt.length-1,best.offset+best.len-1)]||''});
+      }
+      out.sort(function(a,b){return b.score-a.score;});
+      setRangeResults(out);
+      setRSearching(false);
+    },20);
+  }
+  function buildRangeOverlay(){
+    return ce("div",{style:{position:"fixed",inset:0,background:"rgba(0,0,0,0.9)",zIndex:9600,
+      display:"flex",alignItems:"center",justifyContent:"center",padding:16}},
+      ce("div",{style:{background:"#161616",border:"1px solid #4a1e5f",borderRadius:12,
+        width:"100%",maxWidth:"min(960px,95vw)",maxHeight:"92vh",display:"flex",flexDirection:"column",overflow:"hidden"}},
+        ce("div",{style:{padding:"12px 16px",borderBottom:"1px solid #2a2a2a",display:"flex",alignItems:"center",gap:10,background:"#1a1029"}},
+          ce("button",{onClick:function(){setRangeMode(false);},
+            style:Object.assign({},BT,{fontSize:13,color:"#c4a5f7",background:"#2a1a3a",padding:"5px 10px",borderRadius:6})},"← 戻る"),
+          ce("span",{style:{fontSize:15,fontWeight:700,color:"#c4a5f7",flex:1}},"▣ 範囲指定から検索"),
+          ce("button",{onClick:function(){cancelRef.current=true;onClose();},
+            style:Object.assign({},BT,{fontSize:20,color:"#888",background:"none",padding:"0 6px",lineHeight:1})},"×")
+        ),
+        ce("div",{style:{padding:"12px 16px",borderBottom:"1px solid #2a2a2a"}},
+          ce("div",{style:{fontSize:11,color:"#9aa",marginBottom:6}},"クエリchart上で四角枠を移動・リサイズして、似せたい区間を囲ってください"),
+          ce("div",{style:{display:"flex",justifyContent:"center",marginBottom:10}},
+            ce(PatRangeBox,{queryId:queryDraftId, fbCfg:fbCfg, onSelect:setRangeSel})),
+          patPill("比較",[['pct','大きさも(%変化)'],['z','形のみ(z-score)']],normMode,setNormMode),
+          patPill("距離", normMode==='z'?[['cos','コサイン'],['dtw','DTW']]:[['euclid','ユークリッド'],['cos','コサイン'],['dtw','DTW']], simAlgo, setSimAlgo),
+          ce("button",{onClick:runRangeSearch, disabled:(!rangeSel||rSearching),
+            style:Object.assign({},BT,{marginTop:6,width:"100%",fontSize:13,fontWeight:700,padding:"10px",borderRadius:8,
+              background:(!rangeSel||rSearching)?"#333":"#4c1d95",color:(!rangeSel||rSearching)?"#777":"#ddd6fe",
+              border:"1px solid #a78bfa"})},
+            rSearching?"検索中…":"🔍 この枠の動きで検索")
+        ),
+        ce("div",{style:{flex:1,overflowY:"auto",padding:"10px 16px"}},
+          (rangeResults===null)&&ce("div",{style:{fontSize:12,color:"#6e7681",textAlign:"center",padding:"24px 0"}},
+            "枠を決めて「検索」を押すと、似た動きの場所が出ます"),
+          (rangeResults&&rangeResults.length===0)&&ce("div",{style:{fontSize:12,color:"#6e7681",textAlign:"center",padding:"24px 0"}},
+            "該当が見つかりませんでした"),
+          (rangeResults&&rangeResults.length>0)&&ce("div",{style:{fontSize:11,color:"#888",marginBottom:8}},
+            "結果: "+rangeResults.length+"件 (類似度降順)"),
+          (rangeResults||[]).map(function(r){
+            return ce("div",{key:r.rec.id,
+              onClick:function(){cancelRef.current=true;onOpenChart(r.rec.id);onClose();},
+              style:{display:"flex",gap:12,padding:"10px",borderRadius:8,
+                background:"#1a1a1a",border:"1px solid #2a2a2a",marginBottom:8,cursor:"pointer",alignItems:"center"}},
+              renderMatchMini(r.rec.series_1m&&r.rec.series_1m.closes, r.offset, r.len),
+              ce("div",{style:{flex:1,minWidth:0}},
+                ce("div",{style:{fontSize:14,color:"#e6edf3",fontWeight:700}},r.rec.ticker||"(銘柄なし)"),
+                ce("div",{style:{fontSize:12,color:"#8b949e",marginTop:3}},r.rec.date||""),
+                ce("div",{style:{display:"flex",gap:6,marginTop:6,flexWrap:"wrap"}},
+                  patTagChip("一致 "+(r.t0||'?')+"–"+(r.t1||'?'),'info'))
+              ),
+              ce("div",{style:{fontSize:22,fontWeight:700,color:"#c4a5f7",minWidth:64,textAlign:"right"}},
+                r.score+"%")
+            );
+          })
+        )
+      )
+    );
   }
 
   /* 2026-05-03: B1 - クエリ選択ピッカー (銘柄一覧 → チャート一覧の2段階)
@@ -11225,7 +11477,10 @@ function PatternSearchModal(props){
           patPill("区間",[['open5','寄り付き5分'],['open15','15分'],['open30','30分'],['am','前場'],['all','全日']],winId,setWinId),
           (winId!=='all')&&patPill("特徴",[['move','足の動き'],['close','終値']],featMode,setFeatMode),
           (winId!=='all')&&patPill("正規化",[['pct','%変化'],['z','z-score']],normMode,setNormMode),
-          patPill("距離", winId==='all'?[['cos','コサイン'],['dtw','DTW']]:[['euclid','ユークリッド'],['cos','コサイン'],['dtw','DTW']], simAlgo, setSimAlgo)
+          patPill("距離", winId==='all'?[['cos','コサイン'],['dtw','DTW']]:[['euclid','ユークリッド'],['cos','コサイン'],['dtw','DTW']], simAlgo, setSimAlgo),
+          ce("button",{onClick:function(){setRangeResults(null);setRangeSel(null);setRangeMode(true);},
+            style:Object.assign({},BT,{marginTop:6,fontSize:12,fontWeight:700,padding:"6px 12px",borderRadius:8,
+              background:"#1e3a5f",color:"#93c5fd",border:"1px solid #3b82f6"})},"▣ 範囲指定から検索（枠で部分一致）")
         ),
         /* クエリ選択前のヒント */
         !queryDraftId && ce("div",{style:{fontSize:11,color:"#c4a5f7",padding:"6px 0"}},
@@ -11301,7 +11556,8 @@ function PatternSearchModal(props){
     )
     ),
     /* 2026-05-03: B1 - クエリ選択ピッカー (銘柄一覧→チャート一覧) */
-    buildPickerOverlay()
+    buildPickerOverlay(),
+    rangeMode && buildRangeOverlay()
   );
 }
 
@@ -13135,7 +13391,8 @@ function DraftLibrary(props){
                     && cached.vec_features_1m!==undefined
                     && cached.vec_features_5m!==undefined
                     && cached.head_ohlc_1m!==undefined
-                    && cached.outcome_1m!==undefined;
+                    && cached.outcome_1m!==undefined
+                    && cached.series_1m!==undefined;
         if(cacheValid){
           /* キャッシュ済 → スキップ */
           setTimeout(processNext, 0);
@@ -13159,6 +13416,7 @@ function DraftLibrary(props){
               vec_features_1m:c1m, vec_features_5m:c5m,
               head_ohlc_1m:extractHeadOhlc(d.analysisData,'1m',150),
               outcome_1m:extractOpeningOutcome(d.analysisData,'1m'),
+              series_1m:extractSeries1m(d.analysisData),
               computedAt:Date.now()
             });
           }
