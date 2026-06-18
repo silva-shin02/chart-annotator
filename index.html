@@ -6024,9 +6024,71 @@ function ImageAnnotator(props){
 
   /* 2026-04-20 Step3: commit() 撤去 (画像mode専用、呼び出しゼロ) */
 
-  // タイマークリーンアップ
+  /* 2026-06-18: 編集中のストローク/データをローカルIDBにも保存する経路を追加。
+     従来の永続化は triggerAutoSave (Firebase専用・debounce1500ms・paused/draftId無/競合では書かない) のみで、
+     ストローク変更時のローカル保存が無かった → 終了確認を通さずリロード/タブ閉じ(Ctrl+Shift+R含む)すると消えていた。
+       (b) 変更ごとにローカルIDBへ保存(短いdebounce)   (c) 離脱/アンマウント時にflush
+       (d) draftIdが無ければ採番して保存先を確定+ライブラリmeta登録 (simMode=練習モードは永続化しないので除外)
+     ローカルは _v=Date.now() を付すので、再ロード時 openChart の _v 比較でローカル最新が採用される。
+     終了時保存(CancelConfirmModal onClose ~8485)と同じ {analysisData,analysisStrokes,name,_v} 形。 */
+  var simModeRef=useRef(simMode); simModeRef.current=simMode;
+  var localSaveTimerRef=useRef(null);
+  function saveLocalDraftNow(){
+    if(simModeRef.current)return null;            /* 練習モードは永続化しない (autosaveと同条件) */
+    var ad=analysisDataRef.current||img.analysisData||null;
+    if(!ad)return null;                           /* 分析データ無し(旧画像draft等)は触らない=既存データを壊さない */
+    var id=img._draftId||savedDraftIdRef.current;
+    var newlyCreated=false;
+    if(!id){                                      /* (d) draftId無し → 採番して保存先を確定 */
+      id=caGenId(); savedDraftIdRef.current=id; newlyCreated=true;
+    }
+    var dataJ={
+      analysisData:ad,
+      analysisStrokes:analysisStrokesRef.current||{'1m':[],'5m':[]},
+      name:img._name||img.name||'chart',
+      _v:Date.now()
+    };
+    caSaveData(id,dataJ);
+    if(newlyCreated){                             /* ライブラリに出すため meta を1回だけ登録 (終了時保存 8476-8480 と同形) */
+      try{
+        var lm=caLoadMeta();
+        if(!lm.some(function(m){return m.id===id;})){
+          lm.push({id:id,ticker:savedTickerRef.current||img._ticker||'',name:dataJ.name,
+            savedAt:dataJ._v,thumb:'',analysisDate:(ad&&ad.date)||''});
+          caSaveMeta(lm);
+        }
+      }catch(e){}
+    }
+    return id;
+  }
+  function scheduleLocalSave(){
+    if(localSaveTimerRef.current)clearTimeout(localSaveTimerRef.current);
+    localSaveTimerRef.current=setTimeout(function(){localSaveTimerRef.current=null;saveLocalDraftNow();},400);
+  }
+  function flushLocalSave(){
+    if(localSaveTimerRef.current){clearTimeout(localSaveTimerRef.current);localSaveTimerRef.current=null;}
+    saveLocalDraftNow();
+  }
+
+  // タイマークリーンアップ + (c) アンマウント時にローカル保存をflush
   useEffect(function(){
-    return function(){if(autoSaveTimerRef.current)clearTimeout(autoSaveTimerRef.current);};
+    return function(){
+      try{flushLocalSave();}catch(e){}
+      if(autoSaveTimerRef.current)clearTimeout(autoSaveTimerRef.current);
+      if(localSaveTimerRef.current)clearTimeout(localSaveTimerRef.current);
+    };
+  },[]);
+
+  /* (c) タブ非表示/離脱(pagehide)時にローカル保存をflush — Ctrl+Shift+R/タブ閉じで消えないように */
+  useEffect(function(){
+    function onPageHide(){ try{flushLocalSave();}catch(e){} }
+    function onVis(){ if(document.visibilityState==='hidden'){try{flushLocalSave();}catch(e){}} }
+    window.addEventListener('pagehide',onPageHide);
+    document.addEventListener('visibilitychange',onVis);
+    return function(){
+      window.removeEventListener('pagehide',onPageHide);
+      document.removeEventListener('visibilitychange',onVis);
+    };
   },[]);
 
   /* B2+: 分析データ(JSON)変更時の Firebase 自動保存トリガー
@@ -6034,12 +6096,14 @@ function ImageAnnotator(props){
   var analysisDataInitSkip=useRef(true);
   useEffect(function(){
     if(analysisDataInitSkip.current){analysisDataInitSkip.current=false;return;}
+    scheduleLocalSave();   /* (b) ローカルIDBへも保存 */
     triggerAutoSave();
   },[analysisData]);
   /* B-drawing: ストローク変更時も自動保存 */
   var analysisStrokesInitSkip=useRef(true);
   useEffect(function(){
     if(analysisStrokesInitSkip.current){analysisStrokesInitSkip.current=false;return;}
+    scheduleLocalSave();   /* (b) ローカルIDBへも保存 — 終了確認を通さなくても消えない */
     triggerAutoSave();
   },[analysisStrokes]);
 
