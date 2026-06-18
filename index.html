@@ -5711,6 +5711,20 @@ function ImageAnnotator(props){
   /* 2026-04-21: 地図モデルズーム — null のとき IndexedDataChart 内で getFitZoom() が算出、
                                       setAnalysisZoom 経由で親が保存 */
   var stAZ=useState(null);           var analysisZoom=stAZ[0],setAnalysisZoom=stAZ[1];
+  /* 2026-06-18: stackMode下段(5m)もcontrolled化。uncontrolledだとツール選択等でツールバー高さが変わり
+     下段dimが縮むたびに子の getFitZoom が再フィットして倍率が小さくなっていた(上段1mはcontrolledで無問題)。
+     上段と同じく zoom=null初期→子が初回1回だけフィット→setで親が保持→以後は再フィットしない。 */
+  var stS5V=useState(function(){return {uS:0,uE:getUTotalIA('5m',false)};}); var stack5mView=stS5V[0],setStack5mView=stS5V[1];
+  var stS5P=useState(0);             var stack5mPShift=stS5P[0],setStack5mPShift=stS5P[1];
+  var stS5Z=useState(null);          var stack5mZoom=stS5Z[0],setStack5mZoom=stS5Z[1];
+  /* stackModeに入った時/データ変更時に下段5mを再フィット (ツール選択では発火しない) */
+  useEffect(function(){
+    if(analysisData&&stackMode){
+      setStack5mView({uS:0,uE:getUTotalIA('5m',false)});
+      setStack5mPShift(0);
+      setStack5mZoom(null);
+    }
+  },[analysisData,stackMode,emaSeedData]);
   /* C-uaxis: analysisData/analysisTf/refAnalysis(id) 変更時に view/pShift をリセット (u軸、uTotal変化に追従)
      C8a-bugfix: deps を refAnalysis.id に絞る — refAnalysis全体だと setRefAnalysis(...analysisStrokes...) のたびに発火して
                  ref側書込直後に view が全体表示にreset され、書いた線が画面外にスクロール (=消えたように見える) する
@@ -7560,7 +7574,8 @@ function ImageAnnotator(props){
           /* 2026-06-15: stackMode 下段 = 同一チャートの5m足。
              ストロークは splitStrokes ではなく既存 analysisStrokes['5m'] 経路へ。
              非フォーカス時(analysisTf!=='5m')は drawTool='pan' で描画不可 (tap-to-focus)。
-             view/zoom/pShift は渡さず uncontrolled (子の getFitZoom で自動フィット)。 */
+             2026-06-18: view/zoom/pShift を controlled化 (stack5m* state)。uncontrolledだとツール選択での
+             高さ変化で再フィットして倍率が縮んでいた。初回は zoom=null で1回フィット→以後は親が保持。 */
           stackMode&&ce("div",{
             style:{flexGrow:1-splitRatio,flexShrink:1,flexBasis:0,
               display:"flex",flexDirection:"column",minHeight:0,overflow:'hidden',
@@ -7574,6 +7589,10 @@ function ImageAnnotator(props){
             ),
             ce(DataChart,{
               data:simMode?simDisplayData:emaContinuedData, tf:'5m', showCrosshair:showCrosshair,
+              /* 2026-06-18: controlled view/zoom/pShift (uncontrolled再フィットによる倍率縮小を防止) */
+              view:stack5mView, onViewChange:setStack5mView,
+              zoom:stack5mZoom, onZoomChange:setStack5mZoom,
+              pShift:stack5mPShift, onPShiftChange:setStack5mPShift,
               /* 2026-06-15: 5m足のローソクを「1分足5本分=時間枠フィット幅」で太く描く */
               fitBarW:true,
               drawTool:analysisTf==='5m'?tool:'pan', drawColor:color, drawWidth:lineW, drawOpacity:opacity,
