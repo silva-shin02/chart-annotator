@@ -9040,6 +9040,98 @@ function scorePhase4DTW(f, queryF, params){
   var hit=score>=threshold;
   return {score:score, hit:hit, dtw:dtw};
 }
+
+/* ─── 2026-06-18: 似た形 強化 (区間スコープ + 足の動きシグネチャ + その後アウトカム) ───
+   既存 Phase3/4 (全日終値ベクトル) に加え、寄り付き等「区間」で類似度を取る。
+   先頭150本のOHLC(head_ohlc_1m)とアウトカム(outcome_1m)を patFeat にキャッシュし、
+   区間/特徴/正規化/距離の切替は再計算せずシグネチャを都度導出して比較する。 */
+/* 区間プリセット → 先頭何分(=1m足の本数)。'all'は全日(既存ベクトルを使う) */
+function patWindowBars(winId){
+  switch(winId){
+    case 'open5': return 5;
+    case 'open15': return 15;
+    case 'open30': return 30;
+    case 'am': return 150;   /* 前場 09:00-11:30 */
+    case 'all': return null;
+    default:
+      var n=parseInt(winId,10); return (isFinite(n)&&n>0)?n:5;
+  }
+}
+/* 全日barsの先頭maxBars本の {o,h,l,c} を抽出 (キャッシュ用、軽量) */
+function extractHeadOhlc(analysisData, tf, maxBars){
+  if(!analysisData)return [];
+  var barsKey=tf==='5m'?'bars_5m':'bars_1m';
+  var bars=analysisData[barsKey]||[];
+  var n=Math.min(maxBars||150, bars.length);
+  var out=[];
+  for(var i=0;i<n;i++){
+    var b=bars[i];
+    if(typeof b.o==='number'&&typeof b.c==='number')
+      out.push({o:b.o,h:(typeof b.h==='number'?b.h:Math.max(b.o,b.c)),l:(typeof b.l==='number'?b.l:Math.min(b.o,b.c)),c:b.c});
+  }
+  return out;
+}
+/* 先頭nBars本のOHLCから「足の動き」シグネチャを作る。
+   mode 'move': 始値(base)基準%で [ (o-base)/base,(h-base)/base,(l-base)/base,(c-base)/base ] を連結
+   mode 'close': 終値の%変化のみ
+   norm 'pct': そのまま(大きさ保持) / 'z': z-score(形のみ)
+   返り値 {sig:[...], n, base} | null */
+function patOpeningSignature(headOhlc, nBars, mode, norm){
+  if(!headOhlc||!headOhlc.length)return null;
+  var n=Math.min(nBars, headOhlc.length);
+  if(n<2)return null;
+  var base=headOhlc[0].o;
+  if(!(base>0))return null;
+  var raw=[];
+  for(var i=0;i<n;i++){
+    var b=headOhlc[i];
+    if(mode==='close'){
+      raw.push((b.c-base)/base);
+    }else{
+      raw.push((b.o-base)/base);
+      raw.push((b.h-base)/base);
+      raw.push((b.l-base)/base);
+      raw.push((b.c-base)/base);
+    }
+  }
+  if(norm==='z'){ var z=_patZscore(raw); return {sig:z.normalized, n:n, base:base}; }
+  return {sig:raw, n:n, base:base};
+}
+/* 2ベクトルの距離→スコア(0-100)。algo: 'cos'(形のみ)/'euclid'(RMSE,大きさも見る)/'dtw'(速度違い吸収) */
+function patSignatureScore(a, b, algo){
+  if(!a||!b||!a.length||!b.length)return {score:0};
+  if(algo==='cos'){ var cos=cosineSimilarity(a,b); return {score:Math.round((cos+1)/2*100), cos:cos}; }
+  if(algo==='dtw'){ var d=dtwDistance(a,b); return {score:Math.max(0,Math.round(100-d*1.5)), dtw:d}; }
+  /* euclid: 長さを合わせた上で RMSE。pct(%変化)想定: rmse=0→100, 0.02(2%)→~50 (係数2500) */
+  var L=Math.min(a.length,b.length);
+  var ss=0; for(var i=0;i<L;i++){var df=a[i]-b[i]; ss+=df*df;}
+  var rmse=Math.sqrt(ss/Math.max(1,L));
+  return {score:Math.max(0,Math.min(100,Math.round(100-rmse*2500))), rmse:rmse};
+}
+/* その後アウトカム: 全日barsから「寄り付き後どうなったか」を算出 (キャッシュ用) */
+function extractOpeningOutcome(analysisData, tf){
+  var f=extractPhase1Features(analysisData, tf);
+  if(!f)return null;
+  var barsKey=tf==='5m'?'bars_5m':'bars_1m';
+  var bars=analysisData[barsKey]||[];
+  var open0=f.open0, step=(tf==='5m'?5:1);
+  function retAt(min){
+    var idx=Math.min(bars.length-1, Math.round(min/step));
+    var b=bars[idx]; if(!b||typeof b.c!=='number'||!(open0>0))return null;
+    return (b.c-open0)/open0;
+  }
+  var sc=scorePhase1Asagaten(f, {});
+  var tag;
+  if(sc.hit) tag='寄り天';
+  else if(f.close>=open0 && f.closeRetraceRatio<0.35) tag='上継続';
+  else if(f.close<open0) tag='陰転';
+  else tag='レンジ';
+  var hodTime=(f.hodIdx>=0&&bars[f.hodIdx]&&bars[f.hodIdx].t)?bars[f.hodIdx].t:'';
+  return {tag:tag, asagaten:!!sc.hit, hodMin:f.hodMin, hodTime:hodTime,
+    closeRetraceRatio:f.closeRetraceRatio, isBearish:f.isBearish,
+    ret15:retAt(15), ret30:retAt(30)};
+}
+
 /* C8a: 起動時に旧 ca_data_* localStorageエントリを一括削除 (容量解放) */
 (function _cleanupLegacyCaData(){
   try{
@@ -10669,6 +10761,11 @@ function PatternSearchModal(props){
   /* パラメータ state (テンプレ類似のみ) */
   var sP=useState({threshold:70, algorithm:'cos'});
   var paramsTemplate=sP[0], setParamsTemplate=sP[1];
+  /* 2026-06-18: 似た形 強化 — 区間/特徴/正規化/距離 */
+  var sWin=useState('open5');    var winId=sWin[0], setWinId=sWin[1];        /* open5/open15/open30/am/all */
+  var sFM=useState('move');      var featMode=sFM[0], setFeatMode=sFM[1];    /* move(足の動き)/close(終値) */
+  var sNM=useState('pct');       var normMode=sNM[0], setNormMode=sNM[1];    /* pct(%変化)/z(z-score) */
+  var sAlgo=useState('euclid');  var simAlgo=sAlgo[0], setSimAlgo=sAlgo[1];  /* euclid/cos/dtw */
   /* クエリ draft id */
   var sQ=useState(null);   var queryDraftId=sQ[0], setQueryDraftId=sQ[1];
   /* 2026-05-03: B1 - クエリ選択UI 状態 (null=非表示, 'tickers'=銘柄一覧, 'charts'=チャート一覧) */
@@ -10734,7 +10831,9 @@ function PatternSearchModal(props){
            DraftLibrary 側の自動計算が他 features も保存するため判定は同じに統一 */
         var cacheValid=cached && cached._v===m._v
                     && cached.vec_features_1m!==undefined
-                    && cached.vec_features_5m!==undefined;
+                    && cached.vec_features_5m!==undefined
+                    && cached.head_ohlc_1m!==undefined
+                    && cached.outcome_1m!==undefined;
         if(cacheValid){
           featsRef.current[m.id]=cached;
           setDoneCount(i);
@@ -10758,6 +10857,8 @@ function PatternSearchModal(props){
               features_1m:f1m, features_5m:f5m,
               vwap_features_1m:v1m, vwap_features_5m:v5m,
               vec_features_1m:c1m, vec_features_5m:c5m,
+              head_ohlc_1m:extractHeadOhlc(d.analysisData,'1m',150),
+              outcome_1m:extractOpeningOutcome(d.analysisData,'1m'),
               computedAt:Date.now()
             };
             featsRef.current[m.id]=rec;
@@ -10773,27 +10874,44 @@ function PatternSearchModal(props){
   }, [open, meta.length]);
 
   /* パラメータ変更時に結果を再計算 */
+  /* 2026-06-18: rec から区間シグネチャを導出。'all'=従来の正規化済み終値ベクトル、区間=head_ohlcから%/zシグネチャ */
+  function _winSig(rec){
+    if(!rec)return null;
+    if(winId==='all'){
+      var k=tf==='5m'?'vec_features_5m':'vec_features_1m';
+      var vf=rec[k]; return (vf&&vf.normVec)?vf.normVec:null;
+    }
+    var nBars=patWindowBars(winId)||5;
+    var sg=patOpeningSignature(rec.head_ohlc_1m, nBars, featMode, normMode);
+    return sg?sg.sig:null;
+  }
   function recomputeResults(){
     var arr=[];
     if(!queryDraftId){setResults([]);return;}
     var queryRec=featsRef.current[queryDraftId];
     if(!queryRec){setResults([]);return;}
-    var qKey=tf==='5m'?'vec_features_5m':'vec_features_1m';
-    var queryF=queryRec[qKey];
-    if(!queryF){setResults([]);return;}
-    var useDtw=paramsTemplate.algorithm==='dtw';
+    var qSig=_winSig(queryRec);
+    if(!qSig){setResults([]);return;}
+    var isAll=(winId==='all');
     for(var k in featsRef.current){
       if(k===queryDraftId)continue;  /* クエリ自身は除外 */
       var rec=featsRef.current[k];
       if(!rec)continue;
-      /* 2026-05-03: 対象銘柄フィルタ (Q5:a - 計算は全銘柄、結果のみ絞り込み) */
+      /* 2026-05-03: 対象銘柄フィルタ (計算は全銘柄、結果のみ絞り込み) */
       if(rec.ticker && !selectedTickers[rec.ticker])continue;
-      var f3=rec[qKey];
-      if(!f3)continue;
-      var s=useDtw?scorePhase4DTW(f3, queryF, paramsTemplate)
-                  :scorePhase3Template(f3, queryF, paramsTemplate);
-      /* 2026-05-03: 閾値撤廃、全件をスコア降順で表示 */
-      arr.push({rec:rec, features:f3, scoreObj:s});
+      var cSig=_winSig(rec);
+      if(!cSig)continue;
+      var s;
+      if(isAll){
+        /* 全日: 既存の正規化済みベクトル → cos/dtw (euclid指定時はcosに丸め) */
+        s=patSignatureScore(cSig, qSig, simAlgo==='dtw'?'dtw':'cos');
+      }else{
+        /* 区間: 長さを合わせて (足の動きは o/h/l/c 4ch interleave、min は4の倍数で整合) */
+        var L=Math.min(qSig.length, cSig.length);
+        if(L<2)continue;
+        s=patSignatureScore(cSig.slice(0,L), qSig.slice(0,L), simAlgo);
+      }
+      arr.push({rec:rec, scoreObj:s, outcome:rec.outcome_1m||null});
     }
     arr.sort(function(a,b){return b.scoreObj.score-a.scoreObj.score;});
     setResults(arr);
@@ -10801,7 +10919,7 @@ function PatternSearchModal(props){
   useEffect(function(){
     if(!open || computing)return;
     recomputeResults();
-  }, [tf, computing, queryDraftId, paramsTemplate.threshold, paramsTemplate.algorithm, selectedTickers]);
+  }, [tf, computing, queryDraftId, selectedTickers, winId, featMode, normMode, simAlgo]);
 
   if(!open)return null;
   function updateP(k, v){setParamsTemplate(function(p){var np=Object.assign({},p);np[k]=v;return np;});}
@@ -10817,6 +10935,46 @@ function PatternSearchModal(props){
   var rowStyle={display:"flex", alignItems:"center", gap:10, marginBottom:10};
   /* サムネサイズ: 160×100 (旧80×50の2倍) */
   var THUMB_W=480, THUMB_H=300;  /* 2026-05-03: 1倍(160x100) → 3倍に拡大 */
+  /* 2026-06-18: 似た形 強化 — UIヘルパー */
+  var MINI_W=150, MINI_H=94;
+  function patPill(label, opts, val, onSet){
+    return ce("div",{style:{display:"flex",alignItems:"center",gap:6,marginBottom:6,flexWrap:"wrap"}},
+      ce("span",{style:{fontSize:11,color:"#9aa",minWidth:44,flexShrink:0}},label),
+      opts.map(function(o){
+        var on=(val===o[0]);
+        return ce("button",{key:o[0],onClick:function(){onSet(o[0]);},
+          style:Object.assign({},BT,{fontSize:11,fontWeight:on?700:400,padding:"4px 10px",borderRadius:12,
+            background:on?"#4c1d95":"#26262e",color:on?"#ddd6fe":"#9aa",
+            border:on?"1px solid #a78bfa":"1px solid #333",whiteSpace:"nowrap"})},o[1]);
+      })
+    );
+  }
+  function patTagChip(text, kind){
+    var bg=kind==='down'?"#7f1d1d":kind==='up'?"#14532d":kind==='info'?"#1e3a5f":"#3a2a1a";
+    var fg=kind==='down'?"#fca5a5":kind==='up'?"#86efac":kind==='info'?"#93c5fd":"#fbbf24";
+    return ce("span",{style:{fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:9,background:bg,color:fg,whiteSpace:"nowrap"}},text);
+  }
+  function patPct(v){ return (v==null)?"–":((v>=0?"+":"")+(v*100).toFixed(1)+"%"); }
+  /* 区間先頭nBarsの OHLC からミニローソクSVG */
+  function renderOpeningMini(headOhlc, nBars){
+    var bars=(headOhlc||[]).slice(0, nBars);
+    if(!bars.length)return ce("div",{style:{width:MINI_W,height:MINI_H,background:"#0a0a0a",borderRadius:6,flexShrink:0,
+      display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#444"}},"–");
+    var mn=Infinity,mx=-Infinity;
+    bars.forEach(function(b){if(b.l<mn)mn=b.l;if(b.h>mx)mx=b.h;});
+    if(!(mx>mn)){mx=mn+1;}
+    var padX=6, padY=8, plotW=MINI_W-padX*2, plotH=MINI_H-padY*2, n=bars.length, bw=plotW/n;
+    function yv(p){return padY+(mx-p)/(mx-mn)*plotH;}
+    var els=[];
+    for(var i=0;i<n;i++){
+      var b=bars[i], cx=padX+bw*(i+0.5), up=b.c>=b.o, col=up?"#ff0054":"#11ded9";
+      var bt=yv(Math.max(b.o,b.c)), bb=yv(Math.min(b.o,b.c));
+      els.push(ce("line",{key:'w'+i,x1:cx,y1:yv(b.h),x2:cx,y2:yv(b.l),stroke:col,strokeWidth:1}));
+      els.push(ce("rect",{key:'b'+i,x:cx-Math.max(1,bw*0.3),y:bt,width:Math.max(2,bw*0.6),height:Math.max(1,bb-bt),fill:col}));
+    }
+    return ce("svg",{width:MINI_W,height:MINI_H,viewBox:"0 0 "+MINI_W+" "+MINI_H,
+      style:{borderRadius:6,background:"#08080a",flexShrink:0,border:"1px solid #2a2a33"}}, els);
+  }
 
   /* 2026-05-03: B1 - クエリ選択ピッカー (銘柄一覧 → チャート一覧の2段階)
      pickerView==='tickers' → 銘柄一覧, ===   'charts' → 選択銘柄のチャート一覧, null → 非表示 */
@@ -11061,8 +11219,15 @@ function PatternSearchModal(props){
             )
           );
         })(),
-        /* 2026-05-03: 類似度アルゴ・閾値・時間足の選択UIは削除 (コサイン/閾値なし全件/1分 で固定)
-           → 結果表示エリアの上下幅を確保 */
+        /* 2026-06-18: 似た形 強化 — 区間/特徴/正規化/距離セレクタ */
+        queryDraftId && ce("div",{style:{marginLeft:130,marginBottom:10,padding:"8px 10px",
+          background:"#140e22",borderRadius:8,border:"1px solid #2a1a3a"}},
+          patPill("区間",[['open5','寄り付き5分'],['open15','15分'],['open30','30分'],['am','前場'],['all','全日']],winId,setWinId),
+          (winId!=='all')&&patPill("特徴",[['move','足の動き'],['close','終値']],featMode,setFeatMode),
+          (winId!=='all')&&patPill("正規化",[['pct','%変化'],['z','z-score']],normMode,setNormMode),
+          patPill("距離", winId==='all'?[['cos','コサイン'],['dtw','DTW']]:[['euclid','ユークリッド'],['cos','コサイン'],['dtw','DTW']], simAlgo, setSimAlgo)
+        ),
+        /* クエリ選択前のヒント */
         !queryDraftId && ce("div",{style:{fontSize:11,color:"#c4a5f7",padding:"6px 0"}},
           "↑ プルダウンからテンプレートにするチャートを選んでください")
       ),
@@ -11080,28 +11245,56 @@ function PatternSearchModal(props){
           totalCount===0?"チャートがありません":
           !queryDraftId?"クエリチャートを選択してください":
           "該当するチャートがありません"),
+        /* 2026-06-18: C - 上位N件の「その後」集計バー */
+        results.length>0 && (function(){
+          var N=Math.min(10, results.length);
+          var top=results.slice(0,N), cnt={}, sumHod=0,nHod=0, sumR15=0,nR15=0;
+          top.forEach(function(r){
+            var o=r.outcome; if(!o)return;
+            cnt[o.tag]=(cnt[o.tag]||0)+1;
+            if(typeof o.hodMin==='number'){sumHod+=o.hodMin;nHod++;}
+            if(typeof o.ret15==='number'){sumR15+=o.ret15;nR15++;}
+          });
+          function pc(t){return cnt[t]||0;}
+          return ce("div",{style:{marginBottom:10,padding:"8px 12px",borderRadius:8,
+            background:"#1a1430",border:"1px solid #4c1d95"}},
+            ce("div",{style:{fontSize:12,fontWeight:700,color:"#c4b5fd",marginBottom:4}},"📊 似た出だし 上位"+N+"件のその後"),
+            ce("div",{style:{fontSize:11,color:"#ddd6fe"}},
+              "寄り天 "+pc('寄り天')+" ・ 上継続 "+pc('上継続')+" ・ 陰転 "+pc('陰転')+" ・ レンジ "+pc('レンジ')+
+              "　／　平均HoD "+(nHod?Math.round(sumHod)+"分":"–")+"　平均+15分 "+(nR15?patPct(sumR15/nR15):"–"))
+          );
+        })(),
         results.length>0 && ce("div",{style:{fontSize:11,color:"#888",marginBottom:8}},
-          "結果: "+results.length+"件 (スコア降順)"),
+          "結果: "+results.length+"件 (類似度降順)"),
         results.map(function(r){
-          var thumbSrc=getThumbSrc(r.rec.id);
+          var o=r.outcome;
+          var preview;
+          if(winId==='all'){
+            var thumbSrc=getThumbSrc(r.rec.id);
+            preview=thumbSrc
+              ? ce("img",{src:thumbSrc,style:{width:MINI_W,height:MINI_H,objectFit:"cover",borderRadius:6,background:"#000",flexShrink:0},
+                  onError:function(){try{caClearBrokenThumbUrl(r.rec.id);}catch(e){}}})
+              : renderOpeningMini(r.rec.head_ohlc_1m, 30);
+          } else {
+            preview=renderOpeningMini(r.rec.head_ohlc_1m, patWindowBars(winId)||5);
+          }
           return ce("div",{key:r.rec.id,
             onClick:function(){cancelRef.current=true;onOpenChart(r.rec.id);onClose();},
             style:{display:"flex",gap:12,padding:"10px",borderRadius:8,
               background:"#1a1a1a",border:"1px solid #2a2a2a",marginBottom:8,cursor:"pointer",alignItems:"center"}},
-            thumbSrc?ce("img",{src:thumbSrc,style:{width:THUMB_W,height:THUMB_H,objectFit:"cover",borderRadius:6,background:"#000",flexShrink:0},
-              onError:function(){try{caClearBrokenThumbUrl(r.rec.id);}catch(e){}}})
-              :ce("div",{style:{width:THUMB_W,height:THUMB_H,background:"#0a0a0a",borderRadius:6,flexShrink:0,
-                display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"#444"}},"no thumb"),
+            preview,
             ce("div",{style:{flex:1,minWidth:0}},
               ce("div",{style:{fontSize:14,color:"#e6edf3",fontWeight:700}},r.rec.ticker||"(銘柄なし)"),
               ce("div",{style:{fontSize:12,color:"#8b949e",marginTop:3}},r.rec.date||""),
-              ce("div",{style:{fontSize:11,color:"#6e7681",marginTop:3}},
-                r.scoreObj.dtw!=null
-                  ? "DTW "+r.scoreObj.dtw.toFixed(2)+" / "+r.features.barCount+"本"
-                  : "cos "+(r.scoreObj.cos!=null?r.scoreObj.cos.toFixed(3):'?')+" / "+r.features.barCount+"本")
+              o&&ce("div",{style:{display:"flex",gap:6,marginTop:6,flexWrap:"wrap",alignItems:"center"}},
+                patTagChip("その後 "+o.tag, (o.tag==='寄り天'||o.tag==='陰転')?'down':(o.tag==='上継続'?'up':'range')),
+                o.hodTime?patTagChip("HoD "+o.hodTime,'info'):null,
+                patTagChip("+15分 "+patPct(o.ret15), (o.ret15!=null&&o.ret15>=0)?'up':'down'),
+                patTagChip("+30分 "+patPct(o.ret30), (o.ret30!=null&&o.ret30>=0)?'up':'down')
+              )
             ),
-            ce("div",{style:{fontSize:22,fontWeight:700,color:"#c4a5f7",minWidth:60,textAlign:"right"}},
-              r.scoreObj.score+"点")
+            ce("div",{style:{fontSize:22,fontWeight:700,color:"#c4a5f7",minWidth:64,textAlign:"right"}},
+              r.scoreObj.score+"%")
           );
         })
       )
@@ -12940,7 +13133,9 @@ function DraftLibrary(props){
                     && cached.vwap_features_1m!==undefined
                     && cached.vwap_features_5m!==undefined
                     && cached.vec_features_1m!==undefined
-                    && cached.vec_features_5m!==undefined;
+                    && cached.vec_features_5m!==undefined
+                    && cached.head_ohlc_1m!==undefined
+                    && cached.outcome_1m!==undefined;
         if(cacheValid){
           /* キャッシュ済 → スキップ */
           setTimeout(processNext, 0);
@@ -12962,6 +13157,8 @@ function DraftLibrary(props){
               features_1m:f1m, features_5m:f5m,
               vwap_features_1m:v1m, vwap_features_5m:v5m,
               vec_features_1m:c1m, vec_features_5m:c5m,
+              head_ohlc_1m:extractHeadOhlc(d.analysisData,'1m',150),
+              outcome_1m:extractOpeningOutcome(d.analysisData,'1m'),
               computedAt:Date.now()
             });
           }
