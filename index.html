@@ -12685,7 +12685,8 @@ function CaMvCell(props){
   /* winMin/tf は ref 経由で参照 (ジェスチャ/描画のクロージャ陳腐化を防ぐ) */
   var winRef=useRef(props.winMin), tfRef=useRef(props.tf);
   winRef.current=props.winMin; tfRef.current=props.tf;
-  var panURef=useRef(0), vShiftRef=useRef(0), baseRangeRef=useRef(null);
+  /* 表示ビュー: {uS,uSpan,pMin,pMax} (パン＋ズームで可変)。null=未初期化 */
+  var viewRef=useRef(null);
   var dragRef=useRef(null), lpTimerRef=useRef(null), movedRef=useRef(false);
   var sLoad=useState('loading'); var loadState=sLoad[0], setLoadState=sLoad[1];
   var sMenu=useState(false); var menuOpen=sMenu[0], setMenuOpen=sMenu[1];
@@ -12704,6 +12705,13 @@ function CaMvCell(props){
     var L=layout();
     return caMvPriceRange(d.analysisData, tfRef.current, L.isAllDay?0:winRef.current)||{min:0,max:10};
   }
+  /* 既定ビュー(寄り窓フィット)に戻す */
+  function resetView(){
+    var L=layout(), base=computeBase();
+    viewRef.current={uS:0, uSpan:L.uSpan, pMin:base.min, pMax:base.max};
+  }
+  /* 価格描画域(priceH)を drawDataChart と同式で概算 */
+  function priceAreaH(H){ var volH=Math.max(44,Math.round((H-32)*0.18)); return Math.max(1,H-32-volH-6); }
   function drawNow(){
     var d=dataRef.current; if(!d||!d.analysisData)return;
     var wrap=wrapRef.current, canvas=canvasRef.current; if(!wrap||!canvas)return;
@@ -12711,13 +12719,14 @@ function CaMvCell(props){
     var tf=tfRef.current, barsKey=tf==='5m'?'bars_5m':'bars_1m';
     var bars=d.analysisData[barsKey]||[]; if(!bars.length)return;
     var L=layout();
-    var base=baseRangeRef.current||computeBase();
-    var vs=vShiftRef.current||0;
-    var uS=panURef.current||0, maxU=Math.max(0,L.uTotal-L.uSpan);
-    if(uS<0)uS=0; if(uS>maxU)uS=maxU; panURef.current=uS;
-    var pr={min:base.min+vs, max:base.max+vs};
-    /* thumbView: 表示u範囲(uS,uSpan)＋価格範囲(pMin,pMax)を明示してパン (drawDataChart 2026-06-20追加) */
-    var dim={w:W, h:H, thumbnail:true, thumbView:{uS:uS, uSpan:L.uSpan, pMin:pr.min, pMax:pr.max}};
+    if(!viewRef.current)resetView();
+    var v=viewRef.current;
+    if(v.uSpan>L.uTotal)v.uSpan=L.uTotal;
+    var maxU=Math.max(0,L.uTotal-v.uSpan);
+    if(v.uS<0)v.uS=0; if(v.uS>maxU)v.uS=maxU;
+    var pr={min:v.pMin, max:v.pMax};
+    /* thumbView: 表示u範囲(uS,uSpan)＋価格範囲(pMin,pMax)を明示 (drawDataChart 2026-06-20追加) */
+    var dim={w:W, h:H, thumbnail:true, thumbView:{uS:v.uS, uSpan:v.uSpan, pMin:v.pMin, pMax:v.pMax}};
     var origDPR=window.devicePixelRatio;
     try{Object.defineProperty(window,'devicePixelRatio',{value:Math.min(2,origDPR||1),configurable:true});}catch(e){}
     try{
@@ -12741,11 +12750,10 @@ function CaMvCell(props){
     return function(){alive=false;};
   },[m.id]);
 
-  /* 期間/足/サイズ変化: 基準レンジ再計算＋パンリセット＋再描画 */
+  /* 期間/足/サイズ変化: ビュー初期化(パン/ズームもリセット)＋再描画 */
   useEffect(function(){
     if(loadState!=='ready')return;
-    panURef.current=0; vShiftRef.current=0;
-    baseRangeRef.current=computeBase();
+    resetView();
     drawNow();
     var ro=null;
     if(window.ResizeObserver && wrapRef.current){
@@ -12755,33 +12763,54 @@ function CaMvCell(props){
     return function(){if(ro)ro.disconnect();};
   },[loadState, props.winMin, props.tf, props.cellTick]);
 
-  /* パン(2D)＋右クリック/長押しメニュー (touch非passiveでグリッドスクロール抑止) */
+  /* パン(2D)＋ホイールズーム＋右クリック/長押しメニュー (touch非passiveでグリッドスクロール抑止) */
   useEffect(function(){
     if(loadState!=='ready')return;
     var el=wrapRef.current; if(!el)return;
     function xy(e){var t=(e.touches&&e.touches[0])||(e.changedTouches&&e.changedTouches[0])||e;return {x:t.clientX,y:t.clientY};}
     function start(x,y){
-      var L=layout();
+      if(!viewRef.current)resetView();
+      var v=viewRef.current, L=layout();
       var W=el.clientWidth||240, H=el.clientHeight||160;
-      var base=baseRangeRef.current||{min:0,max:10};
-      dragRef.current={cx:x,cy:y,u0:panURef.current||0,v0:vShiftRef.current||0,
-        uPerPx:L.uSpan/Math.max(1,(W-80)),                 /* padL+padR=80 */
-        yenPerPx:(base.max-base.min)/Math.max(1,(H*0.6)),  /* 価格描画域は概ね高さの6割 */
-        uTotal:L.uTotal, uSpan:L.uSpan, isAllDay:L.isAllDay};
+      dragRef.current={cx:x,cy:y, uS0:v.uS, pMin0:v.pMin, pMax0:v.pMax,
+        uPerPx:v.uSpan/Math.max(1,(W-80)),                 /* padL+padR=80 */
+        yenPerPx:(v.pMax-v.pMin)/Math.max(1,(H*0.6)),      /* 価格描画域は概ね高さの6割 */
+        uTotal:L.uTotal, uSpan:v.uSpan};
       movedRef.current=false;
     }
     function move(x,y){
       var dr=dragRef.current; if(!dr)return;
+      var v=viewRef.current; if(!v)return;
       var dx=x-dr.cx, dy=y-dr.cy;
       if(Math.abs(dx)>3||Math.abs(dy)>3)movedRef.current=true;
-      if(!dr.isAllDay){
-        var u=dr.u0-dx*dr.uPerPx, mx=Math.max(0,dr.uTotal-dr.uSpan);
-        if(u<0)u=0; if(u>mx)u=mx; panURef.current=u;
-      }
-      vShiftRef.current=dr.v0+dy*dr.yenPerPx;  /* ドラッグ下→上の価格帯を表示 */
+      var maxU=Math.max(0,dr.uTotal-dr.uSpan);   /* ズームで隙間が出れば全日でも横パン可 */
+      if(maxU>0){ var u=dr.uS0-dx*dr.uPerPx; if(u<0)u=0; if(u>maxU)u=maxU; v.uS=u; }
+      var dpy=dy*dr.yenPerPx;                     /* ドラッグ下→上の価格帯を表示 */
+      v.pMin=dr.pMin0+dpy; v.pMax=dr.pMax0+dpy;
       drawNow();
     }
     function end(){dragRef.current=null;}
+    /* ホイール: カーソル位置中心に縦横とも拡大/縮小 */
+    function onWheel(e){
+      e.preventDefault();
+      if(!viewRef.current)resetView();
+      var v=viewRef.current, L=layout();
+      var W=el.clientWidth||240, H=el.clientHeight||160;
+      var r=el.getBoundingClientRect(), mxp=e.clientX-r.left, myp=e.clientY-r.top;
+      var chartW=Math.max(1,W-80), fx=(mxp-40)/chartW; if(fx<0)fx=0; if(fx>1)fx=1;
+      var ph=priceAreaH(H), fy=(myp-10)/ph; if(fy<0)fy=0; if(fy>1)fy=1;
+      var f=(e.deltaY<0)?(1/1.2):1.2, minSpan=5;
+      /* 横 */
+      var uAt=v.uS+fx*v.uSpan;
+      var nUSpan=v.uSpan*f; if(nUSpan<minSpan)nUSpan=minSpan; if(nUSpan>L.uTotal)nUSpan=L.uTotal;
+      var nUS=uAt-fx*nUSpan, mxs=Math.max(0,L.uTotal-nUSpan); if(nUS<0)nUS=0; if(nUS>mxs)nUS=mxs;
+      /* 縦 */
+      var pSpan=v.pMax-v.pMin, pAt=v.pMax-fy*pSpan;
+      var nPSpan=pSpan*f; if(nPSpan<0.5)nPSpan=0.5;
+      var nPMax=pAt+fy*nPSpan, nPMin=nPMax-nPSpan;
+      v.uS=nUS; v.uSpan=nUSpan; v.pMin=nPMin; v.pMax=nPMax;
+      drawNow();
+    }
     function onMD(e){ if(e.button!==0)return; if(menuOpen)setMenuOpen(false); start(e.clientX,e.clientY);
       function mm(ev){move(ev.clientX,ev.clientY);}
       function mu(){end(); window.removeEventListener('mousemove',mm); window.removeEventListener('mouseup',mu);}
@@ -12795,12 +12824,14 @@ function CaMvCell(props){
     function onTE(){ if(lpTimerRef.current){clearTimeout(lpTimerRef.current);lpTimerRef.current=null;} end(); }
     el.addEventListener('mousedown',onMD);
     el.addEventListener('contextmenu',onCtx);
+    el.addEventListener('wheel',onWheel,{passive:false});
     el.addEventListener('touchstart',onTS,{passive:false});
     el.addEventListener('touchmove',onTM,{passive:false});
     el.addEventListener('touchend',onTE);
     el.addEventListener('touchcancel',onTE);
     return function(){
       el.removeEventListener('mousedown',onMD); el.removeEventListener('contextmenu',onCtx);
+      el.removeEventListener('wheel',onWheel);
       el.removeEventListener('touchstart',onTS); el.removeEventListener('touchmove',onTM);
       el.removeEventListener('touchend',onTE); el.removeEventListener('touchcancel',onTE);
       if(lpTimerRef.current)clearTimeout(lpTimerRef.current);
@@ -12839,7 +12870,7 @@ function CaMvCell(props){
         style:{border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:700,
           padding:"10px 16px",borderRadius:8,background:"#2563eb",color:"#fff",
           boxShadow:"0 2px 10px rgba(0,0,0,0.5)"}},"📈 この日のチャートを開く"),
-      ce("div",{style:{fontSize:10,color:"#bbb"}},"ドラッグでパン / タップで閉じる")
+      ce("div",{style:{fontSize:10,color:"#bbb"}},"ドラッグでパン・ホイールで拡大縮小 / タップで閉じる")
     )
   );
 }
