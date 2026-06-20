@@ -4161,11 +4161,21 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   if(isThumbnail){
     /* サムネ: X軸全データフィット (従来式)
        2026-06-18: dim.thumbWinU 指定時は寄り付き(09:00)からの区間u幅にクロップ
-       (マルチビューの「寄りN分」表示用)。hasRef時は無効・tmVisSpanで頭打ち。 */
-    if(dim&&typeof dim.thumbWinU==='number'&&dim.thumbWinU>0&&!hasRef){
-      uTotal=Math.min(dim.thumbWinU, tmVisSpan);
+       (マルチビューの「寄りN分」表示用)。hasRef時は無効・tmVisSpanで頭打ち。
+       2026-06-20: dim.thumbView={uS,uSpan,...} 指定時は表示u範囲を明示 (マルチビューのパン用)。 */
+    if(dim&&dim.thumbView&&!hasRef){
+      uSpan=Math.max(1, dim.thumbView.uSpan||uTotal);
+      if(uSpan>uTotal)uSpan=uTotal;
+      uS=dim.thumbView.uS||0;
+      if(uS<0)uS=0;
+      if(uS+uSpan>uTotal)uS=Math.max(0,uTotal-uSpan);
+      uE=uS+uSpan;
+    }else{
+      if(dim&&typeof dim.thumbWinU==='number'&&dim.thumbWinU>0&&!hasRef){
+        uTotal=Math.min(dim.thumbWinU, tmVisSpan);
+      }
+      uS=0; uSpan=uTotal; uE=uTotal;
     }
-    uS=0; uSpan=uTotal; uE=uTotal;
   }else{
     uS=(view&&view.uS!=null)?view.uS:0;
     uSpan=uSpanFromZoom;
@@ -4217,7 +4227,12 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
      2026-04-22: サムネモード — pmin/pmax = priceRange そのまま (X/Y独立フィット、従来式)、pShift 無視 */
   var pxPerYen, dpmax, dpmin, pmin, pmax;
   if(isThumbnail){
-    pmin=priceRange.min; pmax=priceRange.max;
+    /* 2026-06-20: thumbView.pMin/pMax 指定時は価格範囲を明示 (マルチビューの縦パン用) */
+    if(dim&&dim.thumbView&&dim.thumbView.pMin!=null&&dim.thumbView.pMax!=null&&dim.thumbView.pMax>dim.thumbView.pMin){
+      pmin=dim.thumbView.pMin; pmax=dim.thumbView.pMax;
+    }else{
+      pmin=priceRange.min; pmax=priceRange.max;
+    }
     pxPerYen=priceH/(pmax-pmin);
     dpmax=pmax; dpmin=pmin;
   }else{
@@ -10943,108 +10958,138 @@ function PatRangeBox(props){
   var sBars=useState(null); var bars=sBars[0], setBars=sBars[1];
   var canvasRef=useRef(null), wrapRef=useRef(null), dragRef=useRef(null), onSelRef=useRef(onSelect);
   onSelRef.current=onSelect;
-  var W=560, H=240, padL=8, padR=8, padT=8, padB=8;
-  var plotL=padL, plotW=W-padL-padR, plotT=padT, plotH=H-padT-padB;
-  var sBox=useState({x:plotL+plotW*0.34, y:plotT+plotH*0.18, w:plotW*0.3, h:plotH*0.6});
-  var box=sBox[0], setBox=sBox[1];
-  /* クエリデータ読込 */
+  var H=340, padL=10, padR=10, padT=8, padB=8;
+  /* 2026-06-20: 幅をコンテナに合わせて拡大 (レスポンシブ) */
+  var sW=useState(560); var W=sW[0], setW=sW[1];
+  var plotL=padL, plotW=Math.max(40,W-padL-padR), plotT=padT, plotH=H-padT-padB;
+  /* 2026-06-20: 時間軸ズーム/パン — view={s,n}(表示先頭index/本数), sel={e0,e1}(選択端の小数index) */
+  var sView=useState(null); var view=sView[0], setView=sView[1];
+  var sSel=useState(null);  var sel=sSel[0], setSel=sSel[1];
+  var viewRef=useRef(view), selRef=useRef(sel);
+  viewRef.current=view; selRef.current=sel;
+  /* クエリデータ読込 (読込時に view/sel を初期化) */
   useEffect(function(){
-    if(!queryId){setBars(null);return;}
+    if(!queryId){setBars(null);setView(null);setSel(null);return;}
     var cancelled=false;
-    caLoadDataAsync(queryId, function(d){ if(cancelled)return; setBars((d&&d.analysisData&&d.analysisData.bars_1m)||[]); });
+    caLoadDataAsync(queryId, function(d){ if(cancelled)return;
+      var bb=(d&&d.analysisData&&d.analysisData.bars_1m)||[];
+      setBars(bb);
+      var n=0; bb.forEach(function(b){if(typeof b.c==='number')n++;});
+      if(n>=2){ setView({s:0,n:n}); setSel({e0:Math.round(n*0.34), e1:Math.round(n*0.64)}); }
+      else { setView(null); setSel(null); }
+    });
     return function(){cancelled=true;};
   },[queryId]);
   var closes=[], times=[];
   (bars||[]).forEach(function(b){ if(typeof b.c==='number'){closes.push(b.c);times.push(b.t||'');} });
   var N=closes.length;
-  function xToIdx(x){ if(N<2)return 0; var r=(x-plotL)/plotW; return Math.max(0,Math.min(N-1,Math.round(r*(N-1)))); }
-  /* 枠変化→選択を親へ通知 */
+  /* 幅追従 */
   useEffect(function(){
-    if(N<2){onSelRef.current(null);return;}
-    var i0=xToIdx(box.x), i1=xToIdx(box.x+box.w);
+    var el=wrapRef.current; if(!el)return;
+    function meas(){ var w=Math.max(320,Math.round(el.clientWidth||560)); setW(w); }
+    meas();
+    var ro=window.ResizeObserver?new ResizeObserver(meas):null; if(ro)ro.observe(el);
+    return function(){if(ro)ro.disconnect();};
+  },[]);
+  function idxToX(i){ var v=viewRef.current||{s:0,n:Math.max(1,N)}; return plotL+((i-v.s)/v.n)*plotW; }
+  /* 選択(絶対index)→親へ通知 */
+  useEffect(function(){
+    if(N<2||!sel){onSelRef.current(null);return;}
+    var i0=Math.max(0,Math.min(N-1,Math.round(sel.e0))), i1=Math.max(0,Math.min(N-1,Math.round(sel.e1)));
     if(i1<i0){var t=i0;i0=i1;i1=t;}
     if(i1-i0<1)i1=Math.min(N-1,i0+1);
     onSelRef.current({i0:i0,i1:i1,closes:closes.slice(),times:times.slice(),t0:times[i0],t1:times[i1]});
-  },[box, N]);
-  /* キャンバス描画 (ローソク) */
+  },[sel, N]);
+  /* キャンバス描画 (表示範囲のローソク) */
   useEffect(function(){
     var cv=canvasRef.current; if(!cv)return;
     var dpr=window.devicePixelRatio||1;
     cv.width=W*dpr; cv.height=H*dpr;
     var ctx=cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
     ctx.fillStyle='#08080a'; ctx.fillRect(0,0,W,H);
-    if(N<2){ctx.fillStyle='#555';ctx.font='12px sans-serif';ctx.fillText('読み込み中…',12,20);return;}
+    if(N<2||!view){ctx.fillStyle='#555';ctx.font='12px sans-serif';ctx.fillText('読み込み中…',12,20);return;}
+    var i0v=Math.max(0,Math.floor(view.s)-1), i1v=Math.min(N-1,Math.ceil(view.s+view.n)+1);
     var mn=Infinity,mx=-Infinity;
-    (bars||[]).forEach(function(b){ var l=(typeof b.l==='number')?b.l:Math.min(b.o,b.c), h=(typeof b.h==='number')?b.h:Math.max(b.o,b.c); if(l<mn)mn=l; if(h>mx)mx=h; });
+    for(var k=i0v;k<=i1v;k++){ var b0=bars[k]; if(!b0)continue;
+      var l=(typeof b0.l==='number')?b0.l:Math.min(b0.o,b0.c), h=(typeof b0.h==='number')?b0.h:Math.max(b0.o,b0.c);
+      if(l<mn)mn=l; if(h>mx)mx=h; }
     if(!(mx>mn))mx=mn+1;
     function yv(p){return plotT+(mx-p)/(mx-mn)*plotH;}
-    var bw=plotW/N;
-    for(var i=0;i<N;i++){
+    var bw=plotW/view.n, cw=Math.max(1,bw*0.6);
+    for(var i=i0v;i<=i1v;i++){
       var b=bars[i]; if(!b)continue;
-      var cx=plotL+bw*(i+0.5), up=(b.c>=b.o), col=up?'#ff0054':'#11ded9';
+      var cx=idxToX(i+0.5); if(cx<plotL-2||cx>plotL+plotW+2)continue;
+      var up=(b.c>=b.o), col=up?'#ff0054':'#11ded9';
       var hh=(typeof b.h==='number')?b.h:Math.max(b.o,b.c), ll=(typeof b.l==='number')?b.l:Math.min(b.o,b.c);
       ctx.strokeStyle=col; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(cx,yv(hh)); ctx.lineTo(cx,yv(ll)); ctx.stroke();
       ctx.fillStyle=col; var yo=yv(b.o),yc=yv(b.c), top=Math.min(yo,yc), bh2=Math.max(1,Math.abs(yo-yc));
-      ctx.fillRect(cx-Math.max(0.5,bw*0.3), top, Math.max(1,bw*0.6), bh2);
+      ctx.fillRect(cx-cw/2, top, cw, bh2);
     }
-  },[bars, N]);
-  function evtXY(e){
-    var t=(e.touches&&e.touches[0])||(e.changedTouches&&e.changedTouches[0])||e;
-    var r=wrapRef.current?wrapRef.current.getBoundingClientRect():{left:0,top:0};
-    return {x:t.clientX-r.left, y:t.clientY-r.top};
-  }
+  },[bars, N, W, view]);
+  function evtX(e){ var t=(e.touches&&e.touches[0])||(e.changedTouches&&e.changedTouches[0])||e;
+    var r=wrapRef.current?wrapRef.current.getBoundingClientRect():{left:0}; return t.clientX-r.left; }
   function onMove(e){
-    var d=dragRef.current; if(!d)return; e.preventDefault();
-    var p=evtXY(e), dx=p.x-d.sx, dy=p.y-d.sy, nx=d.ox,ny=d.oy,nw=d.ow,nh=d.oh, MIN=18;
-    if(d.mode==='move'){ nx=d.ox+dx; ny=d.oy+dy; }
-    else{ var h=d.handle;
-      if(h.indexOf('w')>=0){ nx=d.ox+dx; nw=d.ow-dx; }
-      if(h.indexOf('e')>=0){ nw=d.ow+dx; }
-      if(h.indexOf('n')>=0){ ny=d.oy+dy; nh=d.oh-dy; }
-      if(h.indexOf('s')>=0){ nh=d.oh+dy; }
-      if(nw<MIN){ if(h.indexOf('w')>=0)nx=d.ox+d.ow-MIN; nw=MIN; }
-      if(nh<MIN){ if(h.indexOf('n')>=0)ny=d.oy+d.oh-MIN; nh=MIN; }
-    }
-    if(nx<plotL)nx=plotL; if(ny<plotT)ny=plotT;
-    if(nx+nw>plotL+plotW)nx=plotL+plotW-nw; if(ny+nh>plotT+plotH)ny=plotT+plotH-nh;
-    if(nx<plotL)nx=plotL; if(ny<plotT)ny=plotT;
-    setBox({x:nx,y:ny,w:nw,h:nh});
+    var d=dragRef.current; if(!d)return; if(e.cancelable)e.preventDefault();
+    var dIdx=(evtX(e)-d.sx)*d.f;
+    if(d.kind==='pan'){ var v=viewRef.current; var ns=d.vs-dIdx, mxs=Math.max(0,N-v.n);
+      if(ns<0)ns=0; if(ns>mxs)ns=mxs; setView({s:ns,n:v.n}); return; }
+    var e0=d.e0, e1=d.e1;
+    if(d.kind==='move'){ var w=d.e1-d.e0; e0=d.e0+dIdx; if(e0<0)e0=0; if(e0+w>N-1)e0=(N-1)-w; e1=e0+w; }
+    else if(d.kind==='resizeW'){ e0=d.e0+dIdx; if(e0<0)e0=0; if(e0>d.e1-1)e0=d.e1-1; }
+    else if(d.kind==='resizeE'){ e1=d.e1+dIdx; if(e1>N-1)e1=N-1; if(e1<d.e0+1)e1=d.e0+1; }
+    setSel({e0:e0,e1:e1});
   }
   function onUp(){
     dragRef.current=null;
     window.removeEventListener('mousemove',onMove); window.removeEventListener('mouseup',onUp);
     window.removeEventListener('touchmove',onMove); window.removeEventListener('touchend',onUp);
   }
-  function onDown(e, mode, handle){
-    e.preventDefault(); e.stopPropagation();
-    var p=evtXY(e);
-    dragRef.current={mode:mode, handle:handle, sx:p.x, sy:p.y, ox:box.x, oy:box.y, ow:box.w, oh:box.h};
+  function onDown(e, kind){
+    if(e.cancelable)e.preventDefault(); e.stopPropagation();
+    var v=viewRef.current||{s:0,n:Math.max(1,N)}, s=selRef.current||{e0:0,e1:1};
+    dragRef.current={kind:kind, sx:evtX(e), f:v.n/plotW, e0:s.e0, e1:s.e1, vs:v.s};
     window.addEventListener('mousemove',onMove); window.addEventListener('mouseup',onUp);
     window.addEventListener('touchmove',onMove,{passive:false}); window.addEventListener('touchend',onUp);
   }
-  var i0=xToIdx(box.x), i1=xToIdx(box.x+box.w);
-  var hStyle={position:'absolute',width:10,height:10,background:'#3b82f6',border:'1px solid #fff',borderRadius:2,zIndex:3,boxSizing:'border-box'};
-  function handle(h, cx, cy, cur){
-    return ce('div',{key:h, onMouseDown:function(e){onDown(e,'resize',h);}, onTouchStart:function(e){onDown(e,'resize',h);},
-      style:Object.assign({},hStyle,{left:cx-5,top:cy-5,cursor:cur})});
-  }
-  return ce('div',{ref:wrapRef, style:{position:'relative',width:W,height:H,maxWidth:'100%',userSelect:'none',touchAction:'none',
-    borderRadius:8,overflow:'hidden',border:'1px solid #2a2a33',flexShrink:0}},
-    ce('canvas',{ref:canvasRef, style:{width:W,height:H,display:'block'}}),
-    ce('div',{onMouseDown:function(e){onDown(e,'move');}, onTouchStart:function(e){onDown(e,'move');},
-      style:{position:'absolute',left:box.x,top:box.y,width:box.w,height:box.h,
-        background:'rgba(59,130,246,0.12)',border:'2px solid #3b82f6',cursor:'move',zIndex:2,boxSizing:'border-box'}}),
-    handle('nw',box.x,box.y,'nwse-resize'),
-    handle('ne',box.x+box.w,box.y,'nesw-resize'),
-    handle('sw',box.x,box.y+box.h,'nesw-resize'),
-    handle('se',box.x+box.w,box.y+box.h,'nwse-resize'),
-    handle('n',box.x+box.w/2,box.y,'ns-resize'),
-    handle('s',box.x+box.w/2,box.y+box.h,'ns-resize'),
-    handle('w',box.x,box.y+box.h/2,'ew-resize'),
-    handle('e',box.x+box.w,box.y+box.h/2,'ew-resize'),
+  /* ホイールズーム (カーソル位置中心) */
+  useEffect(function(){
+    var el=wrapRef.current; if(!el)return;
+    function onWheel(e){
+      e.preventDefault();
+      var v=viewRef.current; if(!v||N<2)return;
+      var r=el.getBoundingClientRect(), mx=e.clientX-r.left;
+      var idxAt=v.s+((mx-plotL)/plotW)*v.n, minN=Math.min(N,5);
+      var nn=v.n*(e.deltaY<0?0.8:1.25); if(nn<minN)nn=minN; if(nn>N)nn=N;
+      var ns=idxAt-((mx-plotL)/plotW)*nn, mxs=Math.max(0,N-nn);
+      if(ns<0)ns=0; if(ns>mxs)ns=mxs;
+      setView({s:ns,n:nn});
+    }
+    el.addEventListener('wheel',onWheel,{passive:false});
+    return function(){el.removeEventListener('wheel',onWheel);};
+  },[N, plotW]);
+  var bx=sel?idxToX(sel.e0):0, bx2=sel?idxToX(sel.e1):0;
+  var i0=sel?Math.max(0,Math.min(N-1,Math.round(sel.e0))):0, i1=sel?Math.max(0,Math.min(N-1,Math.round(sel.e1))):0;
+  if(i1<i0){var tt=i0;i0=i1;i1=tt;}
+  var edgeStyle={position:'absolute',top:plotT,height:plotH,width:14,zIndex:3,cursor:'ew-resize',
+    display:'flex',alignItems:'center',justifyContent:'center'};
+  var gripStyle={width:4,height:38,borderRadius:2,background:'#3b82f6',border:'1px solid #fff',boxSizing:'border-box'};
+  return ce('div',{ref:wrapRef, onMouseDown:function(e){onDown(e,'pan');}, onTouchStart:function(e){onDown(e,'pan');},
+    style:{position:'relative',width:'100%',height:H,userSelect:'none',touchAction:'none',
+      borderRadius:8,overflow:'hidden',border:'1px solid #2a2a33',flexShrink:0,cursor:'grab'}},
+    ce('canvas',{ref:canvasRef, style:{width:'100%',height:H,display:'block',pointerEvents:'none'}}),
+    sel&&ce('div',{onMouseDown:function(e){onDown(e,'move');}, onTouchStart:function(e){onDown(e,'move');},
+      style:{position:'absolute',left:bx,top:plotT,width:Math.max(2,bx2-bx),height:plotH,
+        background:'rgba(59,130,246,0.14)',border:'2px solid #3b82f6',cursor:'move',zIndex:2,boxSizing:'border-box'}}),
+    sel&&ce('div',{onMouseDown:function(e){onDown(e,'resizeW');}, onTouchStart:function(e){onDown(e,'resizeW');},
+      style:Object.assign({},edgeStyle,{left:bx-7})}, ce('div',{style:gripStyle})),
+    sel&&ce('div',{onMouseDown:function(e){onDown(e,'resizeE');}, onTouchStart:function(e){onDown(e,'resizeE');},
+      style:Object.assign({},edgeStyle,{left:bx2-7})}, ce('div',{style:gripStyle})),
     (N>=2)&&ce('div',{style:{position:'absolute',left:6,bottom:4,fontSize:10,color:'#93c5fd',
       background:'rgba(0,0,0,0.55)',padding:'2px 6px',borderRadius:4,zIndex:4}},
-      '選択: '+(times[i0]||'?')+' 〜 '+(times[i1]||'?')+' ('+(i1-i0+1)+'本)')
+      '選択: '+(times[i0]||'?')+' 〜 '+(times[i1]||'?')+' ('+(i1-i0+1)+'本)'),
+    ce('div',{style:{position:'absolute',right:6,bottom:4,fontSize:9,color:'#778',
+      background:'rgba(0,0,0,0.5)',padding:'2px 6px',borderRadius:4,zIndex:4}},
+      'ホイール=拡大 / 枠=移動・端=範囲 / 背景=スクロール')
   );
 }
 function PatternSearchModal(props){
@@ -12634,12 +12679,57 @@ function CaSimPicker(props){
    1セル = drawDataChart サムネモードでライブ描画 (読み取り専用)。
    props: m(meta), winMin, tf, fbCfg, score, outcome, onOpen, cellTick */
 function CaMvCell(props){
-  var m=props.m||{}, winMin=props.winMin, tf=props.tf, fbCfg=props.fbCfg||{};
+  var m=props.m||{}, fbCfg=props.fbCfg||{};
   var onOpen=props.onOpen||function(){};
   var canvasRef=useRef(null), wrapRef=useRef(null), dataRef=useRef(null);
+  /* winMin/tf は ref 経由で参照 (ジェスチャ/描画のクロージャ陳腐化を防ぐ) */
+  var winRef=useRef(props.winMin), tfRef=useRef(props.tf);
+  winRef.current=props.winMin; tfRef.current=props.tf;
+  var panURef=useRef(0), vShiftRef=useRef(0), baseRangeRef=useRef(null);
+  var dragRef=useRef(null), lpTimerRef=useRef(null), movedRef=useRef(false);
   var sLoad=useState('loading'); var loadState=sLoad[0], setLoadState=sLoad[1];
+  var sMenu=useState(false); var menuOpen=sMenu[0], setMenuOpen=sMenu[1];
 
-  /* データ読込 (id 変化時のみ) */
+  /* winMin/tf から表示窓のレイアウト定数を導出 */
+  function layout(){
+    var winMin=winRef.current, tf=tfRef.current;
+    var gapVis=(tf==='5m'?5:1);
+    var tmVisSpan=390-(60-gapVis);        /* 1m=331 / 5m=335 (全日u幅) */
+    var isAllDay=(winMin>=300);
+    var uSpan=isAllDay?tmVisSpan:Math.min(caMvWinU(winMin,gapVis),tmVisSpan);
+    return {gapVis:gapVis, tmVisSpan:tmVisSpan, isAllDay:isAllDay, uSpan:uSpan, uTotal:tmVisSpan};
+  }
+  function computeBase(){
+    var d=dataRef.current; if(!d)return {min:0,max:10};
+    var L=layout();
+    return caMvPriceRange(d.analysisData, tfRef.current, L.isAllDay?0:winRef.current)||{min:0,max:10};
+  }
+  function drawNow(){
+    var d=dataRef.current; if(!d||!d.analysisData)return;
+    var wrap=wrapRef.current, canvas=canvasRef.current; if(!wrap||!canvas)return;
+    var W=Math.max(80,Math.round(wrap.clientWidth||240)), H=Math.max(60,Math.round(wrap.clientHeight||160));
+    var tf=tfRef.current, barsKey=tf==='5m'?'bars_5m':'bars_1m';
+    var bars=d.analysisData[barsKey]||[]; if(!bars.length)return;
+    var L=layout();
+    var base=baseRangeRef.current||computeBase();
+    var vs=vShiftRef.current||0;
+    var uS=panURef.current||0, maxU=Math.max(0,L.uTotal-L.uSpan);
+    if(uS<0)uS=0; if(uS>maxU)uS=maxU; panURef.current=uS;
+    var pr={min:base.min+vs, max:base.max+vs};
+    /* thumbView: 表示u範囲(uS,uSpan)＋価格範囲(pMin,pMax)を明示してパン (drawDataChart 2026-06-20追加) */
+    var dim={w:W, h:H, thumbnail:true, thumbView:{uS:uS, uSpan:L.uSpan, pMin:pr.min, pMax:pr.max}};
+    var origDPR=window.devicePixelRatio;
+    try{Object.defineProperty(window,'devicePixelRatio',{value:Math.min(2,origDPR||1),configurable:true});}catch(e){}
+    try{
+      canvas.style.width=W+'px'; canvas.style.height=H+'px';
+      drawDataChart(canvas, bars, d.analysisData, dim, tf,
+        {uS:0,uE:0}, 0, pr, {current:null},
+        [], null, null, null, null, L.gapVis, null, null);
+    }catch(e){console.warn('[mv cell draw]',e);}
+    finally{ try{Object.defineProperty(window,'devicePixelRatio',{value:origDPR,configurable:true});}catch(e){} }
+  }
+
+  /* データ読込 (id 変化時) */
   useEffect(function(){
     var alive=true;
     setLoadState('loading'); dataRef.current=null;
@@ -12651,59 +12741,84 @@ function CaMvCell(props){
     return function(){alive=false;};
   },[m.id]);
 
-  /* 描画 (ready / winMin / tf / リサイズ 変化時) */
+  /* 期間/足/サイズ変化: 基準レンジ再計算＋パンリセット＋再描画 */
   useEffect(function(){
     if(loadState!=='ready')return;
-    function draw(){
-      var d=dataRef.current; if(!d||!d.analysisData)return;
-      var wrap=wrapRef.current, canvas=canvasRef.current;
-      if(!wrap||!canvas)return;
-      var W=Math.max(80, Math.round(wrap.clientWidth||240));
-      var H=Math.max(60, Math.round(wrap.clientHeight||160));
-      var barsKey=tf==='5m'?'bars_5m':'bars_1m';
-      var bars=d.analysisData[barsKey]||[];
-      if(!bars.length)return;
-      var gapVis=(tf==='5m'?5:1);
-      var isAllDay=(winMin>=300);
-      /* 全日時は全バーでレンジを取る (0=制限なし)。区間時はその区間のみでフィット */
-      var pr=caMvPriceRange(d.analysisData, tf, isAllDay?0:winMin)||{min:0,max:10};
-      var dim={w:W, h:H, thumbnail:true};
-      if(!isAllDay){var u=caMvWinU(winMin, gapVis); if(u>0)dim.thumbWinU=u;}
-      var origDPR=window.devicePixelRatio;
-      try{Object.defineProperty(window,'devicePixelRatio',{value:Math.min(2,origDPR||1),configurable:true});}catch(e){}
-      try{
-        canvas.style.width=W+'px'; canvas.style.height=H+'px';
-        drawDataChart(canvas, bars, d.analysisData, dim, tf,
-          {uS:0,uE:0}, 0, pr, {current:null},
-          [], null, null, null, null, gapVis, null, null);
-      }catch(e){console.warn('[mv cell draw]',e);}
-      finally{
-        try{Object.defineProperty(window,'devicePixelRatio',{value:origDPR,configurable:true});}catch(e){}
-      }
-    }
-    draw();
+    panURef.current=0; vShiftRef.current=0;
+    baseRangeRef.current=computeBase();
+    drawNow();
     var ro=null;
     if(window.ResizeObserver && wrapRef.current){
-      ro=new ResizeObserver(function(){draw();});
+      ro=new ResizeObserver(function(){drawNow();});
       ro.observe(wrapRef.current);
     }
     return function(){if(ro)ro.disconnect();};
-  },[loadState, winMin, tf, props.cellTick]);
+  },[loadState, props.winMin, props.tf, props.cellTick]);
+
+  /* パン(2D)＋右クリック/長押しメニュー (touch非passiveでグリッドスクロール抑止) */
+  useEffect(function(){
+    if(loadState!=='ready')return;
+    var el=wrapRef.current; if(!el)return;
+    function xy(e){var t=(e.touches&&e.touches[0])||(e.changedTouches&&e.changedTouches[0])||e;return {x:t.clientX,y:t.clientY};}
+    function start(x,y){
+      var L=layout();
+      var W=el.clientWidth||240, H=el.clientHeight||160;
+      var base=baseRangeRef.current||{min:0,max:10};
+      dragRef.current={cx:x,cy:y,u0:panURef.current||0,v0:vShiftRef.current||0,
+        uPerPx:L.uSpan/Math.max(1,(W-80)),                 /* padL+padR=80 */
+        yenPerPx:(base.max-base.min)/Math.max(1,(H*0.6)),  /* 価格描画域は概ね高さの6割 */
+        uTotal:L.uTotal, uSpan:L.uSpan, isAllDay:L.isAllDay};
+      movedRef.current=false;
+    }
+    function move(x,y){
+      var dr=dragRef.current; if(!dr)return;
+      var dx=x-dr.cx, dy=y-dr.cy;
+      if(Math.abs(dx)>3||Math.abs(dy)>3)movedRef.current=true;
+      if(!dr.isAllDay){
+        var u=dr.u0-dx*dr.uPerPx, mx=Math.max(0,dr.uTotal-dr.uSpan);
+        if(u<0)u=0; if(u>mx)u=mx; panURef.current=u;
+      }
+      vShiftRef.current=dr.v0+dy*dr.yenPerPx;  /* ドラッグ下→上の価格帯を表示 */
+      drawNow();
+    }
+    function end(){dragRef.current=null;}
+    function onMD(e){ if(e.button!==0)return; if(menuOpen)setMenuOpen(false); start(e.clientX,e.clientY);
+      function mm(ev){move(ev.clientX,ev.clientY);}
+      function mu(){end(); window.removeEventListener('mousemove',mm); window.removeEventListener('mouseup',mu);}
+      window.addEventListener('mousemove',mm); window.addEventListener('mouseup',mu); }
+    function onCtx(e){ e.preventDefault(); setMenuOpen(true); }
+    function onTS(e){ if(e.touches.length!==1)return; if(menuOpen)setMenuOpen(false); var p=xy(e); start(p.x,p.y);
+      if(lpTimerRef.current)clearTimeout(lpTimerRef.current);
+      lpTimerRef.current=setTimeout(function(){ if(!movedRef.current){setMenuOpen(true); dragRef.current=null;} },450); }
+    function onTM(e){ if(e.touches.length!==1)return; e.preventDefault(); var p=xy(e); move(p.x,p.y);
+      if(movedRef.current&&lpTimerRef.current){clearTimeout(lpTimerRef.current);lpTimerRef.current=null;} }
+    function onTE(){ if(lpTimerRef.current){clearTimeout(lpTimerRef.current);lpTimerRef.current=null;} end(); }
+    el.addEventListener('mousedown',onMD);
+    el.addEventListener('contextmenu',onCtx);
+    el.addEventListener('touchstart',onTS,{passive:false});
+    el.addEventListener('touchmove',onTM,{passive:false});
+    el.addEventListener('touchend',onTE);
+    el.addEventListener('touchcancel',onTE);
+    return function(){
+      el.removeEventListener('mousedown',onMD); el.removeEventListener('contextmenu',onCtx);
+      el.removeEventListener('touchstart',onTS); el.removeEventListener('touchmove',onTM);
+      el.removeEventListener('touchend',onTE); el.removeEventListener('touchcancel',onTE);
+      if(lpTimerRef.current)clearTimeout(lpTimerRef.current);
+    };
+  },[loadState, menuOpen]);
 
   var label=(m.ticker||'')+(m.analysisDate?(' '+m.analysisDate):'');
   var sc=props.score;
   var scColor=(sc>=80)?'#16a34a':(sc>=60)?'#ca8a04':'#555';
-  return ce("div",{
-    onClick:function(){onOpen(m.id);},
-    title:label,
+  return ce("div",{ title:label,
     style:{position:"relative",background:"#000",borderRadius:8,overflow:"hidden",
-      border:"1px solid #2a2a2a",cursor:"pointer",minHeight:0,minWidth:0}},
-    ce("div",{ref:wrapRef,style:{position:"absolute",inset:0}},
-      ce("canvas",{ref:canvasRef,style:{display:"block",width:"100%",height:"100%"}})
+      border:"1px solid #2a2a2a",minHeight:0,minWidth:0}},
+    ce("div",{ref:wrapRef,style:{position:"absolute",inset:0,cursor:"grab",touchAction:"none"}},
+      ce("canvas",{ref:canvasRef,style:{display:"block",width:"100%",height:"100%",pointerEvents:"none"}})
     ),
     loadState!=='ready'&&ce("div",{style:{position:"absolute",inset:0,display:"flex",
       alignItems:"center",justifyContent:"center",color:loadState==='error'?'#f87171':'#555',
-      fontSize:11,background:"#0a0a0a"}},
+      fontSize:11,background:"#0a0a0a",pointerEvents:"none"}},
       loadState==='error'?'データ無し':'読込中…'),
     /* 上部ラベル */
     ce("div",{style:{position:"absolute",left:0,top:0,right:0,display:"flex",alignItems:"center",
@@ -12715,6 +12830,16 @@ function CaMvCell(props){
         background:scColor,borderRadius:4,padding:"1px 5px",flexShrink:0}},sc),
       props.outcome&&props.outcome.tag&&ce("span",{style:{fontSize:9,fontWeight:700,color:"#ddd",
         background:"rgba(255,255,255,0.12)",borderRadius:4,padding:"1px 5px",flexShrink:0}},props.outcome.tag)
+    ),
+    /* 右クリック/長押しメニュー: この日のチャートを開く */
+    menuOpen&&ce("div",{onClick:function(){setMenuOpen(false);},
+      style:{position:"absolute",inset:0,zIndex:5,display:"flex",flexDirection:"column",
+        alignItems:"center",justifyContent:"center",gap:8,background:"rgba(0,0,0,0.55)"}},
+      ce("button",{onClick:function(e){e.stopPropagation();setMenuOpen(false);onOpen(m.id);},
+        style:{border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:700,
+          padding:"10px 16px",borderRadius:8,background:"#2563eb",color:"#fff",
+          boxShadow:"0 2px 10px rgba(0,0,0,0.5)"}},"📈 この日のチャートを開く"),
+      ce("div",{style:{fontSize:10,color:"#bbb"}},"ドラッグでパン / タップで閉じる")
     )
   );
 }
@@ -12728,7 +12853,8 @@ function CaMultiViewModal(props){
   var initialTicker=props.initialTicker||null;
   var BT={border:"none",cursor:"pointer",fontFamily:"inherit"};
 
-  var sMode=useState('similar'); var mode=sMode[0], setMode=sMode[1];   /* 'similar' | 'manual' */
+  var sSel=useState(null);       var selTicker=sSel[0], setSelTicker=sSel[1]; /* 表示中の銘柄 (null=銘柄選択画面) */
+  var sMode=useState('ticker');  var mode=sMode[0], setMode=sMode[1];   /* 'ticker' | 'similar' | 'manual' */
   var sGrid=useState(9);         var gridN=sGrid[0], setGridN=sGrid[1]; /* 4 | 9 | 16 */
   var sTf=useState('1m');        var tf=sTf[0], setTf=sTf[1];
   var sWin=useState(30);         var winMin=sWin[0], setWinMin=sWin[1]; /* 5..300 (300=全日) */
@@ -12736,6 +12862,7 @@ function CaMultiViewModal(props){
   var sPick=useState([]);        var picks=sPick[0], setPicks=sPick[1]; /* manual: id配列 */
   var sSame=useState(true);      var sameTickerOnly=sSame[0], setSameTickerOnly=sSame[1];
   var sPicker=useState(null);    var picker=sPicker[0], setPicker=sPicker[1]; /* 'ref'|'manual'|null */
+  var sPT=useState(null);        var pickerTicker=sPT[0], setPickerTicker=sPT[1]; /* picker内で選択中の銘柄 */
   var sFilt=useState('');        var pickFilter=sFilt[0], setPickFilter=sFilt[1];
   var sBuilding=useState(false); var building=sBuilding[0], setBuilding=sBuilding[1];
   var sProg=useState({done:0,total:0}); var prog=sProg[0], setProg=sProg[1];
@@ -12747,24 +12874,48 @@ function CaMultiViewModal(props){
   var cancelRef=useRef(false);
   var buildingRef=useRef(false);
 
-  /* 初期基準チャート: initialTicker の最新、無ければ全体の最新 */
-  useEffect(function(){
-    if(refId)return;
-    var pool=initialTicker?meta.filter(function(m){return m.ticker===initialTicker;}):meta.slice();
-    if(!pool.length)pool=meta.slice();
-    pool.sort(function(a,b){return (b.savedAt||0)-(a.savedAt||0);});
-    if(pool[0])setRefId(pool[0].id);
-  },[]);
+  /* 新しい順 (analysisDate 降順 → savedAt 降順) */
+  function newestFirst(a,b){
+    var da=a.analysisDate||'', db=b.analysisDate||'';
+    if(da<db)return 1; if(da>db)return -1;
+    return (b.savedAt||0)-(a.savedAt||0);
+  }
+  /* 銘柄ごとの {ticker,count,latest,savedAt,sampleId} (initialTicker を先頭、以降 savedAt 降順) */
+  function tickerRows(){
+    var map={};
+    meta.forEach(function(x){
+      var t=x.ticker||'(未分類)';
+      if(!map[t])map[t]={ticker:t,count:0,latest:'',savedAt:0,sampleId:null};
+      var r=map[t]; r.count++;
+      var d=x.analysisDate||''; if(d>r.latest)r.latest=d;
+      if((x.savedAt||0)>=r.savedAt){r.savedAt=x.savedAt||0; r.sampleId=x.id;}
+    });
+    return Object.keys(map).map(function(k){return map[k];})
+      .sort(function(a,b){ if(a.ticker===initialTicker)return -1; if(b.ticker===initialTicker)return 1; return (b.savedAt||0)-(a.savedAt||0); });
+  }
 
-  /* 戻るボタン: picker を開いていれば閉じる、無ければモーダルを閉じる */
+  /* 戻るボタン: picker内銘柄→picker→銘柄選択→モーダル の順に閉じる */
   useEffect(function(){
-    function onBack(){ if(picker){setPicker(null);} else onClose(); }
+    function onBack(){
+      if(picker){ if(pickerTicker)setPickerTicker(null); else setPicker(null); }
+      else if(selTicker){ setSelTicker(null); }
+      else onClose();
+    }
     window.addEventListener('ca_back',onBack);
     return function(){window.removeEventListener('ca_back',onBack);};
-  },[picker]);
+  },[picker, pickerTicker, selTicker]);
 
   /* unmount で進行中ビルドをキャンセル */
   useEffect(function(){return function(){cancelRef.current=true;};},[]);
+
+  /* 似た形: 基準が未設定 or 別銘柄なら、選択銘柄の最新を基準にする */
+  useEffect(function(){
+    if(mode!=='similar'||!selTicker)return;
+    var cur=refId?meta.find(function(x){return x.id===refId;}):null;
+    if(cur&&cur.ticker===selTicker)return;
+    var pool=meta.filter(function(x){return x.ticker===selTicker;}).slice().sort(newestFirst);
+    setRefId(pool[0]?pool[0].id:null);
+  },[mode, selTicker]);
 
   /* 似た形: 特徴量を初回1回だけ全件ビルド (mode が similar になった時) */
   useEffect(function(){
@@ -12794,7 +12945,10 @@ function CaMultiViewModal(props){
   /* グリッドに出す項目 */
   var cols=(gridN===4)?2:(gridN===9)?3:4;
   var items;
-  if(mode==='similar'){
+  if(mode==='ticker'){
+    var poolT=meta.filter(function(x){return x.ticker===selTicker;}).slice().sort(newestFirst);
+    items=poolT.slice(0,gridN).map(function(mm){return {m:mm};});
+  }else if(mode==='similar'){
     items=rankList.slice(0,gridN).map(function(r){
       var mm=meta.find(function(m){return m.id===r.id;})||{id:r.id};
       return {m:mm, score:r.score, outcome:r.outcome};
@@ -12808,67 +12962,93 @@ function CaMultiViewModal(props){
 
   var winLabel=(winMin>=300)?'全日':('寄り+'+winMin+'分');
 
-  /* ── ピッカー (基準1件 or 手動複数) ── */
+  /* ── 共通: ヘッダーのトグルボタン ── */
+  function segBtn(active,label,onClick,bg){
+    return ce("button",{onClick:onClick,
+      style:Object.assign({},BT,{fontSize:11,fontWeight:active?700:500,padding:"5px 10px",borderRadius:6,
+        background:active?(bg||"#2563eb"):"#222",color:active?"#fff":"#999"})},label);
+  }
+
+  /* ── 銘柄リスト (銘柄選択画面 / ピッカーの銘柄選択で共用) ── */
+  function renderTickerList(onPick, current){
+    var rows=tickerRows();
+    return ce("div",{style:{flex:1,overflowY:"auto",padding:"6px 10px 16px"}},
+      rows.length===0
+        ?ce("div",{style:{textAlign:"center",color:"#555",fontSize:12,paddingTop:40}},"銘柄がありません")
+        :rows.map(function(r){
+          var thumb=r.sampleId?(_thumbMemCache[r.sampleId]||''):'';
+          var selected=(current===r.ticker);
+          return ce("div",{key:r.ticker, onClick:function(){onPick(r.ticker);},
+            style:{display:"flex",alignItems:"center",gap:10,padding:"9px 10px",borderRadius:8,marginBottom:5,cursor:"pointer",
+              background:selected?"#1e2a3a":"#141414",border:"1px solid "+(selected?"#3b82f6":"#222")}},
+            ce("div",{style:{width:56,height:34,flexShrink:0,borderRadius:4,overflow:"hidden",background:"#000",
+              display:"flex",alignItems:"center",justifyContent:"center"}},
+              thumb?ce("img",{src:thumb,style:{width:"100%",height:"100%",objectFit:"cover"},draggable:false})
+                   :ce("span",{style:{fontSize:9,color:"#444"}},"—")),
+            ce("div",{style:{flex:1,minWidth:0}},
+              ce("div",{style:{fontSize:14,fontWeight:700,color:"#e5e5e5",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},r.ticker),
+              ce("div",{style:{fontSize:10,color:"#888",marginTop:1}},r.count+'件'+(r.latest?(' ・ 最新 '+r.latest):''))),
+            ce("span",{style:{fontSize:16,color:"#555",flexShrink:0}},"›")
+          );
+        })
+    );
+  }
+
+  /* ── チャート選択ピッカー (銘柄選択 → その銘柄のチャート) ── */
   function renderPicker(){
     var multi=(picker==='manual');
-    var pool=meta.slice().sort(function(a,b){return (b.savedAt||0)-(a.savedAt||0);});
+    /* 銘柄未選択 → 銘柄リスト */
+    if(!pickerTicker){
+      return ce("div",{style:{position:"absolute",inset:0,zIndex:2,background:"#0d0d0d",display:"flex",flexDirection:"column"}},
+        ce("div",{style:{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",borderBottom:"1px solid #222",flexShrink:0}},
+          ce("span",{style:{fontSize:13,fontWeight:700,color:"#ddd"}}, multi?'並べる銘柄を選択':'基準にする銘柄を選択'),
+          ce("span",{style:{flex:1}}),
+          ce("button",{onClick:function(){setPicker(null);},
+            style:Object.assign({},BT,{fontSize:12,fontWeight:700,padding:"6px 12px",borderRadius:7,background:"#333",color:"#fff"})},"閉じる")
+        ),
+        renderTickerList(function(t){setPickerTicker(t);setPickFilter('');}, selTicker)
+      );
+    }
+    /* 銘柄選択済 → その銘柄のチャート (新しい順) */
+    var pool=meta.filter(function(x){return x.ticker===pickerTicker;}).slice().sort(newestFirst);
     var fq=(pickFilter||'').trim().toLowerCase();
-    if(fq)pool=pool.filter(function(m){
-      return ((m.ticker||'')+' '+(m.name||'')+' '+(m.analysisDate||'')).toLowerCase().indexOf(fq)>=0;
-    });
+    if(fq)pool=pool.filter(function(x){ return ((x.name||'')+' '+(x.analysisDate||'')).toLowerCase().indexOf(fq)>=0; });
     pool=pool.slice(0,400);
-    return ce("div",{style:{position:"absolute",inset:0,zIndex:2,background:"#0d0d0d",
-      display:"flex",flexDirection:"column"}},
-      ce("div",{style:{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",
-        borderBottom:"1px solid #222",flexShrink:0}},
-        ce("span",{style:{fontSize:13,fontWeight:700,color:"#ddd"}},
-          multi?'並べるチャートを選択':'基準チャートを選択'),
+    return ce("div",{style:{position:"absolute",inset:0,zIndex:2,background:"#0d0d0d",display:"flex",flexDirection:"column"}},
+      ce("div",{style:{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",borderBottom:"1px solid #222",flexShrink:0}},
+        ce("button",{onClick:function(){setPickerTicker(null);},
+          style:Object.assign({},BT,{fontSize:12,fontWeight:700,padding:"6px 8px",borderRadius:6,background:"#222",color:"#bbb"})},"‹ 銘柄"),
+        ce("span",{style:{fontSize:13,fontWeight:700,color:"#ddd",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},
+          (multi?'並べるチャート: ':'基準チャート: ')+pickerTicker),
         ce("span",{style:{flex:1}}),
-        multi&&ce("span",{style:{fontSize:11,color:"#888"}},picks.length+' / '+gridN+' 件'),
+        multi&&ce("span",{style:{fontSize:11,color:"#888",flexShrink:0}},picks.length+' / '+gridN+' 件'),
         ce("button",{onClick:function(){setPicker(null);},
-          style:Object.assign({},BT,{fontSize:12,fontWeight:700,padding:"6px 12px",borderRadius:7,
-            background:multi?"#16a34a":"#333",color:"#fff"})}, multi?'決定':'閉じる')
+          style:Object.assign({},BT,{fontSize:12,fontWeight:700,padding:"6px 12px",borderRadius:7,background:multi?"#16a34a":"#333",color:"#fff"})}, multi?'決定':'閉じる')
       ),
       ce("div",{style:{padding:"8px 12px",flexShrink:0}},
-        ce("input",{value:pickFilter,onChange:function(e){setPickFilter(e.target.value);},
-          placeholder:"銘柄・日付で絞り込み",
-          style:{width:"100%",boxSizing:"border-box",padding:"7px 10px",borderRadius:7,
-            border:"1px solid #333",background:"#161616",color:"#ddd",fontSize:12,fontFamily:"inherit"}})
+        ce("input",{value:pickFilter,onChange:function(e){setPickFilter(e.target.value);},placeholder:"日付・名前で絞り込み",
+          style:{width:"100%",boxSizing:"border-box",padding:"7px 10px",borderRadius:7,border:"1px solid #333",background:"#161616",color:"#ddd",fontSize:12,fontFamily:"inherit"}})
       ),
       ce("div",{style:{flex:1,overflowY:"auto",padding:"4px 8px 16px"}},
         pool.length===0
           ?ce("div",{style:{textAlign:"center",color:"#555",fontSize:12,paddingTop:40}},"該当なし")
-          :pool.map(function(m){
-            var thumb=(_thumbMemCache[m.id]||m.thumbUrl||m.thumb||'');
-            var selected=multi?(picks.indexOf(m.id)>=0):(refId===m.id);
-            return ce("div",{key:m.id,
+          :pool.map(function(x){
+            var thumb=(_thumbMemCache[x.id]||x.thumbUrl||x.thumb||'');
+            var selected=multi?(picks.indexOf(x.id)>=0):(refId===x.id);
+            return ce("div",{key:x.id,
               onClick:function(){
                 if(multi){
-                  setPicks(function(prev){
-                    var i=prev.indexOf(m.id);
-                    if(i>=0){var n=prev.slice();n.splice(i,1);return n;}
-                    if(prev.length>=gridN)return prev; /* 上限 */
-                    return prev.concat([m.id]);
-                  });
-                }else{
-                  setRefId(m.id); setPicker(null);
-                }
+                  setPicks(function(prev){ var i=prev.indexOf(x.id); if(i>=0){var n=prev.slice();n.splice(i,1);return n;} if(prev.length>=gridN)return prev; return prev.concat([x.id]); });
+                }else{ setRefId(x.id); setPicker(null); setPickerTicker(null); }
               },
-              style:{display:"flex",alignItems:"center",gap:10,padding:"6px 8px",borderRadius:8,
-                marginBottom:4,cursor:"pointer",
-                background:selected?"#1e2a3a":"#141414",
-                border:"1px solid "+(selected?"#3b82f6":"#222")}},
-              ce("div",{style:{width:64,height:40,flexShrink:0,borderRadius:4,overflow:"hidden",
-                background:"#000",display:"flex",alignItems:"center",justifyContent:"center"}},
-                thumb?ce("img",{src:thumb,style:{width:"100%",height:"100%",objectFit:"cover"},draggable:false})
-                     :ce("span",{style:{fontSize:9,color:"#444"}},"—")),
+              style:{display:"flex",alignItems:"center",gap:10,padding:"6px 8px",borderRadius:8,marginBottom:4,cursor:"pointer",
+                background:selected?"#1e2a3a":"#141414",border:"1px solid "+(selected?"#3b82f6":"#222")}},
+              ce("div",{style:{width:64,height:40,flexShrink:0,borderRadius:4,overflow:"hidden",background:"#000",display:"flex",alignItems:"center",justifyContent:"center"}},
+                thumb?ce("img",{src:thumb,style:{width:"100%",height:"100%",objectFit:"cover"},draggable:false}):ce("span",{style:{fontSize:9,color:"#444"}},"—")),
               ce("div",{style:{flex:1,minWidth:0}},
-                ce("div",{style:{fontSize:12,fontWeight:700,color:"#ddd",overflow:"hidden",
-                  textOverflow:"ellipsis",whiteSpace:"nowrap"}},m.ticker||'(無題)'),
-                ce("div",{style:{fontSize:10,color:"#888",overflow:"hidden",
-                  textOverflow:"ellipsis",whiteSpace:"nowrap"}},(m.analysisDate||m.name||''))),
-              multi&&ce("span",{style:{fontSize:14,color:selected?"#3b82f6":"#444",flexShrink:0}},
-                selected?'☑':'☐'),
+                ce("div",{style:{fontSize:12,fontWeight:700,color:"#ddd",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},(x.analysisDate||x.name||'(無題)')),
+                ce("div",{style:{fontSize:10,color:"#888",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},(x.name||''))),
+              multi&&ce("span",{style:{fontSize:14,color:selected?"#3b82f6":"#444",flexShrink:0}}, selected?'☑':'☐'),
               !multi&&selected&&ce("span",{style:{fontSize:11,fontWeight:700,color:"#3b82f6",flexShrink:0}},"基準")
             );
           })
@@ -12876,11 +13056,23 @@ function CaMultiViewModal(props){
     );
   }
 
-  /* ── ヘッダー控え (トグル群) ── */
-  function segBtn(active,label,onClick,bg){
-    return ce("button",{onClick:onClick,
-      style:Object.assign({},BT,{fontSize:11,fontWeight:active?700:500,padding:"5px 10px",borderRadius:6,
-        background:active?(bg||"#2563eb"):"#222",color:active?"#fff":"#999"})},label);
+  /* ── 銘柄未選択: まず銘柄選択画面 ── */
+  if(!selTicker){
+    return ReactDOM.createPortal(
+      ce("div",{style:{position:"fixed",inset:0,zIndex:11000,background:"#0a0a0a",display:"flex",flexDirection:"column"}},
+        ce("div",{style:{display:"flex",alignItems:"center",gap:8,padding:"10px 14px",borderBottom:"1px solid #222",flexShrink:0}},
+          ce("span",{style:{fontSize:14,fontWeight:700,color:"#e5e5e5"}},"🔲 マルチ表示"),
+          ce("span",{style:{flex:1}}),
+          ce("button",{onClick:onClose,
+            style:Object.assign({},BT,{fontSize:13,fontWeight:700,padding:"6px 14px",borderRadius:7,background:"#333",color:"#fff"})},"✕ 閉じる")
+        ),
+        ce("div",{style:{padding:"12px 14px 6px",flexShrink:0}},
+          ce("div",{style:{fontSize:13,fontWeight:700,color:"#ddd"}},"銘柄を選択"),
+          ce("div",{style:{fontSize:11,color:"#888",marginTop:2}},"選んだ銘柄のチャートが新しい順に並びます")),
+        renderTickerList(function(t){setSelTicker(t);setMode('ticker');}, initialTicker)
+      ),
+      document.body
+    );
   }
 
   var refM=meta.find(function(m){return m.id===refId;});
@@ -12892,10 +13084,16 @@ function CaMultiViewModal(props){
       ce("div",{style:{display:"flex",alignItems:"center",gap:8,padding:"10px 14px",
         borderBottom:"1px solid #222",flexShrink:0,flexWrap:"wrap"}},
         ce("span",{style:{fontSize:14,fontWeight:700,color:"#e5e5e5"}},"🔲 マルチ表示"),
+        /* 銘柄チップ (タップで銘柄選択へ戻る) */
+        ce("button",{onClick:function(){setSelTicker(null);}, title:"銘柄を変更",
+          style:Object.assign({},BT,{fontSize:12,fontWeight:700,padding:"5px 10px",borderRadius:7,
+            background:"#1e2a3a",color:"#93c5fd",border:"1px solid #3b82f6",maxWidth:160,overflow:"hidden",
+            textOverflow:"ellipsis",whiteSpace:"nowrap"})}, (selTicker||'')+' ⇄'),
         /* モード */
-        ce("div",{style:{display:"flex",gap:4,marginLeft:6}},
+        ce("div",{style:{display:"flex",gap:4,marginLeft:4}},
+          segBtn(mode==='ticker','銘柄の最近',function(){setMode('ticker');},"#2563eb"),
           segBtn(mode==='similar','似た形',function(){setMode('similar');},"#7c3aed"),
-          segBtn(mode==='manual','手動で選ぶ',function(){setMode('manual');},"#0e7490")
+          segBtn(mode==='manual','手動',function(){setMode('manual');},"#0e7490")
         ),
         ce("span",{style:{flex:1}}),
         ce("button",{onClick:onClose,
@@ -12930,7 +13128,7 @@ function CaMultiViewModal(props){
         /* 似た形: 基準/対象 */
         mode==='similar'&&ce("div",{style:{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}},
           ce("span",{style:{fontSize:10,color:"#777"}},"基準"),
-          ce("button",{onClick:function(){setPicker('ref');},
+          ce("button",{onClick:function(){setPicker('ref');setPickerTicker(null);setPickFilter('');},
             style:Object.assign({},BT,{fontSize:11,fontWeight:700,padding:"5px 10px",borderRadius:6,
               background:"#312e81",color:"#c7d2fe",maxWidth:180,overflow:"hidden",
               textOverflow:"ellipsis",whiteSpace:"nowrap"})},
@@ -12938,7 +13136,7 @@ function CaMultiViewModal(props){
           segBtn(sameTickerOnly,'同銘柄のみ',function(){setSameTickerOnly(!sameTickerOnly);},"#0e7490")
         ),
         /* 手動: 選択ボタン */
-        mode==='manual'&&ce("button",{onClick:function(){setPicker('manual');},
+        mode==='manual'&&ce("button",{onClick:function(){setPicker('manual');setPickerTicker(null);setPickFilter('');},
           style:Object.assign({},BT,{fontSize:11,fontWeight:700,padding:"5px 12px",borderRadius:6,
             background:"#0e7490",color:"#fff"})},
           '＋ チャートを選ぶ ('+picks.length+')')
@@ -12956,9 +13154,11 @@ function CaMultiViewModal(props){
         (items.length===0&&!building)
           ?ce("div",{style:{position:"absolute",inset:0,display:"flex",alignItems:"center",
             justifyContent:"center",color:"#555",fontSize:13,textAlign:"center",padding:24,lineHeight:1.8}},
-            mode==='similar'
-              ?(refId?'似たチャートが見つかりません（対象を増やすか期間を変えてください）':'基準チャートを選んでください')
-              :'「＋ チャートを選ぶ」から並べたいチャートを選択してください')
+            mode==='ticker'
+              ?'この銘柄のチャートがありません'
+              :mode==='similar'
+                ?(refId?'似たチャートが見つかりません（対象を増やすか期間を変えてください）':'基準チャートを選んでください')
+                :'「＋ チャートを選ぶ」から並べたいチャートを選択してください')
           :ce("div",{style:{position:"absolute",inset:0,padding:10,display:"grid",
             gridTemplateColumns:"repeat("+cols+",1fr)",
             gridAutoRows:"1fr",gap:8,overflowY:"auto"}},
