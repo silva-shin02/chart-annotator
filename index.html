@@ -8690,6 +8690,29 @@ function caSaveMeta(m){
     console.error('[caSaveMeta] save failed');
   }
 }
+/* 2026-06-21: チャートの最終閲覧日時 (ローカルのみ・{id:ts})。
+   描画毎に読むためモジュールキャッシュを使う (setで同オブジェクトを更新)。 */
+var CA_LASTVIEW_KEY='ca_last_viewed_v1';
+var _caLastViewedCache=null;
+function caLoadLastViewed(){
+  if(_caLastViewedCache)return _caLastViewedCache;
+  try{var s=localStorage.getItem(CA_LASTVIEW_KEY);_caLastViewedCache=(s?JSON.parse(s):{})||{};}
+  catch(e){_caLastViewedCache={};}
+  return _caLastViewedCache;
+}
+function caGetLastViewed(id){return caLoadLastViewed()[id]||0;}
+function caSetLastViewed(id){
+  if(!id)return;
+  var mp=caLoadLastViewed(); mp[id]=Date.now();
+  try{localStorage.setItem(CA_LASTVIEW_KEY,JSON.stringify(mp));}catch(e){}
+}
+/* 最終閲覧の表示用フォーマット (当年は M/D、それ以外は YYYY/M/D) */
+function caFmtLastViewed(ts){
+  if(!ts)return '';
+  var d=new Date(ts), s=(d.getMonth()+1)+'/'+d.getDate();
+  if(d.getFullYear()!==new Date().getFullYear())s=d.getFullYear()+'/'+s;
+  return s;
+}
 /* 2026-04-27: Storage URL 破損時 (img onError) — meta から thumbUrl をクリア
    次回ホームマウント時に missing 処理が自動再生成 + 再UL */
 function caClearBrokenThumbUrl(id){
@@ -10772,6 +10795,8 @@ function CaChartCard(props){
   }
 
   var dateStr=new Date(m.savedAt).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+  /* 2026-06-21: 最終閲覧日時 (描画時点で取得・openChart で記録) */
+  var lastViewedTs=caGetLastViewed(m.id);
 
   /* タグ定義マップ (render 時点) */
   var allDefs=caLoadTagDefs();
@@ -10799,7 +10824,13 @@ function CaChartCard(props){
         style:Object.assign({},BT2,{position:'absolute',top:6,right:6,
           width:28,height:28,borderRadius:'50%',background:'rgba(0,0,0,.75)',
           color:'#f87171',fontSize:14,display:'flex',alignItems:'center',
-          justifyContent:'center',lineHeight:1,fontWeight:700})},'🗑')
+          justifyContent:'center',lineHeight:1,fontWeight:700})},'🗑'),
+      /* 2026-06-21: 最終閲覧日バッジ (閲覧履歴がある時のみ・サムネ左下) */
+      lastViewedTs>0&&ce('div',{title:'最終閲覧 '+new Date(lastViewedTs).toLocaleString('ja-JP'),
+        style:{position:'absolute',left:6,bottom:6,zIndex:2,padding:'2px 7px',
+          background:'rgba(0,0,0,0.7)',color:'#cbd5e1',fontSize:10,fontWeight:700,
+          borderRadius:4,letterSpacing:0.2,pointerEvents:'none',whiteSpace:'nowrap'}},
+        '👁 '+caFmtLastViewed(lastViewedTs))
     ),
 
     /* タイトル・日付行 */
@@ -14356,6 +14387,7 @@ function DraftLibrary(props){
     });
   }
   function openChart(id){
+    caSetLastViewed(id);  /* 2026-06-21: 最終閲覧日時を記録 */
     var mi=meta.find(function(m){return m.id===id;});
     var extra={_draftId:id,_ticker:mi?mi.ticker:'',_name:mi?mi.name:'',_thumb:mi?mi.thumb:'',_savedAt:mi?mi.savedAt:0};
     /* ローカルデータから画像なし draft (新フォーマット) 判定ヘルパー */
