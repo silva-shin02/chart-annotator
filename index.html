@@ -4424,9 +4424,36 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     });
     ctx.stroke();
   }
+  /* 2026-06-22: 複数セグメント([{bars,side},...])を1パスで連続描画する版。
+     前日(ref)→当日(cur)を1本の線でつなぐのに使う。 */
+  function drawLineSegs(segs,lk,col){
+    ctx.strokeStyle=col; ctx.lineWidth=1.2;
+    ctx.beginPath();
+    var first=true;
+    segs.forEach(function(sg){
+      sg.bars.forEach(function(b){
+        var v=b[lk]; if(v==null)return;
+        var x=minToX(tToMin(b.t),sg.side), y=pToY(v);
+        if(first){ctx.moveTo(x,y); first=false;} else ctx.lineTo(x,y);
+      });
+    });
+    ctx.stroke();
+  }
+  /* 2026-06-22: EMA は前日(ref)→当日(cur)を「1本の連続線」で描く (HyperSBI2 と同じ連続EMA)。
+     従来は ref / cur を別パスで描いていたため、統合表示(前日チャート表示中)で day-gap を境に
+     EMA線が途切れ、HSBI2 のように「前日の終わり→当日の始め」がつながって見えなかった。
+     EMA値自体は computeEnhancedBars で既に前日末尾から連続化済みなので、描画側で
+     ref末尾→cur先頭 を1パスに繋ぐだけで連続表示になる (gap区間も橋渡しされる)。
+     ※ VWAP は当日リセット(日跨ぎで値が大きく飛ぶ)ため、従来どおり ref/cur 別パスのまま繋がない。 */
   lines.forEach(function(line){
-    drawLine(visibleBars,'cur',line.k,line.col);
-    if(hasRef)drawLine(visibleRefBars,'ref',line.k,line.col);
+    if(line.k==='vwap'){
+      drawLine(visibleBars,'cur',line.k,line.col);
+      if(hasRef)drawLine(visibleRefBars,'ref',line.k,line.col);
+    } else if(hasRef){
+      drawLineSegs([{bars:visibleRefBars,side:'ref'},{bars:visibleBars,side:'cur'}],line.k,line.col);
+    } else {
+      drawLine(visibleBars,'cur',line.k,line.col);
+    }
   });
 
   /* B-drawing: 時刻+価格座標ストローク描画 (ズーム・パンに追従)
