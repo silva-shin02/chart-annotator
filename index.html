@@ -1768,7 +1768,7 @@ function DataChart(props){
         // freehand: 多点プレビュー
         var preview={type:'freehand',anchors:d.pts,
           color:drawColor,width:drawWidth,opacity:drawOpacity};
-        drawAnalysisStrokeExt(ctx,preview,minToXloc,pToYloc,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
+        drawAnalysisStrokeExt(ctx,preview,minToXloc,pToYloc,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH,tf);
       } else {
         // 2点ツール: line/dotted/arrow/rect/circle/marker/ruler/zone
         var preview2={type:drawTool,
@@ -1804,7 +1804,7 @@ function DataChart(props){
         }
         var tp2=shifted.type||shifted.tool;
         if(tp2==='freehand'||tp2==='text'){
-          drawAnalysisStrokeExt(ctx,shifted,minToXloc2,pToYloc2,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
+          drawAnalysisStrokeExt(ctx,shifted,minToXloc2,pToYloc2,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH,tf);
         } else {
           drawAnalysisStroke(ctx,shifted,minToXloc2,pToYloc2,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
         }
@@ -1847,7 +1847,7 @@ function DataChart(props){
           return L.priceTop+(1-(p-L.pmin)/(L.pmax-L.pmin))*L.priceH;
         }
         var tp2=s2.type||s2.tool;
-        if(tp2==='freehand'||tp2==='text')drawAnalysisStrokeExt(ctx,moved,minFn,pToYm,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
+        if(tp2==='freehand'||tp2==='text')drawAnalysisStrokeExt(ctx,moved,minFn,pToYm,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH,tf);
         else drawAnalysisStroke(ctx,moved,minFn,pToYm,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
       });
       ctx.restore();
@@ -1903,7 +1903,7 @@ function DataChart(props){
           var _prevStk=Object.assign({},_hhPl.stroke,{anchors:[{tm:_drPl.curTm,p:_drPl.curP}]});
           var _minFnPl=function(m){return minToXWithSide(m,_hhPl.side);};
           ctx.globalAlpha=0.92;
-          drawAnalysisStrokeExt(ctx,_prevStk,_minFnPl,pToYcss,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
+          drawAnalysisStrokeExt(ctx,_prevStk,_minFnPl,pToYcss,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH,tf);
           ctx.globalAlpha=1;
         }
       }
@@ -1977,7 +1977,13 @@ function DataChart(props){
       ctx.stroke();
     }
     ctx.setLineDash([]);
-    var hh=Math.floor(tmForLabel/60), mm=Math.round(tmForLabel%60);
+    /* 2026-06-23: 5分足は各足を「枠 [start, start+5)」として読む(1本目=09:00〜09:05)。
+       足は start 時刻の目盛り線上に中央描画されるため、本体左端が start-2分(=半本分)に来て
+       しまい1本目が 08:58 始まりに見える。表示時刻だけ +2分 して各足が「枠の開始時刻」から
+       始まって見えるようにする(ローソク位置/OHLC/EMA/VWAP/書き込みは一切不変)。
+       1m は半本=0.4分で丸めると不可視なので据え置き。 */
+    var _tmDisp=tmForLabel+bar5TimeOff(tf);
+    var hh=Math.floor(_tmDisp/60), mm=Math.round(_tmDisp%60);
     if(mm>=60){hh++;mm-=60;}
     var tStr=(data.date?data.date.replace(/-/g,'/')+' ':'')+(hh<10?'0':'')+hh+':'+(mm<10?'0':'')+mm;
     ctx.font='bold 11px -apple-system,Helvetica,sans-serif';
@@ -2059,7 +2065,7 @@ function DataChart(props){
           if(d.freehand&&d.pts&&d.pts.length){
             var preview={type:'freehand',anchors:d.pts,
               color:drawColor,width:drawWidth,opacity:drawOpacity};
-            drawAnalysisStrokeExt(pctx,preview,minToXloc,pToYloc,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
+            drawAnalysisStrokeExt(pctx,preview,minToXloc,pToYloc,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH,tf);
           } else {
             var preview2={type:drawTool,
               anchors:[{tm:d.sTM,p:d.sP},{tm:d.cTM,p:d.cP}],
@@ -2088,7 +2094,7 @@ function DataChart(props){
             });
             var tp2=shifted.type||shifted.tool;
             if(tp2==='freehand'||tp2==='text'){
-              drawAnalysisStrokeExt(pctx,shifted,minToXloc2,pToYloc2,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
+              drawAnalysisStrokeExt(pctx,shifted,minToXloc2,pToYloc2,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH,tf);
             } else {
               drawAnalysisStroke(pctx,shifted,minToXloc2,pToYloc2,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH);
             }
@@ -2133,7 +2139,10 @@ function DataChart(props){
       }
       pctx.setLineDash([]);
       /* 時刻ラベル (priceBot の直下 = priceOverlay の下端付近) */
-      var hh=Math.floor(tmForLabel/60), mm=Math.round(tmForLabel%60);
+      /* 2026-06-23: 5分足は各足を「枠 [start, start+5)」として読む → 表示時刻を +2分(半本)。
+         詳細は上の drawCrosshair 内コメント参照。1m は据え置き。 */
+      var _tmDisp=tmForLabel+bar5TimeOff(tf);
+      var hh=Math.floor(_tmDisp/60), mm=Math.round(_tmDisp%60);
       if(mm>=60){hh++;mm-=60;}
       var tStr=(data.date?data.date.replace(/-/g,'/')+' ':'')+(hh<10?'0':'')+hh+':'+(mm<10?'0':'')+mm;
       pctx.font='bold 11px -apple-system,Helvetica,sans-serif';
@@ -2378,7 +2387,7 @@ function DataChart(props){
     var tx=minToXWithSide(a.tm, side||'cur'), ty=pToYcss(a.p);
     var fs=(s.fontSize||15)*hitZoom;
     var fb=s.fontBold?'bold ':'';
-    var rawLines=snippetDisplayText(s, s.text||(s._snippet&&s.snipId&&props.snippetsById&&props.snippetsById[s.snipId]?props.snippetsById[s.snipId].text:'')||'').split('\n');
+    var rawLines=snippetDisplayText(s, s.text||(s._snippet&&s.snipId&&props.snippetsById&&props.snippetsById[s.snipId]?props.snippetsById[s.snipId].text:'')||'', tf).split('\n');
     var boxW=(s.boxW&&s.boxW>0)?s.boxW*hitZoom:0;
     var mctx=cnv.getContext('2d'); mctx.save();
     mctx.font=fb+fs+"px -apple-system,'Helvetica Neue',sans-serif";
@@ -2625,7 +2634,7 @@ function DataChart(props){
         var fsRaw=s.fontSize||15;
         var fs=fsRaw*hitZoom;  /* 画面上の実フォントサイズ */
         var fb=s.fontBold?'bold ':'';
-        var rawLines=snippetDisplayText(s, s.text||'').split('\n');
+        var rawLines=snippetDisplayText(s, s.text||'', tf).split('\n');
         /* 2026-04-20: boxW指定時は wordBreak wrap (描画と一致させる)
            2026-04-22: boxW も zoom 倍 (描画側と同じ) */
         var hitBoxW=(s.boxW&&s.boxW>0)?s.boxW*hitZoom:0;
@@ -4303,6 +4312,10 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   ctx.textBaseline='top'; ctx.textAlign='center';
   // uSpan基準のしきい値 (hasRef時は表示範囲が広いので粗く)
   var stepMin = uSpan>=300?60 : uSpan>=120?30 : uSpan>=60?15 : uSpan>=30?10 : 5;
+  /* 2026-06-23: 5分足は各足を「枠 [start, start+5)」として読む(1本目=09:00〜09:05)。足は start 時刻の
+     目盛り上に中央描画されるので、時間目盛りラベル(と細い縦線)を半本分(2u=2分)だけ左へずらし、各足の
+     左端=枠開始時刻に合わせる(=ラベルがローソク間の境界に来る)。十字カーソル側も +2分 で整合。1mは据え置き。 */
+  var _lblDu = bar5TimeOff(tf);
   var gridSides = hasRef?['ref','cur']:['cur'];
   gridSides.forEach(function(sd){
     for(var m=540; m<=930; m+=stepMin){
@@ -4310,7 +4323,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
       if(m>=690 && m<=750)continue;
       var u=tmSideToU(m,sd);
       if(u<uS-0.1||u>uE+0.1)continue;
-      var x=uToX(u);
+      var x=uToX(u-_lblDu);
       if(x<padL-1||x>padL+chartW+1)continue;
       var hh=Math.floor(m/60), mm=m%60;
       var tStr=(hh<10?'0':'')+hh+':'+(mm<10?'0':'')+mm;
@@ -4322,7 +4335,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     [690,750].forEach(function(m){
       var u=tmSideToU(m,sd);
       if(u<uS||u>uE)return;
-      var x=uToX(u);
+      var x=uToX(u-_lblDu);  /* 5分足は半本分左へ(上のループと整合) */
       ctx.strokeStyle='#2a2a2a'; ctx.setLineDash([2,3]); ctx.lineWidth=0.5;
       ctx.beginPath(); ctx.moveTo(x,priceTop); ctx.lineTo(x,volBot); ctx.stroke();
       ctx.setLineDash([]);
@@ -4473,7 +4486,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
       if(hideHint&&hideHint.side==='cur'&&hideHint.idx===idx)return;
       var tp=s.type||s.tool;
       if(tp==='freehand'||tp==='text'){
-        drawAnalysisStrokeExt(ctx,s,minToXCur,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
+        drawAnalysisStrokeExt(ctx,s,minToXCur,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH,tf);
       } else {
         drawAnalysisStroke(ctx,s,minToXCur,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
       }
@@ -4494,7 +4507,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
       if(hideHint&&hideHint.side==='ref'&&hideHint.idx===idx)return;
       var tp=s.type||s.tool;
       if(tp==='freehand'||tp==='text'){
-        drawAnalysisStrokeExt(ctx,s,minToXRef,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
+        drawAnalysisStrokeExt(ctx,s,minToXRef,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH,tf);
       } else {
         drawAnalysisStroke(ctx,s,minToXRef,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH);
       }
@@ -4661,7 +4674,7 @@ function drawAnalysisStroke(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,priceTo
 }
 
 /* freehand / text / 選択ハイライト 用の拡張描画 */
-function drawAnalysisStrokeExt(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH){
+function drawAnalysisStrokeExt(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH,tf){
   if(!s||!s.anchors||!s.anchors.length)return;
   /* 2026-04-21: 地図モデルズーム連動 */
   var Z=(ctx&&typeof ctx._strokeZoom==='number'&&ctx._strokeZoom>0)?ctx._strokeZoom:1.0;
@@ -4709,7 +4722,7 @@ function drawAnalysisStrokeExt(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,pric
        2026-04-21: boxW も zoom 連動 */
     var boxWZ=(s.boxW&&s.boxW>0)?s.boxW*Z:0;
     /* スタンプ矢印: pointer有時は文頭に時間プレフィックスを表示 (保存テキストは不変) */
-    var dispText=snippetDisplayText(s, resolvedText);
+    var dispText=snippetDisplayText(s, resolvedText, tf);
     var rawLines=dispText.split('\n');
     var displayLines=[];
     if(boxWZ>0){
@@ -4795,6 +4808,11 @@ function getHandleAnchors(s){
   return [];
 }
 
+/* 2026-06-23: 5分足の時刻表示オフセット。各足は「枠[start,start+5)」で開始時刻の目盛りに中央描画
+   される(本体幅≒4分)。表示時刻を半本分(+2分)ずらすと足の左端=枠開始時刻に合う。十字カーソル・
+   時間軸ラベル・スタンプ(矢先)時刻すべてこの基準で統一する。1mは半本=0.4分で不可視なので0(据え置き)。 */
+function bar5TimeOff(tf){return tf==='5m'?2:0;}
+
 /* ─── スタンプ矢印 (pointer) ヘルパー ─────────────────────────────
    スタンプに矢印を付け、矢先のチャート時間 tipTm を記録する機能。
    s.pointer = {rootSide:'top|right|bottom|left', rootFrac:0..1, tipTm:分, tipP:価格} */
@@ -4807,10 +4825,10 @@ function snipTimeStr(tm){
   return hh+':'+(mm<10?'0'+mm:mm);
 }
 /* スタンプ表示テキスト: pointer有時のみ時間プレフィックスを付ける (保存テキストは変更しない) */
-function snippetDisplayText(s, baseText){
+function snippetDisplayText(s, baseText, tf){
   baseText=baseText||'';
   if(s&&s._snippet&&s.pointer&&typeof s.pointer.tipTm==='number'){
-    var t=snipTimeStr(s.pointer.tipTm);
+    var t=snipTimeStr(s.pointer.tipTm+bar5TimeOff(tf));
     if(t)return t+' '+baseText;
   }
   return baseText;
@@ -10674,7 +10692,7 @@ function caCollectStampPlacements(charts, snippetsById, cb){
               var txt=caSnipEffText(s,snippetsById);
               var col=s.color||(snippetsById&&s.snipId&&snippetsById[s.snipId]?snippetsById[s.snipId].color:'#ff9500');
               results.push({chartId:m.id, ticker:m.ticker||'', date:_caResolveMetaDate(m), tf:tf,
-                tipTm:s.pointer.tipTm, time:snipTimeStr(s.pointer.tipTm),
+                tipTm:s.pointer.tipTm, time:snipTimeStr(s.pointer.tipTm+bar5TimeOff(tf)),
                 snipId:s.snipId||null, text:txt, color:col});
             }
           });
