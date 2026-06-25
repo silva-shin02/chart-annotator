@@ -1945,33 +1945,38 @@ function DataChart(props){
     /* 十字カーソル */
     if(!showCrosshair||!L)return;
     /* 2026-06-25: stackMode 連動カーソル(1m⇔5m) — 他方の足のカーソル位置をこちらの
-       チャートへ投影: 対応足ハイライト + 縦線(正確な時刻) + 横線(同価格) + 時刻/価格ラベル。
+       チャートへ投影: 対応足ハイライト + 縦線(対応足の中心) + 横線(同価格) + 時刻/価格ラベル。
        linkCursorRef.current={tm,p,src}; src===自分のtf は自分のカーソルなので描かない。
        時間/価格は tm・円で共通なので、こちらの minToXWithSide / pmin・pmax で変換する。
        ※ローカル十字より前に描く(ターゲット側はローカルcursor無→後段で早期returnするため)。 */
     (function(){
       var lcr=props.linkCursorRef; var lc=lcr&&lcr.current;
       if(!lc||lc.src===tf||typeof lc.tm!=='number')return;
-      var lx=minToXWithSide(lc.tm,'cur');
-      if(lx<L.padL||lx>L.padL+L.chartW)return;
       var LCC='#4a9de3';
-      ctx.save();
-      /* 対応足ハイライト: こちらのtfの枠[ws,ws+step)を占めるローソク1本を帯で囲う */
+      /* 対応足: こちらのtfで「ソース分(lc.tm)を含む」足の枠[ws,ws+step)。
+         ※crosshairTimeStr の +2(bar5TimeOff) は「5m足上のカーソルtm→最寄り足中心」への補正で、
+           ここはソースが真の分(主に1m由来)なので使わない。まず整数分に丸めてから枠を求める。
+           例: 1分足の10:39(分=639) → 5分足は floor(639/5)*5=635=「10:35〜40」。 */
       var lstep=(tf==='5m')?5:1;
-      var lws=(tf==='5m')?Math.floor((lc.tm+bar5TimeOff(tf))/5)*5:Math.round(lc.tm);
-      var lxc=minToXWithSide(lws,'cur'), lxn=minToXWithSide(lws+lstep,'cur');
+      var lmin=Math.round(lc.tm);
+      var lws=(tf==='5m')?Math.floor(lmin/5)*5:lmin;
+      var lxc=minToXWithSide(lws,'cur');   /* 対応足の中心x(=縦線位置) */
+      if(lxc<L.padL||lxc>L.padL+L.chartW)return;
+      var lxn=minToXWithSide(lws+lstep,'cur');
       var lslot=Math.abs(lxn-lxc); if(!(lslot>0))lslot=(tf==='5m')?12:4;
       var bx0=lxc-lslot/2, bx1=lxc+lslot/2;
       if(bx0<L.padL)bx0=L.padL; if(bx1>L.padL+L.chartW)bx1=L.padL+L.chartW;
+      ctx.save();
+      /* 対応足ハイライト */
       ctx.setLineDash([]);
       ctx.globalAlpha=0.13; ctx.fillStyle=LCC;
       ctx.fillRect(bx0,L.priceTop,Math.max(0,bx1-bx0),L.priceBot-L.priceTop);
       ctx.globalAlpha=0.55; ctx.strokeStyle=LCC; ctx.lineWidth=1;
       ctx.strokeRect(Math.round(bx0)+0.5,Math.round(L.priceTop)+0.5,Math.round(bx1-bx0),Math.round(L.priceBot-L.priceTop));
       ctx.globalAlpha=1;
-      /* 縦線(正確な時刻位置) */
+      /* 縦線(対応足の中心) */
       ctx.strokeStyle=LCC; ctx.setLineDash([3,3]); ctx.lineWidth=1;
-      ctx.beginPath(); ctx.moveTo(Math.round(lx)+0.5,L.priceTop); ctx.lineTo(Math.round(lx)+0.5,L.volBot); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(Math.round(lxc)+0.5,L.priceTop); ctx.lineTo(Math.round(lxc)+0.5,L.volBot); ctx.stroke();
       /* 横線(同価格レベル: pmin/pmax線形式=価格ラベルと同基準) */
       var lcy=null;
       if(typeof lc.p==='number'&&L.pmax!=null&&L.pmin!=null&&L.pmax!==L.pmin){
@@ -1982,13 +1987,15 @@ function DataChart(props){
         }
       }
       ctx.setLineDash([]);
-      /* 時刻ラベル(こちらのtfの枠表記) */
-      var ltStr=(data.date?data.date.replace(/-/g,'/')+' ':'')+crosshairTimeStr(lc.tm, tf);
+      /* 時刻ラベル(対応足の枠範囲。crosshairTimeStrは+2補正があるのでwsから直接組む) */
+      function _lf(m){var h=Math.floor(m/60),mi=Math.round(m%60); if(mi>=60){h++;mi-=60;} return (h<10?'0':'')+h+':'+(mi<10?'0':'')+mi;}
+      var _rng=(lws>=930)?_lf(930):(_lf(lws)+'～'+_lf(lws+lstep));
+      var ltStr=(data.date?data.date.replace(/-/g,'/')+' ':'')+_rng;
       ctx.font='bold 11px -apple-system,Helvetica,sans-serif';
       ctx.textBaseline='middle'; ctx.textAlign='center';
       var ltw=ctx.measureText(ltStr).width+10, lty=L.priceBot+3;
-      ctx.fillStyle=LCC; ctx.fillRect(lx-ltw/2,lty,ltw,14);
-      ctx.fillStyle='#000'; ctx.fillText(ltStr,lx,lty+7);
+      ctx.fillStyle=LCC; ctx.fillRect(lxc-ltw/2,lty,ltw,14);
+      ctx.fillStyle='#000'; ctx.fillText(ltStr,lxc,lty+7);
       /* 価格ラベル */
       if(lcy!=null){
         var lpStr=lc.p.toFixed(0), lpw=ctx.measureText(lpStr).width+10;
