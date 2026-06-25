@@ -1729,11 +1729,12 @@ function DataChart(props){
     drawCrosshair();
   },[showCrosshair]);
   // F2: 親(他チャート)が cursor を更新したら自分も再描画
+  // 2026-06-25: stackMode 連動カーソル(linkCursorBump)でも再描画。
   useEffect(function(){
     if(!rafRef.current){
       rafRef.current=requestAnimationFrame(function(){drawCrosshair();rafRef.current=null;});
     }
-  },[props.externalCursorBump]);
+  },[props.externalCursorBump, props.linkCursorBump]);
 
   // 十字カーソル + 描画プレビュー (オーバーレイCanvas)
   function drawCrosshair(){
@@ -1943,6 +1944,60 @@ function DataChart(props){
 
     /* 十字カーソル */
     if(!showCrosshair||!L)return;
+    /* 2026-06-25: stackMode 連動カーソル(1m⇔5m) — 他方の足のカーソル位置をこちらの
+       チャートへ投影: 対応足ハイライト + 縦線(正確な時刻) + 横線(同価格) + 時刻/価格ラベル。
+       linkCursorRef.current={tm,p,src}; src===自分のtf は自分のカーソルなので描かない。
+       時間/価格は tm・円で共通なので、こちらの minToXWithSide / pmin・pmax で変換する。
+       ※ローカル十字より前に描く(ターゲット側はローカルcursor無→後段で早期returnするため)。 */
+    (function(){
+      var lcr=props.linkCursorRef; var lc=lcr&&lcr.current;
+      if(!lc||lc.src===tf||typeof lc.tm!=='number')return;
+      var lx=minToXWithSide(lc.tm,'cur');
+      if(lx<L.padL||lx>L.padL+L.chartW)return;
+      var LCC='#4a9de3';
+      ctx.save();
+      /* 対応足ハイライト: こちらのtfの枠[ws,ws+step)を占めるローソク1本を帯で囲う */
+      var lstep=(tf==='5m')?5:1;
+      var lws=(tf==='5m')?Math.floor((lc.tm+bar5TimeOff(tf))/5)*5:Math.round(lc.tm);
+      var lxc=minToXWithSide(lws,'cur'), lxn=minToXWithSide(lws+lstep,'cur');
+      var lslot=Math.abs(lxn-lxc); if(!(lslot>0))lslot=(tf==='5m')?12:4;
+      var bx0=lxc-lslot/2, bx1=lxc+lslot/2;
+      if(bx0<L.padL)bx0=L.padL; if(bx1>L.padL+L.chartW)bx1=L.padL+L.chartW;
+      ctx.setLineDash([]);
+      ctx.globalAlpha=0.13; ctx.fillStyle=LCC;
+      ctx.fillRect(bx0,L.priceTop,Math.max(0,bx1-bx0),L.priceBot-L.priceTop);
+      ctx.globalAlpha=0.55; ctx.strokeStyle=LCC; ctx.lineWidth=1;
+      ctx.strokeRect(Math.round(bx0)+0.5,Math.round(L.priceTop)+0.5,Math.round(bx1-bx0),Math.round(L.priceBot-L.priceTop));
+      ctx.globalAlpha=1;
+      /* 縦線(正確な時刻位置) */
+      ctx.strokeStyle=LCC; ctx.setLineDash([3,3]); ctx.lineWidth=1;
+      ctx.beginPath(); ctx.moveTo(Math.round(lx)+0.5,L.priceTop); ctx.lineTo(Math.round(lx)+0.5,L.volBot); ctx.stroke();
+      /* 横線(同価格レベル: pmin/pmax線形式=価格ラベルと同基準) */
+      var lcy=null;
+      if(typeof lc.p==='number'&&L.pmax!=null&&L.pmin!=null&&L.pmax!==L.pmin){
+        var _ly=L.priceTop+(L.pmax-lc.p)/(L.pmax-L.pmin)*L.priceH;
+        if(_ly>=L.priceTop&&_ly<=L.priceBot){
+          lcy=_ly;
+          ctx.beginPath(); ctx.moveTo(L.padL,Math.round(lcy)+0.5); ctx.lineTo(L.padL+L.chartW,Math.round(lcy)+0.5); ctx.stroke();
+        }
+      }
+      ctx.setLineDash([]);
+      /* 時刻ラベル(こちらのtfの枠表記) */
+      var ltStr=(data.date?data.date.replace(/-/g,'/')+' ':'')+crosshairTimeStr(lc.tm, tf);
+      ctx.font='bold 11px -apple-system,Helvetica,sans-serif';
+      ctx.textBaseline='middle'; ctx.textAlign='center';
+      var ltw=ctx.measureText(ltStr).width+10, lty=L.priceBot+3;
+      ctx.fillStyle=LCC; ctx.fillRect(lx-ltw/2,lty,ltw,14);
+      ctx.fillStyle='#000'; ctx.fillText(ltStr,lx,lty+7);
+      /* 価格ラベル */
+      if(lcy!=null){
+        var lpStr=lc.p.toFixed(0), lpw=ctx.measureText(lpStr).width+10;
+        ctx.textAlign='left';
+        ctx.fillStyle=LCC; ctx.fillRect(L.padL+L.chartW+2,lcy-8,lpw,16);
+        ctx.fillStyle='#000'; ctx.fillText(lpStr,L.padL+L.chartW+7,lcy);
+      }
+      ctx.restore();
+    })();
     /* F2: 連動cursor が親から来ていればそれを自分の画面座標に変換して描く。
        無ければ従来の cursorRef (自分のpointer位置) を使う
        C5+: 統合chart(L.hasRef=true)時は外部cursor不要 (親は現在chartのみ) */
@@ -2174,14 +2229,24 @@ function DataChart(props){
   // F2: 自分の cursorRef.current から親に {tm, yOffset} を通知 (両チャート連動)
   // C-uaxis: 統合chart時 (L.hasRef=true) は外部cursor不要 (過去chart container非render)。
   //   gap にいる場合は通知しない。
+  // 2026-06-25: stackMode 1m⇔5m 連動カーソル用に {tm, p(価格・円), src(自分のtf)} も onLinkCursorChange で通知。
   function notifyExternalCursorFromLocal(){
-    var onCh=props.onExternalCursorChange; if(!onCh)return;
+    var onCh=props.onExternalCursorChange;
+    var onLink=props.onLinkCursorChange;
+    if(!onCh&&!onLink)return;
     var L=layoutRef.current; var p=cursorRef.current;
-    if(!p||!L){onCh(null);return;}
-    if(p.x<L.padL||p.x>L.padL+L.chartW||p.y<L.padT||p.y>L.volBot){onCh(null);return;}
-    var xst=xToSideTm(p.x);
-    if(xst.tm==null){onCh(null);return;}
-    onCh({tm:xst.tm, yOffset:p.y-L.priceTop});
+    var bad=(!p||!L)||(p.x<L.padL||p.x>L.padL+L.chartW||p.y<L.padT||p.y>L.volBot);
+    var xst=bad?null:xToSideTm(p.x);
+    if(bad||xst.tm==null){ if(onCh)onCh(null); if(onLink)onLink(null); return; }
+    if(onCh)onCh({tm:xst.tm, yOffset:p.y-L.priceTop});
+    if(onLink){
+      /* 価格は価格エリア内のときのみ(価格ラベルと同じ pmin/pmax 線形式)。vol域はnull。 */
+      var lp=null;
+      if(p.y>=L.priceTop&&p.y<=L.priceBot&&L.pmax!=null&&L.pmin!=null&&L.pmax!==L.pmin){
+        lp=L.pmax-((p.y-L.priceTop)/L.priceH)*(L.pmax-L.pmin);
+      }
+      onLink({tm:xst.tm, p:lp, src:tf});
+    }
   }
   // マウスムーブハンドラ (十字カーソル座標更新専用)
   function onChartMouseMove(e){
@@ -2198,6 +2263,7 @@ function DataChart(props){
   function onChartMouseLeave(){
     cursorRef.current=null;
     if(props.onExternalCursorChange)props.onExternalCursorChange(null);
+    if(props.onLinkCursorChange)props.onLinkCursorChange(null);
     drawCrosshair();
   }
 
@@ -3821,6 +3887,7 @@ function DataChart(props){
       if(e.pointerType==='pen'){
         cursorRef.current=null;
         if(props.onExternalCursorChange)props.onExternalCursorChange(null);
+        if(props.onLinkCursorChange)props.onLinkCursorChange(null);
         drawCrosshair();
       }
     },
@@ -5834,6 +5901,13 @@ function ImageAnnotator(props){
     analysisCursorRef.current=c;
     setCursorBump(function(b){return (b+1)&65535;});
   }
+  /* 2026-06-25: stackMode 連動カーソル — 1分足⇔5分足でカーソル位置(時刻/価格)を相互投影。
+     linkCursorRef={tm,p,src}。再描画トリガは cursorBump を共用(両DataChartが linkCursorBump で監視)。 */
+  var linkCursorRef=useRef(null);
+  function notifyLinkCursor(c){
+    linkCursorRef.current=c;
+    setCursorBump(function(b){return (b+1)&65535;});
+  }
   /* 2026-04-20: 画像mode state撤去済 (refPanel/refImgDim/refSlideMode/refOffsetY/showRefPicker) */
   /* 2026-04-20 Step3: 画像mode state撤去 (zoom/pan/dispW/dispH/selBounds/selIdxs) */
   var st12=useState(false);  var canUndo=st12[0],setCanUndo=st12[1];
@@ -7412,6 +7486,10 @@ function ImageAnnotator(props){
               /* F2: 十字カーソル連動 */
               externalCursorRef:analysisCursorRef, externalCursorBump:cursorBump,
               onExternalCursorChange:notifyAnalysisCursor,
+              /* 2026-06-25: stackMode 1m⇔5m カーソル連動 (双方向) */
+              linkCursorRef:stackMode?linkCursorRef:null,
+              linkCursorBump:stackMode?cursorBump:0,
+              onLinkCursorChange:stackMode?notifyLinkCursor:null,
               strokes:strokesVisible?((analysisStrokes&&analysisStrokes[topTf])||[]):[],
               quickColors:quickColors,
               /* 2026-04-23: 2本指ダブルタップで現ツール⇄消しゴム入れ替え */
@@ -7677,6 +7755,8 @@ function ImageAnnotator(props){
             ),
             ce(DataChart,{
               data:simMode?simDisplayData:emaContinuedData, tf:'5m', showCrosshair:showCrosshair,
+              /* 2026-06-25: stackMode 1m⇔5m カーソル連動 (この下段は常にstack時のみrender) */
+              linkCursorRef:linkCursorRef, linkCursorBump:cursorBump, onLinkCursorChange:notifyLinkCursor,
               /* 2026-06-18: controlled view/zoom/pShift (uncontrolled再フィットによる倍率縮小を防止) */
               view:stack5mView, onViewChange:setStack5mView,
               zoom:stack5mZoom, onZoomChange:setStack5mZoom,
