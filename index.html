@@ -5935,6 +5935,18 @@ function ImageAnnotator(props){
      前日表示中/シミュ中/種なし は素の analysisData を返す */
   var emaContinuedData=useMemo(function(){
     if(simMode||refAnalysis||!analysisData||!emaSeedData)return analysisData;
+    /* 2026-06-25: 取り込みPython側でEMAを助走済み(ema_warmup_<ticker>.json ストアで全履歴連続計算)に
+       したので、JSONが既に助走済みなら前日種からの再計算をしない＝JSONの値をそのまま表示する。
+       背景: この再計算は「保存済み前日チャートの最終EMA」に依存し、それが古い/未助走だと当日先頭の
+       EMAがズレる(例: 5分足EMA50の寄り値が HyperSBI=6361 なのに 6366 に上書きされる不具合)。
+       判定: 先頭足のEMAが各期間で異なれば助走済み(未助走の from-scratch は先頭足で
+       ema9==ema22==ema50==ema200==始値 になる)。未助走の旧JSONのみ従来どおり前日種で連続化。 */
+    function _warmed(arr){
+      if(!arr||!arr.length)return false;
+      var b=arr[0];
+      return !(b.ema9===b.ema22&&b.ema22===b.ema50&&b.ema50===b.ema200);
+    }
+    if(_warmed(analysisData.bars_5m)||_warmed(analysisData.bars_1m))return analysisData;
     return Object.assign({},analysisData,{
       bars_1m:computeEnhancedBars(analysisData.bars_1m||[],emaSeedData.bars_1m||null),
       bars_5m:computeEnhancedBars(analysisData.bars_5m||[],emaSeedData.bars_5m||null)
