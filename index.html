@@ -4428,33 +4428,39 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     });
     ctx.stroke();
   }
-  /* 2026-06-22: 複数セグメント([{bars,side},...])を1パスで連続描画する版。
-     前日(ref)→当日(cur)を1本の線でつなぐのに使う。 */
-  function drawLineSegs(segs,lk,col){
+  /* 2026-06-22: 前日(ref)→当日(cur)の指標線を1本につなぐ。HyperSBI2 と同じ「足が立たない区間は
+     値据え置き(横ばい)→当日1本目で段差」の挙動にする。
+     背景: 前日15:30〜当日1本目(寄り)の間は取引が無く足が立たない区間 (夜間 + 寄り前の特別気配等)。
+       HSBI2 では足が無い間は指標線が更新されず "前日の最終値で横ばい" になり、当日1本目で初めて動く。
+       旧実装①(ref/cur別パス)は線が途切れ、旧実装②(単純な対角線で連結)は gap 区間の指標線を
+       前日値→当日値に線形補間してしまい、その区間の線の位置が HSBI2 とズレていた。
+     対策: [ref末尾値を当日1本目xまで横ばい保持] → [当日1本目で段差] → [当日線] と1パスで描く。
+       ・EMA  : computeEnhancedBars で連続化済 → 段差は小さく自然 (前日終値から滑らかに当日へ)
+       ・VWAP : 当日リセットの段差をそのまま縦に表現 (HSBI2 と同じ)
+     パン等で ref が見切れている(横ばい元が無い)場合は当日線のみ描く。 */
+  function drawLineBridged(refArr, curArr, lk, col){
     ctx.strokeStyle=col; ctx.lineWidth=1.2;
+    var pts=[];
+    refArr.forEach(function(b){var v=b[lk]; if(v!=null)pts.push([minToX(tToMin(b.t),'ref'), pToY(v)]);});
+    /* ref(前日)の最終有効値 = 横ばい保持する値 */
+    var refLastVal=null;
+    for(var r=refArr.length-1;r>=0;r--){ if(refArr[r][lk]!=null){refLastVal=refArr[r][lk];break;} }
+    /* 当日1本目(有効値)の位置 */
+    var curStart=-1;
+    for(var i=0;i<curArr.length;i++){ if(curArr[i][lk]!=null){curStart=i;break;} }
+    if(refLastVal!=null && curStart>=0){
+      /* 当日1本目xまで前日終値で横ばい(取引のない区間) → 続く当日1本目点で段差がつく */
+      pts.push([minToX(tToMin(curArr[curStart].t),'cur'), pToY(refLastVal)]);
+    }
+    curArr.forEach(function(b){var v=b[lk]; if(v!=null)pts.push([minToX(tToMin(b.t),'cur'), pToY(v)]);});
+    if(!pts.length)return;
     ctx.beginPath();
-    var first=true;
-    segs.forEach(function(sg){
-      sg.bars.forEach(function(b){
-        var v=b[lk]; if(v==null)return;
-        var x=minToX(tToMin(b.t),sg.side), y=pToY(v);
-        if(first){ctx.moveTo(x,y); first=false;} else ctx.lineTo(x,y);
-      });
-    });
+    pts.forEach(function(p,idx){ if(idx===0)ctx.moveTo(p[0],p[1]); else ctx.lineTo(p[0],p[1]); });
     ctx.stroke();
   }
-  /* 2026-06-22: EMA は前日(ref)→当日(cur)を「1本の連続線」で描く (HyperSBI2 と同じ連続EMA)。
-     従来は ref / cur を別パスで描いていたため、統合表示(前日チャート表示中)で day-gap を境に
-     EMA線が途切れ、HSBI2 のように「前日の終わり→当日の始め」がつながって見えなかった。
-     EMA値自体は computeEnhancedBars で既に前日末尾から連続化済みなので、描画側で
-     ref末尾→cur先頭 を1パスに繋ぐだけで連続表示になる (gap区間も橋渡しされる)。
-     ※ VWAP は当日リセット(日跨ぎで値が大きく飛ぶ)ため、従来どおり ref/cur 別パスのまま繋がない。 */
   lines.forEach(function(line){
-    if(line.k==='vwap'){
-      drawLine(visibleBars,'cur',line.k,line.col);
-      if(hasRef)drawLine(visibleRefBars,'ref',line.k,line.col);
-    } else if(hasRef){
-      drawLineSegs([{bars:visibleRefBars,side:'ref'},{bars:visibleBars,side:'cur'}],line.k,line.col);
+    if(hasRef){
+      drawLineBridged(visibleRefBars, visibleBars, line.k, line.col);
     } else {
       drawLine(visibleBars,'cur',line.k,line.col);
     }
@@ -4804,14 +4810,16 @@ function getHandleAnchors(s){
    時間軸ラベル・スタンプ(矢先)時刻すべてこの基準で統一する。1mは半本=0.4分で不可視なので0(据え置き)。 */
 function bar5TimeOff(tf){return tf==='5m'?2:0;}
 
-/* 2026-06-25: 十字カーソルの時刻ラベル(時刻部分のみ・日付プレフィックスは呼び出し側)。
+/* 2026-06-25: 時刻ラベル(時刻部分のみ・日付プレフィックスは呼び出し側)。十字カーソル/スタンプ共用。
    5分足はローソク1本=枠[start,start+5)を「HH:MM～HH:MM」の範囲で表示する(1分刻みにしない・
    足のどこを指しても枠は固定)。半本(+2分)補正してから5分グリッドにスナップして枠開始を求める。
-   1m等は従来どおり単一時刻(分丸め)。tmForLabel=生の十字tm(分)。 */
+   ただし大引け(15:30=930)足は枠でなく「15:30」単一表記(市場は15:30引けで枠の終端が無い)。
+   1m等は従来どおり単一時刻(分丸め)。tmForLabel=生のtm(分)。 */
 function crosshairTimeStr(tmForLabel, tf){
   function f(m){var h=Math.floor(m/60),mi=Math.round(m%60); if(mi>=60){h++;mi-=60;} return (h<10?'0':'')+h+':'+(mi<10?'0':'')+mi;}
   if(tf==='5m'){
     var ws=Math.floor((tmForLabel+bar5TimeOff(tf))/5)*5;   /* 枠開始(5分グリッドにスナップ) */
+    if(ws>=930)return f(930);   /* 大引け(15:30)足は範囲でなく単一表記 */
     return f(ws)+'～'+f(ws+5);
   }
   return f(tmForLabel+bar5TimeOff(tf));
@@ -4828,12 +4836,14 @@ function snipTimeStr(tm){
   var hh=Math.floor(r/60), mm=((r%60)+60)%60;
   return hh+':'+(mm<10?'0'+mm:mm);
 }
-/* スタンプ表示テキスト: pointer有時のみ時間プレフィックスを付ける (保存テキストは変更しない) */
+/* スタンプ表示テキスト: pointer有時のみ先頭に時刻行を付ける (保存テキストは変更しない)。
+   2026-06-25: 1行目=時刻(5分足は枠範囲「HH:MM～HH:MM」・15:30は単一、十字カーソルと同じ
+   crosshairTimeStr)・2行目以降=スタンプ名。従来は同一行の時刻プレフィックスだった。 */
 function snippetDisplayText(s, baseText, tf){
   baseText=baseText||'';
   if(s&&s._snippet&&s.pointer&&typeof s.pointer.tipTm==='number'){
-    var t=snipTimeStr(s.pointer.tipTm+bar5TimeOff(tf));
-    if(t)return t+' '+baseText;
+    var t=crosshairTimeStr(s.pointer.tipTm, tf);
+    if(t)return baseText?(t+'\n'+baseText):t;   /* 上=時間 / 下=スタンプ名 */
   }
   return baseText;
 }
@@ -10696,7 +10706,7 @@ function caCollectStampPlacements(charts, snippetsById, cb){
               var txt=caSnipEffText(s,snippetsById);
               var col=s.color||(snippetsById&&s.snipId&&snippetsById[s.snipId]?snippetsById[s.snipId].color:'#ff9500');
               results.push({chartId:m.id, ticker:m.ticker||'', date:_caResolveMetaDate(m), tf:tf,
-                tipTm:s.pointer.tipTm, time:snipTimeStr(s.pointer.tipTm+bar5TimeOff(tf)),
+                tipTm:s.pointer.tipTm, time:crosshairTimeStr(s.pointer.tipTm, tf),
                 snipId:s.snipId||null, text:txt, color:col});
             }
           });
