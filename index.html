@@ -10873,6 +10873,7 @@ function CaChartCard(props){
 
   return ce('div',{
     'data-ca-highlight':isHighlight?'1':null,
+    'data-ca-card-id':m.id,   /* 2026-06-25: 一覧スクロール復元のアンカー特定用 */
     style:{width:IS_TOUCH?450:510,background:isHighlight?'#1c2e1a':'#1a1a1a',borderRadius:10,
       border:isHighlight?'2px solid #4ade80':'1px solid #2a2a2a',overflow:'hidden',
       flexShrink:0,boxShadow:isHighlight?'0 0 0 3px rgba(74,222,128,0.25)':'none'}},
@@ -13309,6 +13310,8 @@ function CaMultiViewModal(props){
    作り直し=スクロール位置が頭に戻る。開いた時点の位置をモジュールスコープに退避し戻り時に復元。 */
 var _caLibScrollTop=0;
 var _caLibScrollTicker=null;
+var _caLibAnchorId=null;     /* 復元アンカー = 開いた時に最上部に見えていたカードのid */
+var _caLibAnchorDelta=0;     /* ビュー上端からアンカー上端までのpx。これを保って復元するのでズレない */
 function DraftLibrary(props){
   var onOpen=props.onOpen, onClose=props.onClose, fbCfg=props.fbCfg||{}, initialTicker=props.initialTicker||null;
   var highlightDate=props.highlightDate||null;
@@ -13334,19 +13337,38 @@ function DraftLibrary(props){
   var sFDA=useState(false);         var fileDragActive=sFDA[0],setFileDragActive=sFDA[1];
   var fileDragCountRef=useRef(0);
   /* 2026-06-25: チャート一覧(右ペイン)のスクロール容器ref + 開→閉での位置復元。
-     サムネ画像が遅れて読み込まれ高さが伸びるので、目標位置に届くまで数フレーム再適用する。 */
+     ピクセル値だけだとサムネ遅延読込で上の高さが伸びてズレるため、「アンカーカード」を
+     ビュー上端からの距離(delta)ごと記録し、そのカードが同じ位置に来るよう合わせ直す方式。
+     画像読込で高さが変わる間は毎フレーム再ピンし、安定したら停止=ズレない。 */
   var mainScrollRef=useRef(null);
   useLayoutEffect(function(){
-    var saved=_caLibScrollTop;
-    if(!saved||saved<=0)return;
-    if(_caLibScrollTicker!==selTicker)return;   /* 別銘柄を表示中なら復元しない */
-    var tries=0;
-    function apply(){
-      var el=mainScrollRef.current; if(!el)return;
-      el.scrollTop=saved; tries++;
-      if(tries<40 && el.scrollTop<saved-1 && typeof requestAnimationFrame==='function')requestAnimationFrame(apply);
+    if(_caLibScrollTicker!==selTicker)return;          /* 別銘柄を表示中なら復元しない */
+    if(!_caLibAnchorId && !_caLibScrollTop)return;
+    var anchorId=_caLibAnchorId, delta=_caLibAnchorDelta, savedTop=_caLibScrollTop;
+    var frames=0, stable=0;
+    function findAnchor(el){
+      if(!anchorId)return null;
+      var list=el.querySelectorAll('[data-ca-card-id]');
+      for(var i=0;i<list.length;i++){ if(list[i].getAttribute('data-ca-card-id')===anchorId)return list[i]; }
+      return null;
     }
-    apply();
+    function pin(){
+      var el=mainScrollRef.current; if(!el)return;
+      var before=el.scrollTop;
+      var a=findAnchor(el);
+      if(a){
+        /* アンカーカードが「ビュー上端から delta の位置」に来るよう scrollTop を補正 */
+        var cur=a.getBoundingClientRect().top - el.getBoundingClientRect().top;
+        el.scrollTop += (cur - delta);
+      } else {
+        el.scrollTop = savedTop;                       /* アンカーが無い時はピクセルで */
+      }
+      frames++;
+      if(Math.abs(el.scrollTop-before)<0.5) stable++; else stable=0;
+      /* サムネ読込等で高さが変わる間は再ピン。2フレーム動かなければ安定とみなし停止 */
+      if(frames<60 && stable<2 && typeof requestAnimationFrame==='function')requestAnimationFrame(pin);
+    }
+    pin();
   },[]);  /* 再マウント(=エディタから戻った)時に1回 */
   /* 2026-05-03: 銘柄リスト用ソートモード (左サイド select) */
   var CA_TICKER_SORT_KEY='ca_ticker_sort_v1';
@@ -14475,8 +14497,25 @@ function DraftLibrary(props){
     });
   }
   function openChart(id){
-    /* 2026-06-25: 一覧のスクロール位置を保存 (閉じて戻った時に同じ位置へ復元する) */
-    try{ if(mainScrollRef.current){ _caLibScrollTop=mainScrollRef.current.scrollTop; _caLibScrollTicker=selTicker; } }catch(e){}
+    /* 2026-06-25: 一覧のスクロール位置を保存 (閉じて戻った時に同じ位置へ復元)。最上部に見えている
+       カードを「アンカー」にし、ビュー上端からの距離(delta)ごと記録する(画像遅延読込でもズレない用)。 */
+    try{
+      var _sc=mainScrollRef.current;
+      if(_sc){
+        _caLibScrollTop=_sc.scrollTop; _caLibScrollTicker=selTicker;
+        _caLibAnchorId=null; _caLibAnchorDelta=0;
+        var _scTop=_sc.getBoundingClientRect().top;
+        var _cards=_sc.querySelectorAll('[data-ca-card-id]');
+        for(var _i=0;_i<_cards.length;_i++){
+          var _cr=_cards[_i].getBoundingClientRect();
+          if(_cr.bottom>_scTop+1){   /* 下端がビュー上端より下 = 最初の可視カード */
+            _caLibAnchorId=_cards[_i].getAttribute('data-ca-card-id');
+            _caLibAnchorDelta=_cr.top-_scTop;
+            break;
+          }
+        }
+      }
+    }catch(e){}
     caSetLastViewed(id);  /* 2026-06-21: 最終閲覧日時を記録 */
     var mi=meta.find(function(m){return m.id===id;});
     var extra={_draftId:id,_ticker:mi?mi.ticker:'',_name:mi?mi.name:'',_thumb:mi?mi.thumb:'',_savedAt:mi?mi.savedAt:0};
