@@ -61,6 +61,7 @@ var useState   = R.useState;
 var useRef     = R.useRef;
 var useEffect  = R.useEffect;
 var useMemo    = R.useMemo;
+var useLayoutEffect = R.useLayoutEffect;
 var Fragment   = R.Fragment;
 
 /* 2026-04-20 C12: alert/confirm 置き換え用ヘルパー (React外から呼べるDOM直接操作)
@@ -13303,6 +13304,11 @@ function CaMultiViewModal(props){
   );
 }
 
+/* 2026-06-25: チャート一覧のスクロール位置保持。DraftLibrary はチャートを開くと
+   アンマウントされ(Appがimg有時はImageAnnotatorのみ返す)、閉じると再マウントされて一覧が
+   作り直し=スクロール位置が頭に戻る。開いた時点の位置をモジュールスコープに退避し戻り時に復元。 */
+var _caLibScrollTop=0;
+var _caLibScrollTicker=null;
 function DraftLibrary(props){
   var onOpen=props.onOpen, onClose=props.onClose, fbCfg=props.fbCfg||{}, initialTicker=props.initialTicker||null;
   var highlightDate=props.highlightDate||null;
@@ -13327,6 +13333,21 @@ function DraftLibrary(props){
   var sTT=useState('charts');       var trashTab=sTT[0],setTrashTab=sTT[1];
   var sFDA=useState(false);         var fileDragActive=sFDA[0],setFileDragActive=sFDA[1];
   var fileDragCountRef=useRef(0);
+  /* 2026-06-25: チャート一覧(右ペイン)のスクロール容器ref + 開→閉での位置復元。
+     サムネ画像が遅れて読み込まれ高さが伸びるので、目標位置に届くまで数フレーム再適用する。 */
+  var mainScrollRef=useRef(null);
+  useLayoutEffect(function(){
+    var saved=_caLibScrollTop;
+    if(!saved||saved<=0)return;
+    if(_caLibScrollTicker!==selTicker)return;   /* 別銘柄を表示中なら復元しない */
+    var tries=0;
+    function apply(){
+      var el=mainScrollRef.current; if(!el)return;
+      el.scrollTop=saved; tries++;
+      if(tries<40 && el.scrollTop<saved-1 && typeof requestAnimationFrame==='function')requestAnimationFrame(apply);
+    }
+    apply();
+  },[]);  /* 再マウント(=エディタから戻った)時に1回 */
   /* 2026-05-03: 銘柄リスト用ソートモード (左サイド select) */
   var CA_TICKER_SORT_KEY='ca_ticker_sort_v1';
   var TICKER_SORT_MODES=[
@@ -14454,6 +14475,8 @@ function DraftLibrary(props){
     });
   }
   function openChart(id){
+    /* 2026-06-25: 一覧のスクロール位置を保存 (閉じて戻った時に同じ位置へ復元する) */
+    try{ if(mainScrollRef.current){ _caLibScrollTop=mainScrollRef.current.scrollTop; _caLibScrollTicker=selTicker; } }catch(e){}
     caSetLastViewed(id);  /* 2026-06-21: 最終閲覧日時を記録 */
     var mi=meta.find(function(m){return m.id===id;});
     var extra={_draftId:id,_ticker:mi?mi.ticker:'',_name:mi?mi.name:'',_thumb:mi?mi.thumb:'',_savedAt:mi?mi.savedAt:0};
@@ -15494,6 +15517,7 @@ function DraftLibrary(props){
           },"ハイライト解除")
         ),
         ce("div",{
+          ref:mainScrollRef,
           onDragOver:function(e){e.preventDefault();e.dataTransfer.dropEffect='copy';},
           onDragEnter:function(e){e.preventDefault();fileDragCountRef.current++;setFileDragActive(true);},
           onDragLeave:function(e){e.preventDefault();fileDragCountRef.current--;if(fileDragCountRef.current<=0){fileDragCountRef.current=0;setFileDragActive(false);}},
