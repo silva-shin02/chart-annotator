@@ -1977,8 +1977,8 @@ function DataChart(props){
       ctx.stroke();
     }
     ctx.setLineDash([]);
-    /* 2026-06-25: 5分足はローソク1本=枠[start,start+5)を「HH:MM～HH:MM」の範囲で表示(crosshairTimeStr)。
-       1m は従来どおり単一時刻。ローソク位置/OHLC/EMA/VWAP/書き込みは一切不変(表示のみ)。 */
+    /* 2026-06-25: 十字カーソルはローソク1本=枠[start,start+step)を「HH:MM～HH:MM」の範囲で表示
+       (1m/5mとも・crosshairTimeStr・大引け15:30は単一)。ローソク位置/OHLC/EMA/VWAP/書き込みは一切不変(表示のみ)。 */
     var tStr=(data.date?data.date.replace(/-/g,'/')+' ':'')+crosshairTimeStr(tmForLabel, tf);
     ctx.font='bold 11px -apple-system,Helvetica,sans-serif';
     ctx.textBaseline='middle'; ctx.textAlign='center';
@@ -2133,8 +2133,8 @@ function DataChart(props){
       }
       pctx.setLineDash([]);
       /* 時刻ラベル (priceBot の直下 = priceOverlay の下端付近) */
-      /* 2026-06-25: 5分足はローソク1本=枠[start,start+5)を「HH:MM～HH:MM」の範囲で表示。
-         詳細は上の drawCrosshair / crosshairTimeStr 参照。1m は単一時刻。 */
+      /* 2026-06-25: 十字カーソルは枠範囲「HH:MM～HH:MM」で表示(1m/5mとも・大引け15:30は単一)。
+         詳細は上の drawCrosshair / crosshairTimeStr 参照。 */
       var tStr=(data.date?data.date.replace(/-/g,'/')+' ':'')+crosshairTimeStr(tmForLabel, tf);
       pctx.font='bold 11px -apple-system,Helvetica,sans-serif';
       pctx.textBaseline='middle'; pctx.textAlign='center';
@@ -4811,18 +4811,18 @@ function getHandleAnchors(s){
 function bar5TimeOff(tf){return tf==='5m'?2:0;}
 
 /* 2026-06-25: 時刻ラベル(時刻部分のみ・日付プレフィックスは呼び出し側)。十字カーソル/スタンプ共用。
-   5分足はローソク1本=枠[start,start+5)を「HH:MM～HH:MM」の範囲で表示する(1分刻みにしない・
-   足のどこを指しても枠は固定)。半本(+2分)補正してから5分グリッドにスナップして枠開始を求める。
-   ただし大引け(15:30=930)足は枠でなく「15:30」単一表記(市場は15:30引けで枠の終端が無い)。
-   1m等は従来どおり単一時刻(分丸め)。tmForLabel=生のtm(分)。 */
+   ローソク1本=枠[start,start+step)を「HH:MM～HH:MM」の範囲で表示する(1分刻みにしない・足のどこを
+   指しても枠は固定)。足は開始時刻の目盛りに中央描画されるので、カーソルtmを最寄りの足の開始時刻に
+   スナップして枠を求める:
+     ・5m: floor((tm+2)/5)*5  (本体半分=2分ぶん補正してから5分グリッドへ)
+     ・1m: round(tm)          (本体半分=0.5分なので最寄りの整数分=その足の開始)
+   大引け(15:30=930)足は枠の終端が無い(市場は15:30引け)ので「15:30」単一表記。tmForLabel=生のtm(分)。 */
 function crosshairTimeStr(tmForLabel, tf){
   function f(m){var h=Math.floor(m/60),mi=Math.round(m%60); if(mi>=60){h++;mi-=60;} return (h<10?'0':'')+h+':'+(mi<10?'0':'')+mi;}
-  if(tf==='5m'){
-    var ws=Math.floor((tmForLabel+bar5TimeOff(tf))/5)*5;   /* 枠開始(5分グリッドにスナップ) */
-    if(ws>=930)return f(930);   /* 大引け(15:30)足は範囲でなく単一表記 */
-    return f(ws)+'～'+f(ws+5);
-  }
-  return f(tmForLabel+bar5TimeOff(tf));
+  var step=(tf==='5m')?5:1;
+  var ws=(tf==='5m')?Math.floor((tmForLabel+bar5TimeOff(tf))/5)*5:Math.round(tmForLabel);
+  if(ws>=930)return f(930);   /* 大引け(15:30)足は範囲でなく単一表記 */
+  return f(ws)+'～'+f(ws+step);
 }
 
 /* ─── スタンプ矢印 (pointer) ヘルパー ─────────────────────────────
@@ -4836,14 +4836,22 @@ function snipTimeStr(tm){
   var hh=Math.floor(r/60), mm=((r%60)+60)%60;
   return hh+':'+(mm<10?'0'+mm:mm);
 }
-/* スタンプ表示テキスト: pointer有時のみ先頭に時刻行を付ける (保存テキストは変更しない)。
-   2026-06-25: 1行目=時刻(5分足は枠範囲「HH:MM～HH:MM」・15:30は単一、十字カーソルと同じ
-   crosshairTimeStr)・2行目以降=スタンプ名。従来は同一行の時刻プレフィックスだった。 */
+/* スタンプの時刻文字列: 5分足=枠範囲(crosshairTimeStrと同じ「HH:MM～HH:MM」・15:30は単一)、
+   1分足=従来どおり単一時刻(snipTimeStr)。tipTm=矢先の保存tm。 */
+function stampTimeStr(tipTm, tf){
+  return tf==='5m' ? crosshairTimeStr(tipTm, '5m') : snipTimeStr(tipTm);
+}
+/* スタンプ表示テキスト: pointer有時のみ時刻を付ける (保存テキストは変更しない)。
+   2026-06-25: 2行表示(1行目=時刻 / 2行目以降=スタンプ名)は5分足のみ。1分足は従来どおり1行
+   (単一時刻の先頭プレフィックス)。時刻は stampTimeStr(5m=枠範囲・1m=単一)。 */
 function snippetDisplayText(s, baseText, tf){
   baseText=baseText||'';
   if(s&&s._snippet&&s.pointer&&typeof s.pointer.tipTm==='number'){
-    var t=crosshairTimeStr(s.pointer.tipTm, tf);
-    if(t)return baseText?(t+'\n'+baseText):t;   /* 上=時間 / 下=スタンプ名 */
+    var t=stampTimeStr(s.pointer.tipTm, tf);
+    if(t){
+      var sep=(tf==='5m')?'\n':' ';   /* 5分足のみ2行(上=時刻/下=名前)、1分足は1行 */
+      return baseText?(t+sep+baseText):t;
+    }
   }
   return baseText;
 }
@@ -10706,7 +10714,7 @@ function caCollectStampPlacements(charts, snippetsById, cb){
               var txt=caSnipEffText(s,snippetsById);
               var col=s.color||(snippetsById&&s.snipId&&snippetsById[s.snipId]?snippetsById[s.snipId].color:'#ff9500');
               results.push({chartId:m.id, ticker:m.ticker||'', date:_caResolveMetaDate(m), tf:tf,
-                tipTm:s.pointer.tipTm, time:crosshairTimeStr(s.pointer.tipTm, tf),
+                tipTm:s.pointer.tipTm, time:stampTimeStr(s.pointer.tipTm, tf),
                 snipId:s.snipId||null, text:txt, color:col});
             }
           });
