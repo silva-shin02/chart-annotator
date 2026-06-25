@@ -1977,15 +1977,9 @@ function DataChart(props){
       ctx.stroke();
     }
     ctx.setLineDash([]);
-    /* 2026-06-23: 5分足は各足を「枠 [start, start+5)」として読む(1本目=09:00〜09:05)。
-       足は start 時刻の目盛り線上に中央描画されるため、本体左端が start-2分(=半本分)に来て
-       しまい1本目が 08:58 始まりに見える。表示時刻だけ +2分 して各足が「枠の開始時刻」から
-       始まって見えるようにする(ローソク位置/OHLC/EMA/VWAP/書き込みは一切不変)。
-       1m は半本=0.4分で丸めると不可視なので据え置き。 */
-    var _tmDisp=tmForLabel+bar5TimeOff(tf);
-    var hh=Math.floor(_tmDisp/60), mm=Math.round(_tmDisp%60);
-    if(mm>=60){hh++;mm-=60;}
-    var tStr=(data.date?data.date.replace(/-/g,'/')+' ':'')+(hh<10?'0':'')+hh+':'+(mm<10?'0':'')+mm;
+    /* 2026-06-25: 5分足はローソク1本=枠[start,start+5)を「HH:MM～HH:MM」の範囲で表示(crosshairTimeStr)。
+       1m は従来どおり単一時刻。ローソク位置/OHLC/EMA/VWAP/書き込みは一切不変(表示のみ)。 */
+    var tStr=(data.date?data.date.replace(/-/g,'/')+' ':'')+crosshairTimeStr(tmForLabel, tf);
     ctx.font='bold 11px -apple-system,Helvetica,sans-serif';
     ctx.textBaseline='middle'; ctx.textAlign='center';
     var tw=ctx.measureText(tStr).width+10;
@@ -2139,12 +2133,9 @@ function DataChart(props){
       }
       pctx.setLineDash([]);
       /* 時刻ラベル (priceBot の直下 = priceOverlay の下端付近) */
-      /* 2026-06-23: 5分足は各足を「枠 [start, start+5)」として読む → 表示時刻を +2分(半本)。
-         詳細は上の drawCrosshair 内コメント参照。1m は据え置き。 */
-      var _tmDisp=tmForLabel+bar5TimeOff(tf);
-      var hh=Math.floor(_tmDisp/60), mm=Math.round(_tmDisp%60);
-      if(mm>=60){hh++;mm-=60;}
-      var tStr=(data.date?data.date.replace(/-/g,'/')+' ':'')+(hh<10?'0':'')+hh+':'+(mm<10?'0':'')+mm;
+      /* 2026-06-25: 5分足はローソク1本=枠[start,start+5)を「HH:MM～HH:MM」の範囲で表示。
+         詳細は上の drawCrosshair / crosshairTimeStr 参照。1m は単一時刻。 */
+      var tStr=(data.date?data.date.replace(/-/g,'/')+' ':'')+crosshairTimeStr(tmForLabel, tf);
       pctx.font='bold 11px -apple-system,Helvetica,sans-serif';
       pctx.textBaseline='middle'; pctx.textAlign='center';
       var tw=pctx.measureText(tStr).width+10;
@@ -4812,6 +4803,19 @@ function getHandleAnchors(s){
    される(本体幅≒4分)。表示時刻を半本分(+2分)ずらすと足の左端=枠開始時刻に合う。十字カーソル・
    時間軸ラベル・スタンプ(矢先)時刻すべてこの基準で統一する。1mは半本=0.4分で不可視なので0(据え置き)。 */
 function bar5TimeOff(tf){return tf==='5m'?2:0;}
+
+/* 2026-06-25: 十字カーソルの時刻ラベル(時刻部分のみ・日付プレフィックスは呼び出し側)。
+   5分足はローソク1本=枠[start,start+5)を「HH:MM～HH:MM」の範囲で表示する(1分刻みにしない・
+   足のどこを指しても枠は固定)。半本(+2分)補正してから5分グリッドにスナップして枠開始を求める。
+   1m等は従来どおり単一時刻(分丸め)。tmForLabel=生の十字tm(分)。 */
+function crosshairTimeStr(tmForLabel, tf){
+  function f(m){var h=Math.floor(m/60),mi=Math.round(m%60); if(mi>=60){h++;mi-=60;} return (h<10?'0':'')+h+':'+(mi<10?'0':'')+mi;}
+  if(tf==='5m'){
+    var ws=Math.floor((tmForLabel+bar5TimeOff(tf))/5)*5;   /* 枠開始(5分グリッドにスナップ) */
+    return f(ws)+'～'+f(ws+5);
+  }
+  return f(tmForLabel+bar5TimeOff(tf));
+}
 
 /* ─── スタンプ矢印 (pointer) ヘルパー ─────────────────────────────
    スタンプに矢印を付け、矢先のチャート時間 tipTm を記録する機能。
