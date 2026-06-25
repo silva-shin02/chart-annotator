@@ -4516,8 +4516,19 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     barW=Math.max(1, Z_BASE_BAR_PX*zoom);
   }
   function drawBarSet(barsArr,side){
+    /* 2026-06-25: 「寄り前(初約定より前)」の無取引補完足はローソク/出来高を描かない(EMA計算用の
+       ダミー足。HyperSBI2 整合: ローソクは初約定から表示・EMA線は9:00から表示)。
+       判定: その日の最初の v>0 足の時刻(firstTradedTm)より前の v===0 足。EMA/VWAP線は別関数
+       (drawLine/drawLineBridged)で全足を通すので、ここでスキップしても指標線は9:00から出る。
+       ※interior(初約定後)の無取引フラット足は firstTradedTm 以降なので従来どおりdoji表示。
+       ※full配列(bars/refBars)基準で判定 → パン時も寄り前足だけ確実にスキップ。 */
+    var _fullArr=(side==='ref')?refBars:bars;
+    var _firstTradedTm=null;
+    if(_fullArr){for(var _fi=0;_fi<_fullArr.length;_fi++){if(_fullArr[_fi].v>0){_firstTradedTm=tToMin(_fullArr[_fi].t);break;}}}
+    function _isPreOpenFill(b){return (b.v===0 && _firstTradedTm!=null && tToMin(b.t)<_firstTradedTm);}
     /* 出来高 (vol エリア、clip なしで描画) */
     barsArr.forEach(function(b){
+      if(_isPreOpenFill(b))return;  /* 寄り前補完足は出来高も描かない(v=0で元々不可視だが明示) */
       var cx=minToX(tToMin(b.t),side);
       var up=b.c>=b.o;
       var col=up?COL_UP:COL_DN;
@@ -4533,6 +4544,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     ctx.rect(padL,priceTop,chartW,priceH);
     ctx.clip();
     barsArr.forEach(function(b){
+      if(_isPreOpenFill(b))return;  /* 寄り前補完足はローソクを描かない(EMA線は drawLine で別途9:00から描画) */
       var cx=minToX(tToMin(b.t),side);
       var up=b.c>=b.o;
       var col=up?COL_UP:COL_DN;
