@@ -5527,6 +5527,49 @@ function ImageAnnotator(props){
     if(simCutoffTm<0)return [];
     return (arr||[]).filter(function(b){return _simTmin(b.t)<=simCutoffTm;});
   }
+  /* 2026-06-28: シミュ中の5分足を「確定済み5分足 + 形成中の部分足(1分足を集計)」で構築する。
+     simCutBars(bars_5m) は窓開始時刻<=cutoff の足を即フル完成で出すため、5分ごとに1本が一気に現れる。
+     代わりに cutoff(=現在)を含む5分窓だけ、その窓内の開示済み1分足から O/H/L/C/V を集計した
+     「伸び縮みする足」を末尾に置く。確定足(窓開始<現窓開始)は Python事前計算の足をそのまま使い、
+     EMA/VWAP/大引け等の特殊処理を温存する(本数・x位置は simCutBars と同一、末尾1本の見え方だけ変わる)。
+     5分足の t は枠 [start,start+5) の開始時刻(=floor(分/5)*5・1本目09:00)。
+     EMA/VWAPライブ追従: VWAP=開示済み最終1分足の日通算vwap、EMA=直近確定足EMAから部分終値で1歩
+     (α=2/(N+1))。※ref(前日)有りの単独5m表示では描画側 computeEnhancedBars が終値から再計算して
+       上書きするが同じライブ式なので結果一致。下段stackの5m(ref無し)はここの値をそのまま使用。 */
+  function simGrow5mBars(bars5m, bars1m, cutoff){
+    bars5m=bars5m||[]; bars1m=bars1m||[];
+    if(cutoff<0)return [];
+    var winStart=Math.floor(cutoff/5)*5;            // cutoff を含む5分窓の開始(分)
+    var out=[], tmpl=null, i;
+    for(i=0;i<bars5m.length;i++){
+      var st=_simTmin(bars5m[i].t);
+      if(st<winStart)out.push(bars5m[i]);           // 確定足はそのまま継承
+      else if(st===winStart)tmpl=bars5m[i];         // 現窓の事前計算足=部分足テンプレ
+    }
+    var seg=[];                                      // 現窓 [winStart,winStart+5) の開示済み1分足
+    for(i=0;i<bars1m.length;i++){
+      var m=_simTmin(bars1m[i].t);
+      if(m>=winStart&&m<winStart+5&&m<=cutoff)seg.push(bars1m[i]);
+    }
+    if(!seg.length)return out;                       // 現窓に開示足なし(=境界ちょうど手前)
+    var o=seg[0].o, c=seg[seg.length-1].c, h=seg[0].h, l=seg[0].l, v=0;
+    for(i=0;i<seg.length;i++){
+      if(seg[i].h>h)h=seg[i].h; if(seg[i].l<l)l=seg[i].l; v+=(seg[i].v||0);
+    }
+    var partial=tmpl?Object.assign({},tmpl):{t:seg[0].t};
+    partial.o=o; partial.h=h; partial.l=l; partial.c=c; partial.v=v;
+    var lastSeg=seg[seg.length-1];
+    if(lastSeg.vwap!=null)partial.vwap=lastSeg.vwap; // VWAP=現在の日通算値
+    var prev=out.length?out[out.length-1]:null;      // 直近確定5分足
+    if(prev){
+      var al={ema9:2/10,ema22:2/23,ema50:2/51,ema200:2/201};
+      ['ema9','ema22','ema50','ema200'].forEach(function(k){
+        if(prev[k]!=null)partial[k]=al[k]*c+(1-al[k])*prev[k];
+      });
+    }
+    out.push(partial);
+    return out;
+  }
   /* 現在の時間足で何本開示済みか (足は時刻昇順前提) */
   function simRevealedCount(){
     var arr=simBarsForTf();
@@ -5956,7 +5999,7 @@ function ImageAnnotator(props){
      無関係な再描画のたびに getFitZoom で再フィットしズーム/パンが飛ぶため。simCutoffTm変化時のみ更新。 */
   var simDisplayData=useMemo(function(){
     return (simMode&&analysisData)
-      ? Object.assign({},analysisData,{bars_1m:simCutBars(analysisData.bars_1m),bars_5m:simCutBars(analysisData.bars_5m)})
+      ? Object.assign({},analysisData,{bars_1m:simCutBars(analysisData.bars_1m),bars_5m:simGrow5mBars(analysisData.bars_5m,analysisData.bars_1m,simCutoffTm)})
       : analysisData;
   },[simMode,analysisData,simCutoffTm]);
   /* F1: 過去チャート選択モーダルの表示 */
