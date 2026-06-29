@@ -9287,7 +9287,10 @@ function ImageAnnotator(props){
        2026-06-29: 分析チェック中(全日開示)は送り操作を隠す */
     simMode&&analysisData&&!checkAnalysis&&(function(){
       var _arr=simBarsForTf(); var _tot=_arr.length; var _n=simRevealedCount();
-      var _lab=_n>0?String(_arr[_n-1].t):'--:--';
+      /* 2026-06-29: 最後に開示した足の時刻を「枠範囲 HH:MM～HH:MM」表記に(十字/スタンプと統一・crosshairTimeStr)。
+         tfは送り対象=simBarsForTfと同じ(stack中は1m / 単独は表示足)。大引け15:30は単一表記。 */
+      var _simTf=stackMode?'1m':analysisTf;
+      var _lab=_n>0?crosshairTimeStr(_simTmin(_arr[_n-1].t),_simTf):'--:--';
       var _btn={width:56,height:46,borderRadius:11,border:"none",fontSize:24,fontWeight:900,
         fontFamily:"inherit",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",
         touchAction:"manipulation",userSelect:"none"};
