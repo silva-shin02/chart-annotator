@@ -5943,6 +5943,9 @@ function ImageAnnotator(props){
   function _simTmin(t){var p=String(t).split(':');return (+p[0])*60+(+p[1]);}
   function simBarsForTf(){
     if(!analysisData)return [];
+    /* 2026-06-29: 1分足+5分足の同時表示(stackMode)中は、5分足をメインにしていても
+       常に1分刻みで進める。5分足は simGrow5mBars が cutoff に追従して1分ごとに伸びる。 */
+    if(stackMode)return analysisData.bars_1m||[];
     return (analysisTf==='5m'?analysisData.bars_5m:analysisData.bars_1m)||[];
   }
   /* 当日足を開示カットオフ時刻まで slice (指標線は各足が値を持つので自動追従) */
