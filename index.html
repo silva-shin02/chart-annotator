@@ -5774,7 +5774,9 @@ function ImageAnnotator(props){
   /* 2026-06-15: 1分足+5分足の上下同時表示 (stackMode)。splitChart(似た形)と排他。
      上=1m(controlled view) / 下=5m(uncontrolled self-fit)。tap-to-focusでanalysisTfを切替し、
      非フォーカス側はdrawTool='pan'で描画不可 (既存splitと同じ作法)。 */
-  var sStk=useState(function(){return !simMode&&caLoadDefaultTf()==='stack';}); var stackMode=sStk[0],setStackMode=sStk[1];
+  /* 2026-06-29: シミュレーターは常に 1分+5分 同時表示(stackMode)で開始する(ユーザー要望)。
+     通常編集は「初期表示の足」設定に従う。 */
+  var sStk=useState(function(){return simMode?true:(caLoadDefaultTf()==='stack');}); var stackMode=sStk[0],setStackMode=sStk[1];
   /* ジョイスティック表示状態 (タッチのみ) */
   var sJH=useState(function(){return localStorage.getItem('ca_js_hidden')==='1';});
   var jsHidden=sJH[0],setJsHidden=sJH[1];
