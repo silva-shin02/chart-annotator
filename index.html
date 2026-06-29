@@ -185,7 +185,13 @@ function idbGet(key,cb){
 function idbSet(key,val){
   _idbRun(function(){
     if(!_idb)return;
-    try{var tx=_idb.transaction(IDB_STORE,'readwrite');tx.objectStore(IDB_STORE).put(val,key);}catch(e){}
+    var _isBody=(key&&key.indexOf('data_')===0);
+    function _warn(){ if(_isBody&&typeof caStorageWarn==='function')caStorageWarn('チャートデータの保存に失敗しました（端末の保存容量が不足の可能性）。「各種設定→バックアップ」で退避し不要データの削除をご検討ください'); }
+    try{
+      var tx=_idb.transaction(IDB_STORE,'readwrite');
+      var rq=tx.objectStore(IDB_STORE).put(val,key);
+      tx.onerror=_warn; tx.onabort=_warn; if(rq)rq.onerror=_warn;
+    }catch(e){_warn();}
   });
 }
 function idbDel(key){
@@ -197,13 +203,22 @@ function idbDel(key){
 
 /* ─── Firebase Storage ヘルパー ────────────────────────────── */
 var _fbApp=null, _fbStorage=null;
+/* 2026-06-29: 専用名(named app)で初期化する。default app を firebase.app() で拾うと
+   バケット/APIキー変更後も旧設定を返し続け、フルリロードまで反映されない不具合があったため。
+   caResetFirebaseApp() で named app を破棄→次回 getFirebaseStorage で新設定で再生成する。 */
+var CA_FB_APP_NAME='ca-storage';
+function caResetFirebaseApp(){
+  try{ if(_fbApp&&_fbApp.delete)_fbApp.delete(); }catch(e){}
+  try{ var ex=firebase.app(CA_FB_APP_NAME); if(ex&&ex.delete)ex.delete(); }catch(e){}
+  _fbApp=null; _fbStorage=null;
+}
 function getFirebaseStorage(cfg){
   if(!cfg||!cfg.storageBucket||!cfg.apiKey)return null;
   if(_fbStorage)return _fbStorage;
   try{
     if(!_fbApp){
-      try{_fbApp=firebase.app();}catch(e2){
-        _fbApp=firebase.initializeApp({apiKey:cfg.apiKey,storageBucket:cfg.storageBucket});
+      try{_fbApp=firebase.app(CA_FB_APP_NAME);}catch(e2){
+        _fbApp=firebase.initializeApp({apiKey:cfg.apiKey,storageBucket:cfg.storageBucket},CA_FB_APP_NAME);
       }
     }
     _fbStorage=firebase.storage(_fbApp);
@@ -244,6 +259,22 @@ function _fbIsPaused(cfg){
   if(!cfg||!cfg.url)return true;
   return cfg.paused!==false;
 }
+/* 2026-06-29: ?auth= は必ず encodeURIComponent する (secretに +,/,=,& 等が含まれると
+   未エンコードでは認証が壊れ全同期が無音失敗するため)。英数字のみなら不変=後方互換 */
+function caAuthParam(secret){return secret?'?auth='+encodeURIComponent(secret):'';}
+/* 2026-06-29: トーストの連発抑制 (キー毎に10秒スロットル)。保存失敗/同期失敗の通知に使う */
+var _caToastThrottle={};
+function caThrottledToast(key,msg,type){
+  var now=Date.now();
+  if(_caToastThrottle[key]&&now-_caToastThrottle[key]<10000)return;
+  _caToastThrottle[key]=now;
+  try{if(window.caToast)window.caToast(msg,type||'error');}catch(e){}
+}
+/* 2026-06-29: ストレージ書込失敗 (localStorage quota / IndexedDB失敗) の共通警告。
+   黙殺するとチャート/設定が消えても気づけない (データ消失体験) ため最低限ユーザーに伝える */
+function caStorageWarn(msg){
+  caThrottledToast('storage',msg||'保存に失敗しました（端末の保存容量が不足している可能性）。「各種設定→バックアップ」で退避を推奨します','error');
+}
 
 /* ─── Color Picker ─────────────────────────────────────────── */
 var ANNOT_PRESET_KEY = 'scalping_annot_presets_v1';
@@ -271,7 +302,7 @@ function ColorPicker(props){
     catch(e){ return DEF_PRESETS; }
   }); var presets=s7[0],setPresets=s7[1];
 
-  function savePresets(p){ setPresets(p); try{localStorage.setItem(ANNOT_PRESET_KEY,JSON.stringify(p));}catch(e){} }
+  function savePresets(p){ setPresets(p); try{localStorage.setItem(ANNOT_PRESET_KEY,JSON.stringify(p));}catch(e){caStorageWarn();} caPrefPush(ANNOT_PRESET_KEY); }
   function closeAll(){ setOpen(false);setEditMode(false);setEditingSlot(null);setDragIdx(null);setDragOverIdx(null); }
   function pick(c){
     onChange(c); onHistory(c);
@@ -622,7 +653,8 @@ function caLoadPricePx(){
 }
 function caSavePricePx(v){
   var n=(v|0); if(n<0)n=0; if(n>100)n=100;
-  try{localStorage.setItem(CA_PRICE_PX_KEY,String(n));}catch(e){}
+  try{localStorage.setItem(CA_PRICE_PX_KEY,String(n));}catch(e){caStorageWarn();}
+  caPrefPush(CA_PRICE_PX_KEY);
   try{window.dispatchEvent(new CustomEvent('ca_price_px_changed',{detail:n}));}catch(e){}
 }
 
@@ -635,7 +667,8 @@ function caLoadAutoPan(){
   catch(e){return true;}
 }
 function caSaveAutoPan(b){
-  try{localStorage.setItem(CA_AUTO_PAN_KEY,b?'1':'0');}catch(e){}
+  try{localStorage.setItem(CA_AUTO_PAN_KEY,b?'1':'0');}catch(e){caStorageWarn();}
+  caPrefPush(CA_AUTO_PAN_KEY);
   try{window.dispatchEvent(new CustomEvent('ca_auto_pan_changed',{detail:!!b}));}catch(e){}
 }
 
@@ -651,8 +684,115 @@ function caLoadChartBg(){
 function caSaveChartBg(c){
   var s=String(c||'').trim();
   if(!/^#[0-9a-fA-F]{6}$/.test(s))s='#000000';
-  try{localStorage.setItem(CA_CHART_BG_KEY,s);}catch(e){}
+  try{localStorage.setItem(CA_CHART_BG_KEY,s);}catch(e){caStorageWarn();}
+  caPrefPush(CA_CHART_BG_KEY);
   try{window.dispatchEvent(new CustomEvent('ca_chart_bg_changed',{detail:s}));}catch(e){}
+}
+
+/* ─── 2026-06-29: 設定の Firebase 同期 (汎用 prefs・キー毎 last-write-wins + watermark) ──
+   表示設定/銘柄コード/色プリセット/検索ワード等を端末間で同期する。
+   ノード: chart-annotator-prefs/<key> = {v: localStorageの生文字列, t: 更新時刻}
+   キー毎に t を比較し remが新しい時だけ pull (他キーを巻き込まない=安全)。
+   ローカルの最終更新時刻は ca_pref_ut_<key> に保持。値は生文字列のまま同期し型ズレを回避。 */
+var CA_INDICATOR_VIS_KEY='ca_indicator_vis_v1';
+var CA_FIT_MODE_KEY='ca_fit_mode_v1';
+var CA_DEFAULT_TF_KEY='ca_default_tf_v1';
+var CA_DRAW_DEFAULTS_KEY='ca_draw_defaults_v1';
+var CA_PEN_ONLY_KEY='ca_pen_only_v1';
+var CA_SYNC_PREF_KEYS=[CA_PRICE_PX_KEY,CA_AUTO_PAN_KEY,CA_CHART_BG_KEY,CA_TICKER_CODES_KEY,
+  CA_INDICATOR_VIS_KEY,CA_FIT_MODE_KEY,CA_DEFAULT_TF_KEY,CA_DRAW_DEFAULTS_KEY,CA_PEN_ONLY_KEY,
+  'ca_search_words_v1','scalping_annot_presets_v1','annot_quickcolors_v1'];
+var CA_PREF_EVENTS={};
+CA_PREF_EVENTS[CA_PRICE_PX_KEY]='ca_price_px_changed';
+CA_PREF_EVENTS[CA_AUTO_PAN_KEY]='ca_auto_pan_changed';
+CA_PREF_EVENTS[CA_CHART_BG_KEY]='ca_chart_bg_changed';
+CA_PREF_EVENTS[CA_TICKER_CODES_KEY]='ca_ticker_codes_changed';
+CA_PREF_EVENTS[CA_INDICATOR_VIS_KEY]='ca_indicator_vis_changed';
+CA_PREF_EVENTS[CA_FIT_MODE_KEY]='ca_fit_mode_changed';
+var _caFbCfg=null;            /* App から最新の fbCfg をセット */
+function caSetActiveFbCfg(c){_caFbCfg=c;}
+var _caPrefPushTimers={};
+function caPrefPush(key){
+  var cfg=_caFbCfg; if(!cfg||!cfg.url||_fbIsPaused(cfg))return;
+  var raw; try{raw=localStorage.getItem(key);}catch(e){return;}
+  if(raw==null)return;
+  var ut=Date.now();
+  try{localStorage.setItem('ca_pref_ut_'+key,String(ut));}catch(e){}
+  if(_caPrefPushTimers[key])clearTimeout(_caPrefPushTimers[key]);
+  _caPrefPushTimers[key]=setTimeout(function(){
+    var url=cfg.url.replace(/\/$/,'')+'/chart-annotator-prefs/'+encodeURIComponent(key)+'.json'+caAuthParam(cfg.secret);
+    fetch(url,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({v:raw,t:ut})}).catch(function(){});
+  },800);
+}
+function caPrefsPull(cfg){
+  if(!cfg||!cfg.url||_fbIsPaused(cfg))return;
+  var url=cfg.url.replace(/\/$/,'')+'/chart-annotator-prefs.json'+caAuthParam(cfg.secret);
+  fetch(url).then(function(r){return r.ok?r.json():null;}).then(function(all){
+    if(!all||typeof all!=='object'||all.error)return;
+    CA_SYNC_PREF_KEYS.forEach(function(key){
+      var node=all[key]; if(!node||typeof node.t!=='number'||node.v==null)return;
+      var localUt=0; try{localUt=parseInt(localStorage.getItem('ca_pref_ut_'+key)||'0',10)||0;}catch(e){}
+      if(node.t>localUt){
+        try{
+          localStorage.setItem(key,String(node.v));
+          localStorage.setItem('ca_pref_ut_'+key,String(node.t));
+        }catch(e){return;}
+        var ev=CA_PREF_EVENTS[key];
+        if(ev){try{window.dispatchEvent(new CustomEvent(ev));}catch(e){}}
+      }
+    });
+  }).catch(function(){});
+}
+
+/* 2026-06-29: 指標(EMA/VWAP)の表示ON/OFF。既定は全表示=後方互換 */
+function caLoadIndicatorVis(){
+  var def={ema9:true,ema22:true,ema50:true,ema200:true,vwap:true};
+  try{var v=JSON.parse(localStorage.getItem(CA_INDICATOR_VIS_KEY));
+    if(v&&typeof v==='object')return Object.assign(def,v);}catch(e){}
+  return def;
+}
+function caSaveIndicatorVis(o){
+  try{localStorage.setItem(CA_INDICATOR_VIS_KEY,JSON.stringify(o));}catch(e){caStorageWarn();}
+  caPrefPush(CA_INDICATOR_VIS_KEY);
+  try{window.dispatchEvent(new CustomEvent('ca_indicator_vis_changed',{detail:o}));}catch(e){}
+}
+/* 2026-06-29: Y軸フィット方式。'all'=従来(EMA/VWAP含む) / 'price'=高安のみ(HSBI2に近い) */
+function caLoadFitMode(){
+  try{var v=localStorage.getItem(CA_FIT_MODE_KEY);return v==='price'?'price':'all';}catch(e){return 'all';}
+}
+function caSaveFitMode(m){
+  var s=(m==='price')?'price':'all';
+  try{localStorage.setItem(CA_FIT_MODE_KEY,s);}catch(e){caStorageWarn();}
+  caPrefPush(CA_FIT_MODE_KEY);
+  try{window.dispatchEvent(new CustomEvent('ca_fit_mode_changed',{detail:s}));}catch(e){}
+}
+/* 2026-06-29: 初期表示の足 '1m'|'5m'|'stack' */
+function caLoadDefaultTf(){
+  try{var v=localStorage.getItem(CA_DEFAULT_TF_KEY);return (v==='5m'||v==='stack')?v:'1m';}catch(e){return '1m';}
+}
+function caSaveDefaultTf(t){
+  var s=(t==='5m'||t==='stack')?t:'1m';
+  try{localStorage.setItem(CA_DEFAULT_TF_KEY,s);}catch(e){caStorageWarn();}
+  caPrefPush(CA_DEFAULT_TF_KEY);
+}
+/* 2026-06-29: 描画の既定値 (色/線幅/不透明度/フォント)。エディタ起動時の初期値に使う */
+function caLoadDrawDefaults(){
+  var def={color:'#E53935',lineW:2,opacity:1,fontSize:15,fontBold:false};
+  try{var v=JSON.parse(localStorage.getItem(CA_DRAW_DEFAULTS_KEY));
+    if(v&&typeof v==='object')return Object.assign(def,v);}catch(e){}
+  return def;
+}
+function caSaveDrawDefaults(o){
+  try{localStorage.setItem(CA_DRAW_DEFAULTS_KEY,JSON.stringify(o));}catch(e){caStorageWarn();}
+  caPrefPush(CA_DRAW_DEFAULTS_KEY);
+}
+/* 2026-06-29: ペンのみ描画 (Apple Pencil以外の単一タッチはパン扱い)。既定OFF */
+function caLoadPenOnly(){
+  try{return localStorage.getItem(CA_PEN_ONLY_KEY)==='1';}catch(e){return false;}
+}
+function caSavePenOnly(b){
+  try{localStorage.setItem(CA_PEN_ONLY_KEY,b?'1':'0');}catch(e){caStorageWarn();}
+  caPrefPush(CA_PEN_ONLY_KEY);
 }
 
 function caIsIPad(){
@@ -688,7 +828,8 @@ function caLoadTickerCodes(){
   }catch(e){return Object.assign({},CA_DEFAULT_TICKER_CODES);}
 }
 function caSaveTickerCodes(m){
-  try{localStorage.setItem(CA_TICKER_CODES_KEY,JSON.stringify(m));}catch(e){}
+  try{localStorage.setItem(CA_TICKER_CODES_KEY,JSON.stringify(m));}catch(e){caStorageWarn();}
+  caPrefPush(CA_TICKER_CODES_KEY);
   try{window.dispatchEvent(new CustomEvent('ca_ticker_codes_changed',{detail:m}));}catch(e){}
 }
 /* コード→ticker 逆引き */
@@ -761,21 +902,48 @@ function FbSettingsModal(props){
   var s4=useState(null); var cleanupStatus=s4[0],setCleanupStatus=s4[1]; // null|'running'|'done:N'|'error'
   /* Phase 4 (2026-04-20): 旧画像draft完全削除 status */
   var sLIC=useState(null); var legacyImgCleanStatus=sLIC[0],setLegacyImgCleanStatus=sLIC[1];
+  /* 2026-06-29: 接続テスト status (null|'running'|'ok: ...'|'error: ...') */
+  var sTest=useState(null); var testStatus=sTest[0],setTestStatus=sTest[1];
   function save(){
     var nc={url:url.trim(),secret:secret.trim(),apiKey:apiKey.trim(),storageBucket:bucket.trim(),paused:paused};
-    try{localStorage.setItem(FB_CFG_KEY,JSON.stringify(nc));}catch(e){}
-    _fbApp=null;_fbStorage=null;
-    // ユーザーが明示的にpause解除 → 強制停止フラグもリセット
-    
+    /* D3: 同期を有効にするのに URL 未入力 → 無音停止になるため中断して知らせる */
+    if(!nc.paused&&!nc.url){ setTestStatus('error: 同期を有効にするには Database URL を入力してください'); return; }
+    var ok=true;
+    try{localStorage.setItem(FB_CFG_KEY,JSON.stringify(nc));}catch(e){ok=false;}
+    if(!ok){ caStorageWarn('Firebase設定の保存に失敗しました（端末の保存容量不足の可能性）'); return; }  /* A1: 失敗時は閉じない */
+    caResetFirebaseApp();  /* A2: バケット/APIキー変更を同セッションで反映 (named app を破棄して再生成) */
     onSave(nc); onClose();
+  }
+  /* 2026-06-29 B3: 接続テスト — RTDBへ軽いGETで疎通確認し、設定ミス(URL誤り/secret誤り/権限)を即検知 */
+  function runTest(){
+    var u=url.trim(); if(!u){setTestStatus('error: Database URL が未入力です');return;}
+    setTestStatus('running');
+    var a=caAuthParam(secret.trim());
+    var vurl=u.replace(/\/$/,'')+'/chart-annotator-drafts-v.json'+a;
+    fetch(vurl).then(function(r){
+      if(r.status===401||r.status===403)throw new Error('認証エラー(HTTP '+r.status+') — Secret かDBルールを確認してください');
+      if(!r.ok)throw new Error('HTTP '+r.status+' — Database URL を確認してください');
+      return r.json();
+    }).then(function(d){
+      if(d&&d.error)throw new Error(String(d.error));
+      var b=bucket.trim(), k=apiKey.trim();
+      if(b&&k)setTestStatus('ok: RTDB接続OK ／ Storage設定あり（サムネ・画像同期=有効）');
+      else if(b||k)setTestStatus('ok: RTDB接続OK ／ ⚠ Storageはバケット名とAPIKeyの両方が必要です');
+      else setTestStatus('ok: RTDB接続OK（Storage未設定=サムネ・画像同期は無効）');
+    }).catch(function(e){setTestStatus('error: '+(e&&e.message?e.message:'接続失敗'));});
   }
   function runCleanup(){
     var u=url.trim(); if(!u){setCleanupStatus('error: URLが未設定');return;}
-    var a=secret.trim()?'?auth='+secret.trim():'';
+    var a=caAuthParam(secret.trim());
     setCleanupStatus('running');
-    var count=0;
+    /* 2026-06-29 A3: DELETEの成否を実際に検査する。発行時カウント+r.ok未検査だと
+       403等で1件も消えていなくても『完了』表示になり誤判断を招くため。 */
+    var ok=0, ng=0;
     var draftsBase=u.replace(/\/$/,'')+'/chart-annotator-drafts';
     var trashBase=u.replace(/\/$/,'')+'/chart-annotator-trash';
+    function delOne(uurl){
+      return fetch(uurl,{method:'DELETE'}).then(function(r){if(r.ok)ok++;else ng++;})["catch"](function(){ng++;});
+    }
     function cleanPath(base){
       return fetch(base+'.json'+a).then(function(r){
           if(r.ok)return r.text(); return null;})
@@ -787,19 +955,18 @@ function FbSettingsModal(props){
           ids.forEach(function(id){
             var item=all[id]; if(!item||typeof item!=='object')return;
             // thumbフィールド（base64 dataURL）があれば削除
-            if(item.thumb&&typeof item.thumb==='string'&&item.thumb.length>200){proms.push(fetch(base+'/'+id+'/thumb.json'+a,{method:'DELETE'}));
-              count++;
-            }
+            if(item.thumb&&typeof item.thumb==='string'&&item.thumb.length>200){proms.push(delOne(base+'/'+id+'/thumb.json'+a));}
             // dataフィールド（orig_base64含む重いデータ）があれば削除
-            if(item.data&&typeof item.data==='object'){proms.push(fetch(base+'/'+id+'/data.json'+a,{method:'DELETE'}));
-              count++;
-            }
+            if(item.data&&typeof item.data==='object'){proms.push(delOne(base+'/'+id+'/data.json'+a));}
           });
           return Promise.all(proms);
         });
     }
     Promise.all([cleanPath(draftsBase),cleanPath(trashBase)])
-      .then(function(){setCleanupStatus('done:'+count);})
+      .then(function(){
+        if(ok===0&&ng>0)setCleanupStatus('error: 削除0件 / 失敗'+ng+'件（Secret または DBルールを確認してください）');
+        else setCleanupStatus('done:'+ok+(ng?(' / 失敗'+ng+'件'):''));
+      })
       .catch(function(e){console.error('cleanup:',e);setCleanupStatus('error: '+e.message);});
   }
 
@@ -808,7 +975,7 @@ function FbSettingsModal(props){
      事前に PNG 一括エクスポート済みである前提 */
   function runLegacyImageCleanup(){
     var u=url.trim(); if(!u){setLegacyImgCleanStatus('error: URLが未設定');return;}
-    var a=secret.trim()?'?auth='+secret.trim():'';
+    var a=caAuthParam(secret.trim());
     setLegacyImgCleanStatus('running');
     var count=0, errors=0;
     var dataBase=u.replace(/\/$/,'')+'/chart-annotator-drafts-data';
@@ -826,10 +993,12 @@ function FbSettingsModal(props){
         });
         if(!idsToDelete.length){setLegacyImgCleanStatus('done:0');return;}
         var proms=[];
+        /* 2026-06-29 A3: DELETEは403等でもrejectしないため r.ok を検査して失敗を数える */
+        function _del(uurl){return fetch(uurl,{method:'DELETE'}).then(function(r){if(!r.ok)errors++;return r;})["catch"](function(){errors++;});}
         idsToDelete.forEach(function(id){
-          proms.push(fetch(dataBase+'/'+id+'.json'+a,{method:'DELETE'})["catch"](function(){errors++;}));
-          proms.push(fetch(metaBase+'/'+id+'.json'+a,{method:'DELETE'})["catch"](function(){errors++;}));
-          proms.push(fetch(tsBase+'/'+id+'.json'+a,{method:'DELETE'})["catch"](function(){errors++;}));
+          proms.push(_del(dataBase+'/'+id+'.json'+a));
+          proms.push(_del(metaBase+'/'+id+'.json'+a));
+          proms.push(_del(tsBase+'/'+id+'.json'+a));
           /* ローカル meta/data/thumb も削除 */
           try{
             var nm=caLoadMeta().filter(function(m){return m.id!==id;});
@@ -839,6 +1008,10 @@ function FbSettingsModal(props){
           count++;
         });
         Promise.all(proms).then(function(){
+          if(errors>0&&errors>=count){
+            setLegacyImgCleanStatus('error: Firebase側の削除に失敗（'+errors+'件・Secret/ルールを確認）。ローカルは削除済みの可能性があります');
+            return;
+          }
           setLegacyImgCleanStatus('done:'+count+(errors?' ('+errors+' errors)':''));
           /* 画面リロード促し */
           setTimeout(function(){
@@ -913,6 +1086,19 @@ function FbSettingsModal(props){
             ce("input",{type:"text",value:apiKey,onChange:function(e){setApiKey(e.target.value);},
               placeholder:"AIza...",style:INP}),
             ce("div",{style:{fontSize:10,color:"#555",marginTop:4}},"Firebase Console → プロジェクト設定 → 全般 で確認")
+          ),
+
+          /* 2026-06-29 B3: 接続テスト + D7: secret注記 */
+          ce("div",{style:{display:"flex",flexDirection:"column",gap:8}},
+            ce("button",{onClick:testStatus==='running'?null:runTest,
+              style:{padding:"11px 0",fontSize:13,fontWeight:700,borderRadius:10,border:"1px solid #1e3a5f",
+                background:testStatus==='running'?"#222":"#11233d",color:"#93c5fd",
+                cursor:testStatus==='running'?'wait':'pointer',fontFamily:"inherit"}},
+              testStatus==='running'?'⏳ 接続確認中…':'🔌 接続テスト'),
+            testStatus&&testStatus.indexOf('ok:')===0&&ce("div",{style:{fontSize:11,color:"#86efac",lineHeight:1.6,fontWeight:600}},"✓ "+testStatus.slice(3)),
+            testStatus&&testStatus.indexOf('error')===0&&ce("div",{style:{fontSize:11,color:"#fca5a5",lineHeight:1.6}},"✕ "+testStatus.replace(/^error:?\s*/,'')),
+            ce("div",{style:{fontSize:10,color:"#6b6b6b",lineHeight:1.6}},
+              "🔒 Secret はこの端末に平文保存されます。共有端末では使わないでください。")
           ),
 
           /* ── 旧データクリーンアップ ── */
@@ -1050,7 +1236,8 @@ function caLoadSearchWords(){
   return [];
 }
 function caSaveSearchWords(arr){
-  try{localStorage.setItem(CA_SEARCH_WORDS_KEY,JSON.stringify(arr||[]));}catch(e){}
+  try{localStorage.setItem(CA_SEARCH_WORDS_KEY,JSON.stringify(arr||[]));}catch(e){caStorageWarn();}
+  caPrefPush(CA_SEARCH_WORDS_KEY);
 }
 /* 2026-04-26: 銘柄別メモ (localStorage + Firebase) */
 var CA_TICKER_NOTES_KEY='ca_ticker_notes_v1';
@@ -1078,6 +1265,9 @@ function caSetTickerNote(ticker,text){
    2026-04-20: ツール自動復帰 / チャート背景色 / パームリジェクション を追加 */
 function DisplaySettingsModal(props){
   var onClose=props.onClose;
+  var fbCfg=props.fbCfg||{};
+  /* 2026-06-29: タブ ('display'|'draw'|'link'|'backup') */
+  var sTab=useState('display'); var tab=sTab[0],setTab=sTab[1];
   /* 価格軸ラベル固定ピクセル */
   var sPPx=useState(caLoadPricePx()); var pricePx=sPPx[0],setPricePxLocal=sPPx[1];
   function updatePricePx(v){
@@ -1094,6 +1284,21 @@ function DisplaySettingsModal(props){
     if(!/^#[0-9a-fA-F]{6}$/.test(s))return;
     setChartBg(s); caSaveChartBg(s);
   }
+  /* 2026-06-29 C1: 指標(EMA/VWAP)表示ON/OFF */
+  var sIV=useState(caLoadIndicatorVis()); var indVis=sIV[0],setIndVis=sIV[1];
+  function toggleInd(k){var next=Object.assign({},indVis);next[k]=!(indVis[k]!==false);setIndVis(next);caSaveIndicatorVis(next);}
+  /* 2026-06-29 C3: Y軸フィット方式 */
+  var sFM=useState(caLoadFitMode()); var fitMode=sFM[0],setFitMode=sFM[1];
+  function updateFitMode(m){var s=(m==='price')?'price':'all';setFitMode(s);caSaveFitMode(s);}
+  /* 2026-06-29 C4: 初期表示の足 */
+  var sDT=useState(caLoadDefaultTf()); var defTf=sDT[0],setDefTf=sDT[1];
+  function updateDefTf(t){var s=(t==='5m'||t==='stack')?t:'1m';setDefTf(s);caSaveDefaultTf(s);}
+  /* 2026-06-29 C2: 描画の既定値 */
+  var sDD=useState(caLoadDrawDefaults()); var drawDef=sDD[0],setDrawDef=sDD[1];
+  function updateDrawDef(patch){var next=Object.assign({},drawDef,patch);setDrawDef(next);caSaveDrawDefaults(next);}
+  /* 2026-06-29 C5: ペンのみ描画 */
+  var sPO=useState(caLoadPenOnly()); var penOnly=sPO[0],setPenOnly=sPO[1];
+  function updatePenOnly(b){setPenOnly(!!b);caSavePenOnly(!!b);}
   /* 銘柄コード対応 (scalping-notebook連携) */
   var sTC=useState(caLoadTickerCodes()); var tickerCodes=sTC[0],setTickerCodes=sTC[1];
   var allTickers=caLoadTickers();
@@ -1103,6 +1308,40 @@ function DisplaySettingsModal(props){
     next[ticker]=sanitized;
     setTickerCodes(next); caSaveTickerCodes(next);
   }
+  /* 2026-06-29 B1: バックアップ/復元 */
+  var sBK=useState(null); var backupStatus=sBK[0],setBackupStatus=sBK[1];
+  var sRS=useState(null); var restoreStatus=sRS[0],setRestoreStatus=sRS[1];
+  var restoreInputRef=useRef(null);
+  function doBackup(){
+    try{
+      var storeObj={};
+      for(var i=0;i<localStorage.length;i++){var kk=localStorage.key(i);storeObj[kk]=localStorage.getItem(kk);}
+      var payload={app:'chart-annotator',version:1,exportedAt:Date.now(),store:storeObj};
+      var dt=new Date();
+      var ds=dt.getFullYear()+('0'+(dt.getMonth()+1)).slice(-2)+('0'+dt.getDate()).slice(-2);
+      _triggerDl('data:application/json;charset=utf-8,'+encodeURIComponent(JSON.stringify(payload)),'chart-annotator-backup_'+ds+'.json');
+      setBackupStatus('done:'+Object.keys(storeObj).length);
+    }catch(e){setBackupStatus('error: '+(e&&e.message||'失敗'));}
+  }
+  function doRestore(file){
+    if(!file)return;
+    var rd=new FileReader();
+    rd.onload=function(ev){
+      try{
+        var p=JSON.parse(ev.target.result);
+        if(!p||!p.store||typeof p.store!=='object'){setRestoreStatus('error: バックアップ形式が不正です');return;}
+        var keys=Object.keys(p.store);
+        if(!keys.length){setRestoreStatus('error: 中身が空です');return;}
+        window.caConfirm('バックアップから '+keys.length+' 項目を復元します。現在の設定/一覧は上書きされます。\n復元後ページを再読込します。よろしいですか？',function(){
+          var ng=0;
+          keys.forEach(function(k){try{localStorage.setItem(k,p.store[k]);}catch(e){ng++;}});
+          setRestoreStatus('done:'+(keys.length-ng)+(ng?(' / 失敗'+ng):''));
+          setTimeout(function(){window.location.reload();},400);
+        },null,{yesLabel:'復元する',noLabel:'キャンセル',danger:true});
+      }catch(e){setRestoreStatus('error: '+(e&&e.message||'読込失敗'));}
+    };
+    rd.readAsText(file);
+  }
   /* 背景色プリセット */
   var BG_PRESETS=[
     {c:'#000000',label:'漆黒'},
@@ -1110,28 +1349,43 @@ function DisplaySettingsModal(props){
     {c:'#0a1f0a',label:'濃緑'},
     {c:'#1a1a1a',label:'濃灰'}
   ];
+  var INDS=[
+    {k:'ema9',label:'EMA9',col:'#ffffff'},{k:'ema22',label:'EMA22',col:'#ffa9ff'},
+    {k:'ema50',label:'EMA50',col:'#ff00ff'},{k:'ema200',label:'EMA200',col:'#a06bd0'},
+    {k:'vwap',label:'VWAP',col:'#ffff00'}
+  ];
+  var CARD={background:"#1a1a1a",borderRadius:10,padding:"10px 12px",border:"1px solid #1e3a5f"};
+  var HEAD={fontSize:13,fontWeight:700,color:"#a5b4fc",marginBottom:4};
+  var DESC={fontSize:10,color:"#666",marginBottom:8,lineHeight:1.5};
+  function tabBtn(id,label){
+    return ce("button",{onClick:function(){setTab(id);},
+      style:{flex:1,padding:"9px 4px",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer",
+        background:"none",border:"none",borderBottom:tab===id?"2px solid #58a6ff":"2px solid transparent",
+        color:tab===id?"#58a6ff":"#8b949e"}},label);
+  }
   return ReactDOM.createPortal(
     ce("div",{onClick:onClose,
       style:{position:"fixed",inset:0,background:"rgba(0,0,0,.7)",zIndex:21000,
         display:"flex",alignItems:"center",justifyContent:"center",padding:20}},
       ce("div",{onClick:function(e){e.stopPropagation();},
-        style:{background:"#1c1c1e",borderRadius:18,padding:"28px 24px 24px",width:"100%",maxWidth:480,
+        style:{background:"#1c1c1e",borderRadius:18,padding:"24px 22px 22px",width:"100%",maxWidth:480,
           maxHeight:"90vh",overflowY:"auto",
           boxShadow:"0 24px 64px rgba(0,0,0,.8)",border:"1px solid #2a2a2a"}},
-        ce("div",{style:{fontSize:18,fontWeight:700,color:"#fff",marginBottom:6,textAlign:"center"}},"📊 表示・動作設定"),
-        ce("div",{style:{fontSize:12,color:"#666",textAlign:"center",marginBottom:20,lineHeight:1.8}},
-          "チャート表示やツール動作をカスタマイズ"
+        ce("div",{style:{fontSize:18,fontWeight:700,color:"#fff",marginBottom:12,textAlign:"center"}},"📊 表示・動作設定"),
+        /* タブバー */
+        ce("div",{style:{display:"flex",borderBottom:"1px solid #2a2a2a",marginBottom:14}},
+          tabBtn('display','表示'),tabBtn('draw','描画'),tabBtn('link','連携・同期'),tabBtn('backup','バックアップ')
         ),
-        ce("div",{style:{display:"flex",flexDirection:"column",gap:14}},
-          /* 2026-04-21: 価格軸ラベル最小間隔px (旧 priceRange 縮減から転用) */
-          ce("div",{style:{background:"#1a1a1a",borderRadius:10,padding:"10px 12px",
-            border:"1px solid #1e3a5f"}},
-            ce("div",{style:{fontSize:13,fontWeight:700,color:"#a5b4fc",marginBottom:4}},"📏 価格軸ラベル最小間隔"),
-            ce("div",{style:{fontSize:10,color:"#666",marginBottom:8,lineHeight:1.5}},
+
+        /* ── 表示タブ ── */
+        tab==='display'&&ce("div",{style:{display:"flex",flexDirection:"column",gap:14}},
+          /* 価格軸ラベル最小間隔px */
+          ce("div",{style:CARD},
+            ce("div",{style:HEAD},"📏 価格軸ラベル最小間隔"),
+            ce("div",{style:DESC},
               "ラベル間隔がこの値(px)未満になると次の刻みに自動切替",ce("br",null),
               "10円 → 20円 → 50円 → 100円 → 500円 (0=自動切替OFF、常に10円ピッチ)"),
             ce("div",{style:{display:"flex",alignItems:"center",gap:6}},
-              /* − ボタン */
               ce("button",{onClick:function(){updatePricePx(pricePx-1);},
                 style:{width:32,height:32,fontSize:18,fontWeight:700,background:"#2a2a2a",
                   color:"#fff",border:"1px solid #3a3a3a",borderRadius:6,
@@ -1140,11 +1394,11 @@ function DisplaySettingsModal(props){
               ce("input",{type:"range",min:0,max:100,step:1,value:pricePx,
                 onChange:function(e){updatePricePx(+e.target.value);},
                 style:{flex:1,accentColor:"#6366F1"}}),
-              ce("input",{type:"number",min:0,max:100,value:pricePx,
-                onChange:function(e){var v=parseInt(e.target.value,10);if(isNaN(v))v=0;updatePricePx(v);},
+              /* 2026-06-29 D1: type=number だと全角入力が消え NaN→0(自動OFF) に化けるため text+inputMode に */
+              ce("input",{type:"text",inputMode:"numeric",value:String(pricePx),
+                onChange:function(e){var raw=e.target.value.replace(/[^0-9]/g,'');var v=parseInt(raw,10);if(isNaN(v))return;updatePricePx(v);},
                 style:{width:56,padding:"6px 8px",background:"#2a2a2a",border:"1px solid #3a3a3a",
                   borderRadius:6,color:"#fff",fontSize:14,textAlign:"center"}}),
-              /* ＋ ボタン */
               ce("button",{onClick:function(){updatePricePx(pricePx+1);},
                 style:{width:32,height:32,fontSize:18,fontWeight:700,background:"#2a2a2a",
                   color:"#fff",border:"1px solid #3a3a3a",borderRadius:6,
@@ -1152,31 +1406,46 @@ function DisplaySettingsModal(props){
                 "＋"),
               ce("span",{style:{fontSize:11,color:"#666",flexShrink:0}},"px")
             ),
-            pricePx===0&&ce("div",{style:{fontSize:10,color:"#666",marginTop:6}},"自動切替OFF (常に10円ピッチ表示)"),
-            pricePx>0&&ce("div",{style:{fontSize:10,color:"#a5b4fc",marginTop:6,fontWeight:600,lineHeight:1.5}},
-              "現在: 最小間隔 "+pricePx+"px",ce("br",null),
-              "※ ラベル間隔がこれを下回ると次の刻み(20→50→100→500円)に切替")
+            pricePx===0&&ce("div",{style:{fontSize:10,color:"#666",marginTop:6}},"自動切替OFF (常に10円ピッチ表示)")
           ),
-          /* ツール自動復帰 ON/OFF */
-          ce("div",{style:{background:"#1a1a1a",borderRadius:10,padding:"10px 12px",
-            border:"1px solid #1e3a5f"}},
-            ce("div",{style:{fontSize:13,fontWeight:700,color:"#a5b4fc",marginBottom:4}},"🖱 ツール自動復帰"),
-            ce("div",{style:{fontSize:10,color:"#666",marginBottom:8,lineHeight:1.5}},
-              "描画ツール(ライン/矢印/ボックス/マーカー/フリーハンド/テキスト等)",ce("br",null),
-              "使用後に自動で選択モードを pan(画面移動) に戻します。",ce("br",null),
-              "OFF にすると同じツールで連続描画できます (lasso/eraser は元から対象外)"),
-            ce("label",{style:{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}},
-              ce("input",{type:"checkbox",checked:autoPan,
-                onChange:function(e){updateAutoPan(e.target.checked);},
-                style:{width:18,height:18,accentColor:"#6366F1",cursor:"pointer"}}),
-              ce("span",{style:{fontSize:13,color:"#ddd"}},"描画後 pan に戻す (デフォルト: ON)")
+          /* 2026-06-29 C1: 指標の表示ON/OFF */
+          ce("div",{style:CARD},
+            ce("div",{style:HEAD},"📈 指標の表示 ON/OFF"),
+            ce("div",{style:DESC},"チャートに重ねる EMA / VWAP の表示を切り替えます（非表示の指標はY軸の自動フィットからも除外）。"),
+            ce("div",{style:{display:"flex",flexWrap:"wrap",gap:8}},
+              INDS.map(function(it){
+                var on=indVis[it.k]!==false;
+                return ce("label",{key:it.k,style:{display:"flex",alignItems:"center",gap:6,cursor:"pointer",
+                  background:"#222",border:"1px solid "+(on?"#3a3a3a":"#2a2a2a"),borderRadius:8,padding:"6px 9px",
+                  opacity:on?1:0.55}},
+                  ce("input",{type:"checkbox",checked:on,onChange:function(){toggleInd(it.k);},
+                    style:{width:16,height:16,accentColor:"#6366F1",cursor:"pointer"}}),
+                  ce("span",{style:{width:12,height:3,background:it.col,borderRadius:2,flexShrink:0}}),
+                  ce("span",{style:{fontSize:12,color:"#ddd",fontWeight:600}},it.label)
+                );
+              })
+            )
+          ),
+          /* 2026-06-29 C3: Y軸フィット方式 */
+          ce("div",{style:CARD},
+            ce("div",{style:HEAD},"📐 Y軸フィット方式"),
+            ce("div",{style:DESC},
+              "縦軸の自動フィットに何を含めるか。",ce("br",null),
+              "・含む(従来): EMA/VWAP も収まるよう縮尺 ・高安のみ: ローソクの高値安値だけでフィット(HyperSBI2に近い・潰れ防止)"),
+            ce("div",{style:{display:"flex",gap:8}},
+              [{v:'all',label:'EMA/VWAP含む'},{v:'price',label:'高安のみ'}].map(function(o){
+                var sel=fitMode===o.v;
+                return ce("button",{key:o.v,onClick:function(){updateFitMode(o.v);},
+                  style:{flex:1,padding:"9px 6px",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer",
+                    borderRadius:8,border:"1px solid "+(sel?"#6366F1":"#3a3a3a"),
+                    background:sel?"#26204d":"#2a2a2a",color:sel?"#c4b5fd":"#aaa"}},o.label+(sel?" ✓":""));
+              })
             )
           ),
           /* チャート背景色 */
-          ce("div",{style:{background:"#1a1a1a",borderRadius:10,padding:"10px 12px",
-            border:"1px solid #1e3a5f"}},
-            ce("div",{style:{fontSize:13,fontWeight:700,color:"#a5b4fc",marginBottom:4}},"🎨 チャート背景色"),
-            ce("div",{style:{fontSize:10,color:"#666",marginBottom:8,lineHeight:1.5}},
+          ce("div",{style:CARD},
+            ce("div",{style:HEAD},"🎨 チャート背景色"),
+            ce("div",{style:DESC},
               "チャート描画領域の背景色を変更します。",ce("br",null),
               "※既存チャートのサムネは旧色のまま (次回保存時に新色で再生成)"),
             ce("div",{style:{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}},
@@ -1204,15 +1473,96 @@ function DisplaySettingsModal(props){
                   borderRadius:6,color:"#fff",fontSize:13,fontFamily:"monospace"}})
             )
           ),
-          /* 銘柄コード対応 (scalping-notebook連携) */
-          ce("div",{style:{background:"#1a1a1a",borderRadius:10,padding:"10px 12px",
-            border:"1px solid #1e3a5f"}},
-            ce("div",{style:{fontSize:13,fontWeight:700,color:"#a5b4fc",marginBottom:4}},"🔗 銘柄コード (scalping-notebook連携)"),
-            ce("div",{style:{fontSize:10,color:"#666",marginBottom:8,lineHeight:1.5}},
+          /* 2026-06-29 C4: 初期表示の足 */
+          ce("div",{style:CARD},
+            ce("div",{style:HEAD},"🕐 初期表示の足"),
+            ce("div",{style:DESC},"チャートを開いた直後に表示する足。"),
+            ce("div",{style:{display:"flex",gap:8}},
+              [{v:'1m',label:'1分足'},{v:'5m',label:'5分足'},{v:'stack',label:'1m+5m同時'}].map(function(o){
+                var sel=defTf===o.v;
+                return ce("button",{key:o.v,onClick:function(){updateDefTf(o.v);},
+                  style:{flex:1,padding:"9px 6px",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer",
+                    borderRadius:8,border:"1px solid "+(sel?"#6366F1":"#3a3a3a"),
+                    background:sel?"#26204d":"#2a2a2a",color:sel?"#c4b5fd":"#aaa"}},o.label+(sel?" ✓":""));
+              })
+            )
+          )
+        ),
+
+        /* ── 描画タブ ── */
+        tab==='draw'&&ce("div",{style:{display:"flex",flexDirection:"column",gap:14}},
+          /* ツール自動復帰 */
+          ce("div",{style:CARD},
+            ce("div",{style:HEAD},"🖱 ツール自動復帰"),
+            ce("div",{style:DESC},
+              "描画ツール(ライン/矢印/ボックス/マーカー/フリーハンド/テキスト等)",ce("br",null),
+              "使用後に自動で選択モードを pan(画面移動) に戻します。",ce("br",null),
+              "OFF にすると同じツールで連続描画できます (lasso/eraser は元から対象外)"),
+            ce("label",{style:{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}},
+              ce("input",{type:"checkbox",checked:autoPan,
+                onChange:function(e){updateAutoPan(e.target.checked);},
+                style:{width:18,height:18,accentColor:"#6366F1",cursor:"pointer"}}),
+              ce("span",{style:{fontSize:13,color:"#ddd"}},"描画後 pan に戻す (デフォルト: ON)")
+            )
+          ),
+          /* 2026-06-29 C2: 描画の既定値 */
+          ce("div",{style:CARD},
+            ce("div",{style:HEAD},"🖌 描画の既定値"),
+            ce("div",{style:DESC},"チャートを開いた直後の 色 / 線幅 / 不透明度 / フォント。毎回リセットされず保持されます。"),
+            ce("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:10}},
+              ce("span",{style:{fontSize:12,color:"#aaa",width:64,flexShrink:0}},"色"),
+              ce("input",{type:"color",value:drawDef.color,onChange:function(e){updateDrawDef({color:e.target.value});},
+                style:{width:46,height:30,border:"1px solid #333",borderRadius:6,background:"#2a2a2a",cursor:"pointer",padding:2}}),
+              ce("span",{style:{fontSize:12,color:"#888",fontFamily:"monospace"}},drawDef.color)
+            ),
+            ce("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:10}},
+              ce("span",{style:{fontSize:12,color:"#aaa",width:64,flexShrink:0}},"線幅"),
+              ce("input",{type:"range",min:1,max:12,step:1,value:drawDef.lineW,
+                onChange:function(e){updateDrawDef({lineW:+e.target.value});},style:{flex:1,accentColor:"#6366F1"}}),
+              ce("span",{style:{fontSize:12,color:"#ddd",width:36,textAlign:"right"}},drawDef.lineW+"px")
+            ),
+            ce("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:10}},
+              ce("span",{style:{fontSize:12,color:"#aaa",width:64,flexShrink:0}},"不透明度"),
+              ce("input",{type:"range",min:10,max:100,step:5,value:Math.round((drawDef.opacity||1)*100),
+                onChange:function(e){updateDrawDef({opacity:(+e.target.value)/100});},style:{flex:1,accentColor:"#6366F1"}}),
+              ce("span",{style:{fontSize:12,color:"#ddd",width:36,textAlign:"right"}},Math.round((drawDef.opacity||1)*100)+"%")
+            ),
+            ce("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:10}},
+              ce("span",{style:{fontSize:12,color:"#aaa",width:64,flexShrink:0}},"フォント"),
+              ce("input",{type:"range",min:8,max:48,step:1,value:drawDef.fontSize,
+                onChange:function(e){updateDrawDef({fontSize:+e.target.value});},style:{flex:1,accentColor:"#6366F1"}}),
+              ce("span",{style:{fontSize:12,color:"#ddd",width:36,textAlign:"right"}},drawDef.fontSize+"px")
+            ),
+            ce("label",{style:{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}},
+              ce("input",{type:"checkbox",checked:!!drawDef.fontBold,onChange:function(e){updateDrawDef({fontBold:e.target.checked});},
+                style:{width:18,height:18,accentColor:"#6366F1",cursor:"pointer"}}),
+              ce("span",{style:{fontSize:13,color:"#ddd"}},"テキストを太字")
+            )
+          ),
+          /* 2026-06-29 C5: ペンのみ描画 */
+          ce("div",{style:CARD},
+            ce("div",{style:HEAD},"✍️ Apple Pencilのみで描画"),
+            ce("div",{style:DESC},
+              "ONにすると、描画ツール選択中でも指タッチは画面移動(パン)になり、Apple Pencil でのみ描画します(誤描画防止)。",ce("br",null),
+              "※ Pencil非対応端末では効果はありません。2本指ピンチ等は従来通り。"),
+            ce("label",{style:{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}},
+              ce("input",{type:"checkbox",checked:penOnly,onChange:function(e){updatePenOnly(e.target.checked);},
+                style:{width:18,height:18,accentColor:"#6366F1",cursor:"pointer"}}),
+              ce("span",{style:{fontSize:13,color:"#ddd"}},"ペンのみ描画 (指=パン)　既定: OFF")
+            )
+          )
+        ),
+
+        /* ── 連携・同期タブ ── */
+        tab==='link'&&ce("div",{style:{display:"flex",flexDirection:"column",gap:14}},
+          /* 銘柄コード対応 */
+          ce("div",{style:CARD},
+            ce("div",{style:HEAD},"🔗 銘柄コード (scalping-notebook連携)"),
+            ce("div",{style:DESC},
               "scalping-notebook からこのツールをURL経由で開く際に使われる銘柄コード。",ce("br",null),
-              "URL形式: ?{コード}_{日付YYYY-MM-DD}&id={チャートID}"),
+              "URL形式: ?{コード}_{日付YYYY-MM-DD}&id={チャートID}　(空欄=連携で使わない／Firebase経由で端末間同期されます)"),
             allTickers.length===0
-              ?ce("div",{style:{fontSize:11,color:"#777",padding:"6px 0"}},"銘柄が未登録です。まず左カラムから銘柄を追加してください。")
+              ?ce("div",{style:{fontSize:11,color:"#777",padding:"6px 0"}},"銘柄が未登録です。まず一覧画面から銘柄を追加してください。")
               :ce("div",{style:{display:"flex",flexDirection:"column",gap:4}},
                 allTickers.map(function(t){
                   return ce("div",{key:t,style:{display:"flex",alignItems:"center",gap:8,padding:"4px 0"}},
@@ -1228,12 +1578,57 @@ function DisplaySettingsModal(props){
                 })
               )
           ),
-          /* 閉じるボタン */
-          ce("button",{onClick:onClose,
-            style:{padding:"12px 0",fontSize:14,fontWeight:700,background:"#2563eb",color:"#fff",
-              border:"none",borderRadius:12,cursor:"pointer",fontFamily:"inherit"}
-          },"閉じる")
-        )
+          /* Firebase設定を開く (D4) */
+          ce("div",{style:Object.assign({},CARD,{border:"1px solid #431407"})},
+            ce("div",{style:{fontSize:13,fontWeight:700,color:"#fb923c",marginBottom:4}},"🔥 Firebase 同期設定"),
+            ce("div",{style:DESC},
+              "端末間同期/バックアップ用の Firebase 接続設定（URL/Secret/Storage）。",ce("br",null),
+              fbCfg.url?(_fbIsPaused(fbCfg)?"現在: ⏸ 同期停止中":"現在: 🔥 同期有効"):"現在: 未設定"),
+            ce("button",{onClick:function(){if(props.onOpenFbSettings)props.onOpenFbSettings();},
+              style:{width:"100%",padding:"10px 0",fontSize:13,fontWeight:700,borderRadius:10,border:"none",
+                background:"#b45309",color:"#fff",cursor:"pointer",fontFamily:"inherit"}},
+              "🔥 Firebase設定を開く")
+          )
+        ),
+
+        /* ── バックアップタブ (B1) ── */
+        tab==='backup'&&ce("div",{style:{display:"flex",flexDirection:"column",gap:14}},
+          ce("div",{style:CARD},
+            ce("div",{style:HEAD},"💾 全設定のバックアップ"),
+            ce("div",{style:DESC},
+              "スタンプ定義・タグ・銘柄コード・色/描画プリセット・表示設定・チャート一覧索引(meta)など、この端末の保存データ(localStorage)を1つのJSONに書き出します。",ce("br",null),
+              "iOS等でデータが消えても、このファイルから復元できます。"),
+            ce("button",{onClick:doBackup,
+              style:{width:"100%",padding:"11px 0",fontSize:13,fontWeight:700,borderRadius:10,border:"none",
+                background:"#14532d",color:"#86efac",cursor:"pointer",fontFamily:"inherit"}},
+              "💾 バックアップを書き出す"),
+            backupStatus&&backupStatus.indexOf('done:')===0&&ce("div",{style:{fontSize:11,color:"#86efac",marginTop:8,fontWeight:600}},
+              "✓ "+backupStatus.split(':')[1]+" 項目を書き出しました（ダウンロード）"),
+            backupStatus&&backupStatus.indexOf('error')===0&&ce("div",{style:{fontSize:11,color:"#fca5a5",marginTop:8}},"✕ "+backupStatus),
+            ce("div",{style:{fontSize:10,color:"#6b6b6b",marginTop:8,lineHeight:1.6}},
+              "⚠ このファイルには Firebase の Secret も含まれます。取り扱いに注意してください。",ce("br",null),
+              "※ チャートの描画データ本体(IndexedDB)は含まれません(Firebase同期で保全)。")
+          ),
+          ce("div",{style:Object.assign({},CARD,{border:"1px solid #7f1d1d"})},
+            ce("div",{style:{fontSize:13,fontWeight:700,color:"#fca5a5",marginBottom:4}},"📂 バックアップから復元"),
+            ce("div",{style:DESC},"書き出したJSONを読み込み、現在の設定/一覧を上書きします。復元後ページを再読込します。"),
+            ce("input",{type:"file",accept:"application/json,.json",ref:restoreInputRef,style:{display:"none"},
+              onChange:function(e){var f=e.target.files&&e.target.files[0];doRestore(f);try{e.target.value='';}catch(_){}}}),
+            ce("button",{onClick:function(){restoreInputRef.current&&restoreInputRef.current.click();},
+              style:{width:"100%",padding:"11px 0",fontSize:13,fontWeight:700,borderRadius:10,border:"1px solid #7f1d1d",
+                background:"#2a1414",color:"#fca5a5",cursor:"pointer",fontFamily:"inherit"}},
+              "📂 バックアップファイルを選択"),
+            restoreStatus&&restoreStatus.indexOf('done:')===0&&ce("div",{style:{fontSize:11,color:"#86efac",marginTop:8,fontWeight:600}},
+              "✓ "+restoreStatus.split(':')[1]+" 項目を復元しました。再読込します…"),
+            restoreStatus&&restoreStatus.indexOf('error')===0&&ce("div",{style:{fontSize:11,color:"#fca5a5",marginTop:8}},"✕ "+restoreStatus)
+          )
+        ),
+
+        /* 閉じるボタン */
+        ce("button",{onClick:onClose,
+          style:{marginTop:16,width:"100%",padding:"12px 0",fontSize:14,fontWeight:700,background:"#2563eb",color:"#fff",
+            border:"none",borderRadius:12,cursor:"pointer",fontFamily:"inherit"}
+        },"閉じる")
       )
     ),
     document.body
@@ -1280,7 +1675,7 @@ function RefAnalysisPicker(props){
       // ローカルにない → Firebase から取得
       if(fbCfg.url){
         var dataBase=fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
-        var auth=fbCfg.secret?'?auth='+fbCfg.secret:'';
+        var auth=caAuthParam(fbCfg.secret);
         fetch(dataBase+'/'+id+'.json'+auth).then(function(r){return r.ok?r.text():null;})
           .then(function(txt){
             var fbData=txt?JSON.parse(txt):null;
@@ -1457,6 +1852,19 @@ function DataChart(props){
     window.addEventListener('ca_chart_bg_changed',handler);
     return function(){window.removeEventListener('ca_chart_bg_changed',handler);};
   },[]);
+  /* 2026-06-29: 指標表示ON/OFF・Y軸フィット方式 — 設定変更で再計算/再描画 */
+  var stIV=useState(caLoadIndicatorVis()); var indVis=stIV[0],setIndVis=stIV[1];
+  useEffect(function(){
+    function handler(){setIndVis(caLoadIndicatorVis());}
+    window.addEventListener('ca_indicator_vis_changed',handler);
+    return function(){window.removeEventListener('ca_indicator_vis_changed',handler);};
+  },[]);
+  var stFit=useState(caLoadFitMode()); var fitMode=stFit[0],setFitMode=stFit[1];
+  useEffect(function(){
+    function handler(){setFitMode(caLoadFitMode());}
+    window.addEventListener('ca_fit_mode_changed',handler);
+    return function(){window.removeEventListener('ca_fit_mode_changed',handler);};
+  },[]);
   /* C8a: 昼休み(11:30=690〜12:30=750)の60分を g分(=ローソク1本分) に圧縮した仮想時間軸
      drawDataChart と同じ定義 (props.tf依存) */
   function tmToVis(t){
@@ -1585,12 +1993,18 @@ function DataChart(props){
     /* シミュレーション: 当日足0本でも refBars(前日) があれば前日のみで priceRange を算出して描画 */
     if(!bars.length&&!hasRef){setPriceRange(null);return;}
     var mn=Infinity, mx=-Infinity;
+    /* 2026-06-29: fitMode==='price' は高安のみでフィット(HSBI2に近い)。
+       'all'(従来)でも非表示指標は軸の引き伸ばしから除外する */
+    var _incInd=(fitMode!=='price');
     function scan(barsArr){
       barsArr.forEach(function(b){
         if(b.l<mn)mn=b.l; if(b.h>mx)mx=b.h;
-        ['ema9','ema22','ema50','ema200','vwap'].forEach(function(k){
-          var v=b[k]; if(v!=null){if(v<mn)mn=v;if(v>mx)mx=v;}
-        });
+        if(_incInd){
+          ['ema9','ema22','ema50','ema200','vwap'].forEach(function(k){
+            if(indVis&&indVis[k]===false)return;
+            var v=b[k]; if(v!=null){if(v<mn)mn=v;if(v>mx)mx=v;}
+          });
+        }
       });
     }
     var enhBars=computeEnhancedBars(bars, hasRef?refBars:null);
@@ -1601,7 +2015,7 @@ function DataChart(props){
     mx=Math.ceil(mx/10)*10 + 5;
     var pr={min:mn, max:mx};
     setPriceRange(pr);
-  },[data,tf,refData,hasRef]);
+  },[data,tf,refData,hasRef,fitMode,indVis]);
 
   /* 2026-04-21: 地図モデルズーム用ヘルパー
      getFitZoom: chartW と priceH に対し、1日全体 (uTotal×priceRange) を収めるZ
@@ -1722,7 +2136,7 @@ function DataChart(props){
       drawCrosshair();
     });
     return function(){cancelAnimationFrame(rafId);};
-  },[data,bars,dim,tf,view,pShift,zoom,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes,moveHint,pricePx,chartBg,lassoSel]);
+  },[data,bars,dim,tf,view,pShift,zoom,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes,moveHint,pricePx,chartBg,lassoSel,indVis]);
 
   // showCrosshair 切替時: OFFなら消す、ONなら再描画
   useEffect(function(){
@@ -3647,7 +4061,13 @@ function DataChart(props){
     }
     if(e.touches.length!==1)return;
     var t=e.touches[0];
-    onMouseDown({clientX:t.clientX,clientY:t.clientY,ctrlKey:false,metaKey:false});
+    /* 2026-06-29: ペンのみ描画 — Apple Pencil以外の単一タッチは描画ツール選択時パン扱い(指=移動)。
+       touchType未対応端末では touchType が undefined となり従来通り(=この分岐は無効)。 */
+    var _penPan=false;
+    if(caLoadPenOnly()&&t.touchType&&t.touchType!=='stylus'){
+      if(['line','dotted','arrow','rect','circle','marker','freehand','text','snippet','measure'].indexOf(drawTool)>=0)_penPan=true;
+    }
+    onMouseDown({clientX:t.clientX,clientY:t.clientY,ctrlKey:_penPan,metaKey:false});
   }
   function onTouchMove(e){
     if(props.textInputActive)return;
@@ -4621,7 +5041,9 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     pts.forEach(function(p,idx){ if(idx===0)ctx.moveTo(p[0],p[1]); else ctx.lineTo(p[0],p[1]); });
     ctx.stroke();
   }
+  var _indVis=caLoadIndicatorVis();
   lines.forEach(function(line){
+    if(_indVis&&_indVis[line.k]===false)return;  /* 2026-06-29: 指標の表示ON/OFF */
     if(hasRef){
       drawLineBridged(visibleRefBars, visibleBars, line.k, line.col);
     } else {
@@ -5329,7 +5751,7 @@ function ImageAnnotator(props){
   /* B2: 分析モードの state (img にある場合はそこから復元 = Firebase同期対応) */
   var stAD=useState(function(){return (img&&img.analysisData)||null;});
   var analysisData=stAD[0],setAnalysisData=stAD[1];
-  var stAT=useState('1m'); var analysisTf=stAT[0],setAnalysisTf=stAT[1];
+  var stAT=useState(function(){return caLoadDefaultTf()==='5m'?'5m':'1m';}); var analysisTf=stAT[0],setAnalysisTf=stAT[1];
   /* シミュレーション: 当日足の開示カットオフ時刻(分)。-1=未開示(0本)。→/←/スライダーで変化 */
   var sSimCut=useState(-1); var simCutoffTm=sSimCut[0],setSimCutoffTm=sSimCut[1];
   /* 書き込み表示/非表示トグル */
@@ -5350,7 +5772,7 @@ function ImageAnnotator(props){
   /* 2026-06-15: 1分足+5分足の上下同時表示 (stackMode)。splitChart(似た形)と排他。
      上=1m(controlled view) / 下=5m(uncontrolled self-fit)。tap-to-focusでanalysisTfを切替し、
      非フォーカス側はdrawTool='pan'で描画不可 (既存splitと同じ作法)。 */
-  var sStk=useState(false); var stackMode=sStk[0],setStackMode=sStk[1];
+  var sStk=useState(function(){return !simMode&&caLoadDefaultTf()==='stack';}); var stackMode=sStk[0],setStackMode=sStk[1];
   /* ジョイスティック表示状態 (タッチのみ) */
   var sJH=useState(function(){return localStorage.getItem('ca_js_hidden')==='1';});
   var jsHidden=sJH[0],setJsHidden=sJH[1];
@@ -5388,7 +5810,7 @@ function ImageAnnotator(props){
       /* Firebase PATCH: paused中はFB書込のみスキップ (ローカルは更新済) */
       var cfg2=props.fbCfg;
       if(_fbIsPaused(cfg2))return;
-      var auth=cfg2.secret?'?auth='+cfg2.secret:'';
+      var auth=caAuthParam(cfg2.secret);
       var dataBase=cfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
       var tsBase=cfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts-ts';
       /* 2026-04-20 C8: ref書き込みも楽観ロック pre-check
@@ -5505,7 +5927,7 @@ function ImageAnnotator(props){
       var fbCfg2=props.fbCfg||{};
       if(!fbCfg2.url){window.caToast('前日チャートのデータが見つかりません','info');return;}
       var dataBase=fbCfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
-      var auth=fbCfg2.secret?'?auth='+fbCfg2.secret:'';
+      var auth=caAuthParam(fbCfg2.secret);
       fetch(dataBase+'/'+prev.id+'.json'+auth)
         .then(function(r){return r.ok?r.json():null;})
         .then(function(fbData){
@@ -5678,7 +6100,7 @@ function ImageAnnotator(props){
       var fbCfg2=props.fbCfg||{};
       if(!fbCfg2.url){window.caToast('データが見つかりません','info');return;}
       var dataBase=fbCfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
-      var auth=fbCfg2.secret?'?auth='+fbCfg2.secret:'';
+      var auth=caAuthParam(fbCfg2.secret);
       fetch(dataBase+'/'+id+'.json'+auth).then(function(r){return r.ok?r.json():null;})
         .then(function(fbData){
           if(fbData&&fbData.analysisData)apply(fbData);
@@ -5694,7 +6116,7 @@ function ImageAnnotator(props){
         caSaveData(splitChart.id,nd);
         var fbCfg2=props.fbCfg||{};
         if(fbCfg2.url&&!fbCfg2.paused){
-          var auth=fbCfg2.secret?'?auth='+fbCfg2.secret:'';
+          var auth=caAuthParam(fbCfg2.secret);
           var dataBase=fbCfg2.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
           fetch(dataBase+'/'+splitChart.id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(nd)}).catch(function(){});
         }
@@ -5725,7 +6147,7 @@ function ImageAnnotator(props){
   var analysisStrokesRef=useRef(analysisStrokes);
   useEffect(function(){analysisStrokesRef.current=analysisStrokes;},[analysisStrokes]);
   var st0=useState("pan");   var tool=st0[0],setTool=st0[1];
-  var st1=useState("#E53935"); var color=st1[0],setColor=st1[1];
+  var st1=useState(function(){return caLoadDrawDefaults().color;}); var color=st1[0],setColor=st1[1];
   var st2=useState([]);      var colorHist=st2[0],setColorHist=st2[1];
   var st3=useState(function(){
     var DEFQC=["#E53935","#EC407A","#FF9800","#FFEB3B","#1565C0","#ffffff","#8BC34A","#9C27B0"];
@@ -5739,14 +6161,21 @@ function ImageAnnotator(props){
   }); var quickColors=st3[0],setQuickColors=st3[1];
   function setQuickColorsAndSave(qc){
     setQuickColors(qc);
-    try{localStorage.setItem("annot_quickcolors_v1",JSON.stringify(qc));}catch(e){}
+    try{localStorage.setItem("annot_quickcolors_v1",JSON.stringify(qc));}catch(e){caStorageWarn();}
+    caPrefPush("annot_quickcolors_v1");
   }
-  var st4=useState(2);       var lineW=st4[0],setLineW=st4[1];
-  var st5=useState(1);       var opacity=st5[0],setOpacity=st5[1];
+  var st4=useState(function(){return caLoadDrawDefaults().lineW;});       var lineW=st4[0],setLineW=st4[1];
+  var st5=useState(function(){return caLoadDrawDefaults().opacity;});       var opacity=st5[0],setOpacity=st5[1];
   var st6=useState(false);    var horiz=st6[0],setHoriz=st6[1];
-  var st7=useState(15);      var fontSize=st7[0],setFontSize=st7[1];
-  var st8=useState("15");    var fontSizeStr=st8[0],setFontSizeStr=st8[1];
-  var st9=useState(false);   var fontBold=st9[0],setFontBold=st9[1];
+  var st7=useState(function(){return caLoadDrawDefaults().fontSize;});      var fontSize=st7[0],setFontSize=st7[1];
+  var st8=useState(function(){return String(caLoadDrawDefaults().fontSize);});    var fontSizeStr=st8[0],setFontSizeStr=st8[1];
+  var st9=useState(function(){return !!caLoadDrawDefaults().fontBold;});   var fontBold=st9[0],setFontBold=st9[1];
+  /* 2026-06-29: 描画の既定値を永続化 (初回マウントはスキップ=同値の無駄書き防止) */
+  var drawDefSavedRef=useRef(false);
+  useEffect(function(){
+    if(!drawDefSavedRef.current){drawDefSavedRef.current=true;return;}
+    caSaveDrawDefaults({color:color,lineW:lineW,opacity:opacity,fontSize:fontSize,fontBold:fontBold});
+  },[color,lineW,opacity,fontSize,fontBold]);
   /* 2026-04-26: スニペット機能 */
   var stSnips=useState(caLoadSnippets); var snippets=stSnips[0],setSnippets=stSnips[1];
   var stSelSnip=useState(0); var selSnipIdx=stSelSnip[0],setSelSnipIdx=stSelSnip[1];
@@ -5773,7 +6202,7 @@ function ImageAnnotator(props){
     snipSaveTimerRef.current=setTimeout(function(){
       var cfg=props.fbCfg;
       if(!_fbIsPaused(cfg)&&cfg.url){
-        var auth=cfg.secret?'?auth='+cfg.secret:'';
+        var auth=caAuthParam(cfg.secret);
         var url=cfg.url.replace(/\/$/,'')+'/chart-annotator-snippets.json'+auth;
         fetch(url,{method:'PUT',headers:{'Content-Type':'application/json'},
           body:JSON.stringify({snippets:nArr,updatedAt:Date.now()})}).catch(function(){});
@@ -5786,7 +6215,7 @@ function ImageAnnotator(props){
     setSnipCats(arr); caSaveSnipCats(arr);
     var cfg=props.fbCfg;
     if(!_fbIsPaused(cfg)&&cfg.url){
-      var auth=cfg.secret?'?auth='+cfg.secret:'';
+      var auth=caAuthParam(cfg.secret);
       var base=cfg.url.replace(/\/$/,'');
       var ut=Date.now();
       try{localStorage.setItem('ca_snip_cats_ut_v1',String(ut));}catch(e){}
@@ -5822,7 +6251,7 @@ function ImageAnnotator(props){
   useEffect(function(){
     var cfg=props.fbCfg;
     if(!_fbIsPaused(cfg)&&cfg.url){
-      var auth=cfg.secret?'?auth='+cfg.secret:'';
+      var auth=caAuthParam(cfg.secret);
       var url=cfg.url.replace(/\/$/,'')+'/chart-annotator-snippets.json'+auth;
       fetch(url).then(function(r){return r.ok?r.json():null;}).then(function(d){
         if(d&&d.snippets&&Array.isArray(d.snippets)&&d.snippets.length>0){
@@ -5876,7 +6305,7 @@ function ImageAnnotator(props){
       /* Firebase にも保存 */
       var cfg=props.fbCfg;
       if(!_fbIsPaused(cfg)&&cfg.url&&tickerForNote){
-        var auth=cfg.secret?'?auth='+cfg.secret:'';
+        var auth=caAuthParam(cfg.secret);
         var noteUrl=cfg.url.replace(/\/$/,'')+'/chart-annotator-ticker-notes/'+encodeURIComponent(tickerForNote)+'.json'+auth;
         fetch(noteUrl,{method:'PUT',headers:{'Content-Type':'application/json'},
           body:JSON.stringify({note:val,updatedAt:Date.now()})}).catch(function(){});
@@ -5887,7 +6316,7 @@ function ImageAnnotator(props){
   useEffect(function(){
     var cfg=props.fbCfg;
     if(!_fbIsPaused(cfg)&&cfg.url&&tickerForNote){
-      var auth=cfg.secret?'?auth='+cfg.secret:'';
+      var auth=caAuthParam(cfg.secret);
       var noteUrl=cfg.url.replace(/\/$/,'')+'/chart-annotator-ticker-notes/'+encodeURIComponent(tickerForNote)+'.json'+auth;
       fetch(noteUrl).then(function(r){return r.ok?r.json():null;}).then(function(d){
         if(d&&d.note!=null){
@@ -5909,7 +6338,7 @@ function ImageAnnotator(props){
         caSaveData(id,nd);
         var cfg=props.fbCfg||{};
         if(cfg.url&&!_fbIsPaused(cfg)){
-          var auth=cfg.secret?'?auth='+cfg.secret:'';
+          var auth=caAuthParam(cfg.secret);
           var base=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
           fetch(base+'/'+id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
             body:JSON.stringify(nd)}).catch(function(){});
@@ -5961,7 +6390,7 @@ function ImageAnnotator(props){
       var cfg=props.fbCfg||{};
       if(cfg.url){
         var base=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
-        var auth=cfg.secret?'?auth='+cfg.secret:'';
+        var auth=caAuthParam(cfg.secret);
         fetch(base+'/'+prev.id+'.json'+auth).then(function(r){return r.ok?r.json():null;})
           .then(function(fb){if(fb&&fb.analysisData)setEmaSeedData(fb.analysisData);}).catch(function(){});
       }
@@ -6065,6 +6494,7 @@ function ImageAnnotator(props){
   var stCC=useState(false);   var cancelConfirm=stCC[0],setCancelConfirm=stCC[1];
   /* 2026-04-20: 表示・動作設定モーダル */
   var stDS=useState(false); var showDisplaySettings=stDS[0],setShowDisplaySettings=stDS[1];
+  var stFBS=useState(false); var showFbSettings=stFBS[0],setShowFbSettings=stFBS[1];  /* 2026-06-29 D4: エディタからFirebase設定 */
   var stFST=useState(null);   var fbStatus=stFST[0],setFbStatus=stFST[1];
 
   var stAS=useState(null);    var autoSaveStatus=stAS[0],setAutoSaveStatus=stAS[1]; // null|'saving'|'ok'|'err'
@@ -6094,7 +6524,7 @@ function ImageAnnotator(props){
     setEdTagIds(newIds);
     var cfg=props.fbCfg;
     if(cfg&&cfg.url&&!_fbIsPaused(cfg)){
-      var auth=cfg.secret?'?auth='+cfg.secret:'';
+      var auth=caAuthParam(cfg.secret);
       var u=cfg.url.replace(/\/$/,'')+'/ca-chart-tags/'+encodeURIComponent(cid)+'.json'+auth;
       fetch(u,{method:'PUT',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({tagIds:newIds,updatedAt:Date.now()})}).catch(function(){});
@@ -6108,7 +6538,7 @@ function ImageAnnotator(props){
     setEdMemoHtml(h);
     var cfg=props.fbCfg;
     if(cfg&&cfg.url&&!_fbIsPaused(cfg)){
-      var auth=cfg.secret?'?auth='+cfg.secret:'';
+      var auth=caAuthParam(cfg.secret);
       var u=cfg.url.replace(/\/$/,'')+'/ca-chart-memos/'+encodeURIComponent(cid)+'.json'+auth;
       fetch(u,{method:'PUT',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({html:h,updatedAt:Date.now()})}).catch(function(){});
@@ -6257,7 +6687,7 @@ function ImageAnnotator(props){
       var cfg2=props.fbCfg; if(_fbIsPaused(cfg2))return;
       if(remoteUpdateRef.current)return; // 別端末更新の未反映中はRTDB書き込みを抑制
       var savedAt=Date.now();
-      var auth=cfg2.secret?'?auth='+cfg2.secret:'';
+      var auth=caAuthParam(cfg2.secret);
 
       var draftId=img._draftId||savedDraftIdRef.current;
       if(!draftId){setAutoSaveStatus(null);return;}
@@ -6438,7 +6868,7 @@ function ImageAnnotator(props){
     var cfg=props.fbCfg;
     var draftId=img._draftId;
     if(_fbIsPaused(cfg)||!draftId)return;
-    var auth=cfg.secret?'?auth='+cfg.secret:'';
+    var auth=caAuthParam(cfg.secret);
     var tsUrl=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-ts/'+draftId+'.json'+auth;
     var dataUrl=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data/'+draftId+'.json'+auth;
 
@@ -7061,9 +7491,11 @@ function ImageAnnotator(props){
           color:fbStatus==='saving'?'#93c5fd':fbStatus==='ok'?'#86efac':'#fca5a5'}},
           fbStatus==='saving'?'⏳ 保存中…':fbStatus==='ok'?'✓ 保存完了':'✕ 保存失敗'
         ),
-        /* 自動保存インジケーター (シミュ中は非表示) */
-        !simMode&&props.fbCfg&&props.fbCfg.url&&ce("span",{style:{
-          fontSize:10,padding:"3px 8px",borderRadius:5,fontWeight:700,flexShrink:0,
+        /* 自動保存インジケーター (シミュ中は非表示)。2026-06-29 D4: クリックでFirebase設定を開く */
+        !simMode&&props.fbCfg&&props.fbCfg.url&&ce("span",{
+          onClick:function(){setShowFbSettings(true);},title:"Firebase設定を開く",
+          style:{
+          fontSize:10,padding:"3px 8px",borderRadius:5,fontWeight:700,flexShrink:0,cursor:"pointer",
           background:_fbIsPaused(props.fbCfg)?'#7f1d1d':autoSaveStatus==='saving'?'#1e3a5f':autoSaveStatus==='ok'?'#14532d':autoSaveStatus==='err'?'#7f1d1d':'#431407',
           color:_fbIsPaused(props.fbCfg)?'#f87171':autoSaveStatus==='saving'?'#93c5fd':autoSaveStatus==='ok'?'#86efac':autoSaveStatus==='err'?'#fca5a5':'#fb923c'}},
           _fbIsPaused(props.fbCfg)?'⏸ 同期停止中':autoSaveStatus==='saving'?'⏳ 自動保存中':autoSaveStatus==='ok'?'✓ 自動保存済':autoSaveStatus==='err'?'✕ 自動保存失敗':'🔥 自動保存ON'
@@ -7071,7 +7503,7 @@ function ImageAnnotator(props){
         /* 2026-04-20: 📊 表示・動作設定ボタン */
         ce("button",{onClick:function(){setShowDisplaySettings(true);},
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#1e3a5f",color:"#a5b4fc",fontWeight:700})},
-          "📊 設定"),
+          "📊 表示・動作設定"),
         !simMode&&ce("button",{onClick:function(){setCancelConfirm(true);},style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#333",color:"#ccc"})},"終了"),
         !simMode&&ce("button",{onClick:saveAndExport,style:Object.assign({},TS,{fontSize:12,padding:"6px 12px",background:"#2563eb",color:"#fff",fontWeight:700})},"💾 保存・出力")
       ),
@@ -7422,7 +7854,7 @@ function ImageAnnotator(props){
         onClick:function(){
           var cfg=props.fbCfg; var draftId=img._draftId;
           if(!cfg||!cfg.url||!draftId)return;
-          var fbAuth=cfg.secret?'?auth='+cfg.secret:'';
+          var fbAuth=caAuthParam(cfg.secret);
           var dataUrl=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data/'+draftId+'.json'+fbAuth;
           var oldUrl=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts/'+draftId+'.json'+fbAuth;
           fetch(dataUrl).then(function(r){return r.ok?r.text():null;})
@@ -8898,7 +9330,7 @@ function ImageAnnotator(props){
               caSaveData(spId,nd);
               var cfg=props.fbCfg||{};
               if(cfg.url&&!_fbIsPaused(cfg)){
-                var auth=cfg.secret?'?auth='+cfg.secret:'';
+                var auth=caAuthParam(cfg.secret);
                 var base=cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
                 fetch(base+'/'+spId+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},
                   body:JSON.stringify(nd)}).catch(function(){});
@@ -8917,7 +9349,15 @@ function ImageAnnotator(props){
 
     /* 2026-04-20: 表示・動作設定モーダル */
     showDisplaySettings&&ce(DisplaySettingsModal,{
+      fbCfg:props.fbCfg||{},
+      onOpenFbSettings:function(){setShowDisplaySettings(false);setShowFbSettings(true);},
       onClose:function(){setShowDisplaySettings(false);}
+    }),
+    /* 2026-06-29 D4: エディタからも Firebase設定を開けるように */
+    showFbSettings&&ce(FbSettingsModal,{
+      cfg:props.fbCfg||{url:'',secret:'',apiKey:'',storageBucket:'',paused:true},
+      onSave:function(nc){if(props.onFbCfgChange)props.onFbCfgChange(nc);},
+      onClose:function(){setShowFbSettings(false);}
     }),
 
     /* ── 分割表示: PatternSearchModal ── */
@@ -8986,6 +9426,7 @@ function caSaveMeta(m){
   });
   try{localStorage.setItem(CA_META_KEY,JSON.stringify(lite));}catch(e){
     console.error('[caSaveMeta] save failed');
+    caStorageWarn('チャート一覧の保存に失敗しました（端末の保存容量が不足の可能性）。「各種設定→バックアップ」で退避し、不要データの削除をご検討ください');
   }
 }
 /* 2026-06-21: チャートの最終閲覧日時 (ローカルのみ・{id:ts})。
@@ -9647,7 +10088,7 @@ function caMvLoadData(id, fbCfg, cb){
     if(d&&d.analysisData){cb(d);return;}
     fbCfg=fbCfg||{};
     if(fbCfg.url&&!_fbIsPaused(fbCfg)){
-      var auth=fbCfg.secret?'?auth='+fbCfg.secret:'';
+      var auth=caAuthParam(fbCfg.secret);
       var dataBase=fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
       fetch(dataBase+'/'+id+'.json'+auth).then(function(r){return r.ok?r.json():null;})
         .then(function(fb){cb(fb&&fb.analysisData?fb:null);})
@@ -9789,7 +10230,7 @@ function _triggerDl(dataUrl, filename){
 /* Firebase から data を取得 (IDBに無い場合のfallback) */
 function _fetchDraftDataFromFb(fbCfg, id, cb){
   if(!fbCfg||!fbCfg.url||_fbIsPaused(fbCfg)){cb(null);return;}
-  var auth=fbCfg.secret?'?auth='+fbCfg.secret:'';
+  var auth=caAuthParam(fbCfg.secret);
   var url=fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data/'+id+'.json'+auth;
   fetch(url).then(function(r){return r.ok?r.json():null;})
     .then(function(d){cb(d);})
@@ -10606,7 +11047,7 @@ function TagManagerPage(props){
   function saveDefs(arr){
     caSaveTagDefs(arr);setDefs(arr);
     if(fbCfg&&fbCfg.url&&!fbCfg.paused){
-      var a=fbCfg.secret?'?auth='+fbCfg.secret:'';
+      var a=caAuthParam(fbCfg.secret);
       var base=fbCfg.url.replace(/\/$/,'');
       var ut=Date.now();
       try{localStorage.setItem('ca_tag_defs_ut_v1',String(ut));}catch(e){}
@@ -10621,7 +11062,7 @@ function TagManagerPage(props){
   function saveCats(arr){
     caSaveTagCats(arr);setCats(arr);
     if(fbCfg&&fbCfg.url&&!fbCfg.paused){
-      var a=fbCfg.secret?'?auth='+fbCfg.secret:'';
+      var a=caAuthParam(fbCfg.secret);
       var base=fbCfg.url.replace(/\/$/,'');
       var ut=Date.now();
       try{localStorage.setItem('ca_tag_cats_ut_v1',String(ut));}catch(e){}
@@ -11030,7 +11471,7 @@ function caLoadSnEvents(date,cb){
   if(_snEventsCache[date]!==undefined){cb(_snEventsCache[date]||[]);return;}
   var cfg=_snReadCfg();
   if(!cfg||!cfg.fbUrl||cfg.fbPaused){cb([]);return;}
-  var a=cfg.fbSecret?'?auth='+cfg.fbSecret:'';
+  var a=caAuthParam(cfg.fbSecret);
   fetch(cfg.fbUrl.replace(/\/$/,'')+'/data/trades/'+date+'/events.json'+a)
     .then(function(r){return r.ok?r.json():null;})
     .then(function(data){
@@ -11074,7 +11515,7 @@ function CaChartCard(props){
     caSetChartMemo(m.id,h);
     setMemoHtml(h);
     if(fbCfg&&fbCfg.url&&!fbCfg.paused){
-      var a=fbCfg.secret?'?auth='+fbCfg.secret:'';
+      var a=caAuthParam(fbCfg.secret);
       var u=fbCfg.url.replace(/\/$/,'')+'/ca-chart-memos/'+encodeURIComponent(m.id)+'.json'+a;
       fetch(u,{method:'PUT',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({html:h,updatedAt:Date.now()})}).catch(function(){});
@@ -11085,7 +11526,7 @@ function CaChartCard(props){
     caSetChartTags(m.id,newIds);
     setTagIds(newIds);
     if(fbCfg&&fbCfg.url&&!fbCfg.paused){
-      var a=fbCfg.secret?'?auth='+fbCfg.secret:'';
+      var a=caAuthParam(fbCfg.secret);
       var u=fbCfg.url.replace(/\/$/,'')+'/ca-chart-tags/'+encodeURIComponent(m.id)+'.json'+a;
       fetch(u,{method:'PUT',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({tagIds:newIds,updatedAt:Date.now()})}).catch(function(){});
@@ -12131,7 +12572,7 @@ function NotepadPage(props){
   /* Firebase へ全エントリを書き込む (last-write-wins) */
   function npPushToFb(arr){
     if(!fbCfg||!fbCfg.url||fbCfg.paused)return;
-    var a=fbCfg.secret?'?auth='+fbCfg.secret:'';
+    var a=caAuthParam(fbCfg.secret);
     var base=fbCfg.url.replace(/\/$/,'');
     var ut=Date.now();
     npSaveUt(ut);
@@ -12144,7 +12585,7 @@ function NotepadPage(props){
   /* マウント時: バージョン確認 → 双方向マージ */
   useEffect(function(){
     if(!fbCfg||!fbCfg.url||fbCfg.paused)return;
-    var a=fbCfg.secret?'?auth='+fbCfg.secret:'';
+    var a=caAuthParam(fbCfg.secret);
     var base=fbCfg.url.replace(/\/$/,'');
     var localUt=npLoadUt();
     var localEntries=npLoadEntries();
@@ -13708,7 +14149,7 @@ function DraftLibrary(props){
       if(d&&d.analysisData){launch(d);return;}
       if(fbCfg.url){
         var dataBase=fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
-        var auth=fbCfg.secret?'?auth='+fbCfg.secret:'';
+        var auth=caAuthParam(fbCfg.secret);
         fetch(dataBase+'/'+m.id+'.json'+auth).then(function(r){return r.ok?r.json():null;})
           .then(function(fb){if(fb&&fb.analysisData)launch(fb);else window.caToast('データが見つかりません','error');})
           .catch(function(){window.caToast('読込失敗','error');});
@@ -13806,7 +14247,7 @@ function DraftLibrary(props){
     if(_caFbInitDone)return;
     if(!fbCfg||!fbCfg.url||fbCfg.paused)return;
     _caFbInitDone=true;
-    var a=fbCfg.secret?'?auth='+fbCfg.secret:'';
+    var a=caAuthParam(fbCfg.secret);
     var base=fbCfg.url.replace(/\/$/,'');
 
     /* チャートメモ一括取得 */
@@ -14034,7 +14475,7 @@ function DraftLibrary(props){
                           var nm=prev.map(function(x){return x.id===m.id?Object.assign({},x,{thumbUrl:thumbUrl}):x;});
                           caSaveMeta(nm);return nm;
                         });
-                        fetch(fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts/'+m.id+'.json'+(fbCfg.secret?'?auth='+fbCfg.secret:''),{
+                        fetch(fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts/'+m.id+'.json'+(caAuthParam(fbCfg.secret)),{
                           method:'PATCH',headers:{'Content-Type':'application/json'},
                           body:JSON.stringify({thumbUrl:thumbUrl})
                         })["catch"](function(e){console.error('regen thumbUrl patch:',e);});
@@ -14056,7 +14497,7 @@ function DraftLibrary(props){
     var current=caLoadMeta();
     var missing=current.filter(function(m){return !m.thumbUrl&&!_thumbMemCache[m.id];});
     if(!missing.length)return;
-    var auth=fbCfg.secret?'?auth='+fbCfg.secret:'';
+    var auth=caAuthParam(fbCfg.secret);
     var dataBase=fbCfg.url?fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data':'';
     var idx=0;
 
@@ -14113,7 +14554,7 @@ function DraftLibrary(props){
                       var nm=prev.map(function(x){return x.id===m.id?Object.assign({},x,{thumbUrl:thumbUrl}):x;});
                       caSaveMeta(nm);return nm;
                     });
-                    fetch(fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts/'+m.id+'.json'+(fbCfg.secret?'?auth='+fbCfg.secret:''),{
+                    fetch(fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts/'+m.id+'.json'+(caAuthParam(fbCfg.secret)),{
                       method:'PATCH',headers:{'Content-Type':'application/json'},
                       body:JSON.stringify({thumbUrl:thumbUrl})
                     })["catch"](function(e){console.error('regen thumbUrl patch:',e);});
@@ -14148,7 +14589,7 @@ function DraftLibrary(props){
                         var nm=prev.map(function(x){return x.id===m.id?Object.assign({},x,{thumbUrl:thumbUrl}):x;});
                         caSaveMeta(nm);return nm;
                       });
-                      fetch(fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts/'+m.id+'.json'+(fbCfg.secret?'?auth='+fbCfg.secret:''),{
+                      fetch(fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts/'+m.id+'.json'+(caAuthParam(fbCfg.secret)),{
                         method:'PATCH',headers:{'Content-Type':'application/json'},
                         body:JSON.stringify({thumbUrl:thumbUrl})
                       })["catch"](function(e){console.error('regen thumbUrl patch:',e);});
@@ -14296,7 +14737,7 @@ function DraftLibrary(props){
     });
   }
 
-  var auth=fbCfg.secret?'?auth='+fbCfg.secret:'';
+  var auth=caAuthParam(fbCfg.secret);
   function makeDraftsBase(){return fbCfg.url?fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts':null;}
   function makeDraftsDataBase(){return fbCfg.url?fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data':null;}
   function makeTrashBase(){return fbCfg.url?fbCfg.url.replace(/\/$/,'')+'/chart-annotator-trash':null;}
@@ -14330,7 +14771,7 @@ function DraftLibrary(props){
         // Step 2: バージョン変化あり → フルメタ取得
         localVRef.current=remoteV;
         fetchFullMeta();
-      }).catch(function(e){console.error('pollFb:',e);setSyncStatus(null);});
+      }).catch(function(e){console.error('pollFb:',e);setSyncStatus('err');caThrottledToast('syncerr','Firebase同期に失敗しています（接続/Secret/DBルールを確認してください）','error');});
   }
 
   // フルメタ取得（初回ロード時 + バージョン変化時のみ）
@@ -14383,7 +14824,7 @@ function DraftLibrary(props){
                   var nm=p.map(function(x){return x.id===_mid?Object.assign({},x,{thumbUrl:tu}):x;});
                   caSaveMeta(nm);return nm;
                 });
-                fetch(fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts/'+_mid+'.json'+(fbCfg.secret?'?auth='+fbCfg.secret:''),{
+                fetch(fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts/'+_mid+'.json'+(caAuthParam(fbCfg.secret)),{
                   method:'PATCH',headers:{'Content-Type':'application/json'},
                   body:JSON.stringify({thumbUrl:tu})
                 })["catch"](function(e){console.error('regen thumbUrl patch:',e);});
@@ -14416,7 +14857,7 @@ function DraftLibrary(props){
           _genNext();
         }
       })
-      .catch(function(e){console.error('fetchFullMeta drafts:',e);setSyncStatus(null);});
+      .catch(function(e){console.error('fetchFullMeta drafts:',e);setSyncStatus('err');caThrottledToast('syncerr','Firebase同期に失敗しています（接続/Secret/DBルールを確認してください）','error');});
 
     // ゴミ箱メタ同期
     fetch(trashBase+'.json'+auth)
@@ -15027,10 +15468,13 @@ function DraftLibrary(props){
         style:{padding:"4px 16px 12px",display:"flex",alignItems:"center",gap:10,
           overflowX:"auto",overflowY:"hidden"}
       },
-      fbCfg.url&&ce("span",{style:{fontSize:10,padding:"3px 7px",borderRadius:5,
-        background:_fbIsPaused(fbCfg)?"#7f1d1d":"#431407",
-        color:_fbIsPaused(fbCfg)?"#f87171":"#fb923c",fontWeight:700,flexShrink:0,whiteSpace:"nowrap"}},
-        _fbIsPaused(fbCfg)?'⏸ 同期停止中':syncStatus==='loading'?'⏳ 同期中':'🔥 同期有効'),
+      fbCfg.url&&ce("span",{
+        onClick:function(){if(props.onOpenFbSettings)props.onOpenFbSettings();},
+        title:"Firebase設定を開く",
+        style:{fontSize:10,padding:"3px 7px",borderRadius:5,cursor:"pointer",
+        background:_fbIsPaused(fbCfg)?"#7f1d1d":(syncStatus==='err'?"#7f1d1d":"#431407"),
+        color:_fbIsPaused(fbCfg)?"#f87171":(syncStatus==='err'?"#fca5a5":"#fb923c"),fontWeight:700,flexShrink:0,whiteSpace:"nowrap"}},
+        _fbIsPaused(fbCfg)?'⏸ 同期停止中':syncStatus==='err'?'⚠ 同期エラー':syncStatus==='loading'?'⏳ 同期中':'🔥 同期有効'),
       /* 2026-04-26: 横断検索ボタン */
       !showTrash&&!showImport&&ce("button",{onClick:function(){setShowSearch(!showSearch);if(!showSearch){setSearchQuery('');setSearchResults([]);}setShowImport(false);},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,
@@ -15077,13 +15521,13 @@ function DraftLibrary(props){
           background:fbCfg.url?"#431407":"#2a2a2a",
           color:fbCfg.url?"#fb923c":"#888",
           padding:"7px 12px",borderRadius:8,whiteSpace:"nowrap",flexShrink:0})},
-        "⚙ Firebase設定"),
+        "🔥 Firebase設定"),
       /* 2026-04-20: 表示設定ボタン (App側でモーダル管理) */
       ce("button",{onClick:function(){if(props.onOpenDisplaySettings)props.onOpenDisplaySettings();},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,
           background:"#2a2a2a",color:"#a5b4fc",
           padding:"7px 12px",borderRadius:8,whiteSpace:"nowrap",flexShrink:0})},
-        "📊 各種設定"),
+        "📊 表示・動作設定"),
       !showTrash&&ce("button",{onClick:function(){setAdding(true);setTimeout(function(){inputRef.current&&inputRef.current.focus();},50);},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,background:"#2563eb",
           color:"#fff",padding:"7px 14px",borderRadius:8,whiteSpace:"nowrap",flexShrink:0})},
@@ -16076,6 +16520,11 @@ function App(){
   var s1=useState(false); var drag=s1[0],setDrag=s1[1];
   var FB_DEFAULTS={url:'',secret:'',apiKey:'',storageBucket:'scalping-notebbok.firebasestorage.app',paused:true};
   var s2=useState(function(){try{var s=localStorage.getItem(FB_CFG_KEY);if(s){var p=JSON.parse(s);return Object.assign({},FB_DEFAULTS,p);}return FB_DEFAULTS;}catch(e){return FB_DEFAULTS;}}); var fbCfg=s2[0],setFbCfg=s2[1];
+  /* 2026-06-29: 設定のFirebase同期 — モジュールへ最新fbCfgを渡し、有効時は起動時/設定変更時に prefs(表示設定/銘柄コード/色等) を pull */
+  useEffect(function(){
+    caSetActiveFbCfg(fbCfg);
+    if(fbCfg&&fbCfg.url&&!_fbIsPaused(fbCfg))caPrefsPull(fbCfg);
+  },[fbCfg]);
   var s3=useState(false); var showFbSettings=s3[0],setShowFbSettings=s3[1];
   /* 2026-04-20: 表示・動作設定モーダル */
   var sDS=useState(false); var showDisplaySettings=sDS[0],setShowDisplaySettings=sDS[1];
@@ -16212,6 +16661,8 @@ function App(){
       /* シミュ終了 → 元のチャート(returnImg)を復元。null ならホームへ */
       onExitSim:function(returnImg){setImg(returnImg||null);},
       onSave:function(saved){setImg(function(prev){return Object.assign({},prev,saved);});},
+      /* 2026-06-29 D4: エディタ内 Firebase設定の保存をAppのfbCfgへ反映 */
+      onFbCfgChange:function(nc){setFbCfg(nc);},
       onClose:function(ticker){
         try{sessionStorage.removeItem('ca_session');}catch(e){}
         setImg(null);
@@ -16255,6 +16706,8 @@ function App(){
     }),
     /* 2026-04-20: 表示・動作設定モーダル */
     showDisplaySettings&&ce(DisplaySettingsModal,{
+      fbCfg:fbCfg,
+      onOpenFbSettings:function(){setShowDisplaySettings(false);setShowFbSettings(true);},
       onClose:function(){setShowDisplaySettings(false);}
     })
   );
