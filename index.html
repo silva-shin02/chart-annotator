@@ -5747,10 +5747,16 @@ function ImageAnnotator(props){
   var simMode=!!(img&&img._sim);
   /* 2026-06-29: ランダム・ブラインド練習。日付を隠し、終了時に正解を公開する */
   var blind=!!(img&&img._blind);
-  /* 2026-06-29: 「この日の分析をチェック」= 練習中に保存済みの書き込み/メモ/タグを表示(全日開示・読み取り専用)。
-     ブラインド練習中にチェックすると日付も公開する(ユーザー決定)。 */
+  /* 2026-06-29: 「この日の分析をチェック」= その日の保存済み分析(書き込み/メモ/タグ)を全日開示で表示。
+     ブラインド練習中にチェックすると日付も公開する(ユーザー決定)。
+     ★チェック中の書き込みは「その日の実チャート(_savedDraftId)」に通常どおり保存する(練習中=チェックOFFの
+       書き込みは従来どおり揮発・非保存)。チェックON時は analysisStrokes を実分析に差し替えて既存の描画/編集
+       ハンドラをそのまま使い、変更を実チャートへ自動保存。OFFで練習用strokesに復帰。 */
   var sChk=useState(false); var checkAnalysis=sChk[0],setCheckAnalysis=sChk[1];
   var hideDate=blind&&!checkAnalysis;
+  var savedStrokesRef=useRef((img&&img._savedStrokes)||{'1m':[],'5m':[]});  /* 実チャートの保存済み書き込み(最新) */
+  var practiceBackupRef=useRef(null);                                       /* チェック中に退避する練習用strokes */
+  var checkSaveTimerRef=useRef(null);
 
   /* 2026-04-20 Step3: 画像mode canvasRef 撤去 */
   /* B1: モードタブ — 2026-04-20: 画像mode完全撤去、常時 'analysis' */
@@ -6030,6 +6036,11 @@ function ImageAnnotator(props){
   function simPrev(){simStepBy(-1);}
   /* シミュ終了: 元のチャート(_simReturn)へ戻る。無ければホームへ。保存は一切しない */
   function exitSim(){
+    /* 2026-06-29: チェック中の未保存編集を実チャートへ確定保存してから抜ける */
+    if(checkAnalysis&&img&&img._savedDraftId){
+      if(checkSaveTimerRef.current){clearTimeout(checkSaveTimerRef.current);checkSaveTimerRef.current=null;}
+      _saveCheckStrokesToDraft(analysisStrokesRef.current||{'1m':[],'5m':[]});
+    }
     /* 2026-06-29: ブラインド練習は終了時に正解(銘柄・日付)を公開する */
     if(img&&img._blind&&props.onBlindSimExit){
       props.onBlindSimExit(img._simAnswer||{ticker:img._ticker||'',
@@ -6039,6 +6050,55 @@ function ImageAnnotator(props){
     if(props.onExitSim){props.onExitSim((img&&img._simReturn)||null);return;}
     onClose&&onClose();
   }
+  /* 2026-06-29: チェック中の書き込みを「その日の実チャート(_savedDraftId)」へ通常保存
+     (IDB + Firebase data/ts/v + meta savedAt)。サムネ再生成は次回エディタ保存時に任せる。 */
+  function _saveCheckStrokesToDraft(strokesObj){
+    var did=img&&img._savedDraftId; if(!did)return;
+    var so={'1m':((strokesObj&&strokesObj['1m'])||[]).slice(),'5m':((strokesObj&&strokesObj['5m'])||[]).slice()};
+    savedStrokesRef.current=so;
+    var v=Date.now();
+    caLoadDataAsync(did,function(d){
+      var base=d||{analysisData:(img&&img.analysisData)||null};
+      var nd=Object.assign({},base,{analysisStrokes:so,_v:v});
+      caSaveData(did,nd);
+      /* meta の savedAt を更新(一覧の「最終更新」反映。サムネは据え置き) */
+      try{var lm=caLoadMeta();var found=false;var nm=lm.map(function(mm){if(mm.id===did){found=true;return Object.assign({},mm,{savedAt:v});}return mm;});if(found)caSaveMeta(nm);}catch(e){}
+      /* Firebase: data / ts / version (DraftLibraryのポーリングが拾えるよう v もbump) */
+      var cfg=props.fbCfg||{};
+      if(cfg.url&&!_fbIsPaused(cfg)){
+        var auth=caAuthParam(cfg.secret);
+        var b=cfg.url.replace(/\/$/,'');
+        fetch(b+'/chart-annotator-drafts-data/'+did+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(nd)}).catch(function(){});
+        fetch(b+'/chart-annotator-drafts-ts/'+did+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({t:v})}).catch(function(){});
+        fetch(b+'/chart-annotator-drafts-v.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({_v:v})}).catch(function(){});
+      }
+    });
+  }
+  /* チェックON/OFFで analysisStrokes を「実分析 ⇄ 練習用」に差し替える。
+     ON: 練習strokesを退避し実分析を読み込む / OFF: 実分析の最終内容を保存して練習strokesへ復帰。 */
+  useEffect(function(){
+    if(!simMode)return;
+    if(checkAnalysis){
+      practiceBackupRef.current=analysisStrokesRef.current||{'1m':[],'5m':[]};
+      var real=savedStrokesRef.current||{'1m':[],'5m':[]};
+      setAnalysisStrokes({'1m':(real['1m']||[]).slice(),'5m':(real['5m']||[]).slice()});
+    }else{
+      if(practiceBackupRef.current){
+        if(checkSaveTimerRef.current){clearTimeout(checkSaveTimerRef.current);checkSaveTimerRef.current=null;}
+        _saveCheckStrokesToDraft(analysisStrokesRef.current||{'1m':[],'5m':[]});  /* 退避前に最終保存 */
+        setAnalysisStrokes(practiceBackupRef.current);
+        practiceBackupRef.current=null;
+      }
+    }
+  },[checkAnalysis]);
+  /* チェック中の編集を debounce 保存 */
+  useEffect(function(){
+    if(!simMode||!checkAnalysis)return;
+    if(!(img&&img._savedDraftId))return;
+    if(checkSaveTimerRef.current)clearTimeout(checkSaveTimerRef.current);
+    checkSaveTimerRef.current=setTimeout(function(){_saveCheckStrokesToDraft(analysisStrokesRef.current||{'1m':[],'5m':[]});},600);
+    return function(){if(checkSaveTimerRef.current){clearTimeout(checkSaveTimerRef.current);checkSaveTimerRef.current=null;}};
+  },[checkAnalysis,analysisStrokes]);
   /* ── シミュ操作バーのドラッグ移動 ──
      位置は localStorage に記憶。null=既定位置(中央・出来高ゾーンより上) */
   var sSimPos=useState(function(){try{var s=localStorage.getItem('ca_sim_ctrl_pos');if(s){var p=JSON.parse(s);if(p&&typeof p.x==='number'&&typeof p.y==='number')return p;}}catch(e){}return null;});
@@ -8089,7 +8149,7 @@ function ImageAnnotator(props){
               refData:refAnalysis?refAnalysis.analysisData:null,
               /* C3+: 過去chart側ストロークも連結描画 (C6で書込対応) */
               refStrokes:strokesVisible?((refAnalysis&&refAnalysis.analysisStrokes)?(refAnalysis.analysisStrokes[topTf]||[]):null):null,
-              drawTool:checkAnalysis?'pan':((stackMode&&analysisTf!=='1m')?'pan':tool), drawColor:color, drawWidth:lineW, drawOpacity:opacity,
+              drawTool:(stackMode&&analysisTf!=='1m')?'pan':tool, drawColor:color, drawWidth:lineW, drawOpacity:opacity,
               drawFontSize:fontSize, drawFontBold:fontBold,
               snippetObj:(tool==='snippet'&&snippets.length)?snippets[selSnipIdx%snippets.length]:null,
               snippetsById:(function(){var m={};snippets.forEach(function(sn){if(sn&&sn.id)m[sn.id]=sn;});return m;})(),
@@ -8106,7 +8166,7 @@ function ImageAnnotator(props){
               linkCursorRef:stackMode?linkCursorRef:null,
               linkCursorBump:stackMode?cursorBump:0,
               onLinkCursorChange:stackMode?notifyLinkCursor:null,
-              strokes:checkAnalysis?((img._savedStrokes&&img._savedStrokes[topTf])||[]):(strokesVisible?((analysisStrokes&&analysisStrokes[topTf])||[]):[]),
+              strokes:(checkAnalysis||strokesVisible)?((analysisStrokes&&analysisStrokes[topTf])||[]):[],
               quickColors:quickColors,
               /* 2026-04-23: 2本指ダブルタップで現ツール⇄消しゴム入れ替え */
               onTwoFingerDoubleTap:function(){
@@ -8379,13 +8439,13 @@ function ImageAnnotator(props){
               pShift:stack5mPShift, onPShiftChange:setStack5mPShift,
               /* 2026-06-15: 5m足のローソクを「1分足5本分=時間枠フィット幅」で太く描く */
               fitBarW:true,
-              drawTool:checkAnalysis?'pan':(analysisTf==='5m'?tool:'pan'), drawColor:color, drawWidth:lineW, drawOpacity:opacity,
+              drawTool:analysisTf==='5m'?tool:'pan', drawColor:color, drawWidth:lineW, drawOpacity:opacity,
               drawFontSize:fontSize, drawFontBold:fontBold,
               snippetObj:(analysisTf==='5m'&&tool==='snippet'&&snippets.length)?snippets[selSnipIdx%snippets.length]:null,
               snippetsById:(function(){var m={};snippets.forEach(function(sn){if(sn&&sn.id)m[sn.id]=sn;});return m;})(),
               tradeDir:tradeDir,
               horiz:horiz,
-              strokes:checkAnalysis?((img._savedStrokes&&img._savedStrokes['5m'])||[]):(strokesVisible?((analysisStrokes&&analysisStrokes['5m'])||[]):[]),
+              strokes:(checkAnalysis||strokesVisible)?((analysisStrokes&&analysisStrokes['5m'])||[]):[],
               quickColors:quickColors,
               onTwoFingerDoubleTap:function(){
                 if(tool==='eraser'){var prev=prevToolBeforeEraserRef.current||'pan';switchTool(prev);}
