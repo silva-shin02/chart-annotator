@@ -186,7 +186,7 @@ function idbSet(key,val){
   _idbRun(function(){
     if(!_idb)return;
     var _isBody=(key&&key.indexOf('data_')===0);
-    function _warn(){ if(_isBody&&typeof caStorageWarn==='function')caStorageWarn('チャートデータの保存に失敗しました（端末の保存容量が不足の可能性）。「各種設定→バックアップ」で退避し不要データの削除をご検討ください'); }
+    function _warn(){ if(_isBody&&typeof caStorageWarn==='function')caStorageWarn('チャートデータの保存に失敗しました（端末の保存容量が不足の可能性）。「設定→バックアップ」で退避し不要データの削除をご検討ください'); }
     try{
       var tx=_idb.transaction(IDB_STORE,'readwrite');
       var rq=tx.objectStore(IDB_STORE).put(val,key);
@@ -273,7 +273,7 @@ function caThrottledToast(key,msg,type){
 /* 2026-06-29: ストレージ書込失敗 (localStorage quota / IndexedDB失敗) の共通警告。
    黙殺するとチャート/設定が消えても気づけない (データ消失体験) ため最低限ユーザーに伝える */
 function caStorageWarn(msg){
-  caThrottledToast('storage',msg||'保存に失敗しました（端末の保存容量が不足している可能性）。「各種設定→バックアップ」で退避を推奨します','error');
+  caThrottledToast('storage',msg||'保存に失敗しました（端末の保存容量が不足している可能性）。「設定→バックアップ」で退避を推奨します','error');
 }
 
 /* ─── Color Picker ─────────────────────────────────────────── */
@@ -1371,7 +1371,7 @@ function DisplaySettingsModal(props){
         style:{background:"#1c1c1e",borderRadius:18,padding:"24px 22px 22px",width:"100%",maxWidth:480,
           maxHeight:"90vh",overflowY:"auto",
           boxShadow:"0 24px 64px rgba(0,0,0,.8)",border:"1px solid #2a2a2a"}},
-        ce("div",{style:{fontSize:18,fontWeight:700,color:"#fff",marginBottom:12,textAlign:"center"}},"📊 表示・動作設定"),
+        ce("div",{style:{fontSize:18,fontWeight:700,color:"#fff",marginBottom:12,textAlign:"center"}},"⚙ 設定"),
         /* タブバー */
         ce("div",{style:{display:"flex",borderBottom:"1px solid #2a2a2a",marginBottom:14}},
           tabBtn('display','表示'),tabBtn('draw','描画'),tabBtn('link','連携・同期'),tabBtn('backup','バックアップ')
@@ -7500,10 +7500,10 @@ function ImageAnnotator(props){
           color:_fbIsPaused(props.fbCfg)?'#f87171':autoSaveStatus==='saving'?'#93c5fd':autoSaveStatus==='ok'?'#86efac':autoSaveStatus==='err'?'#fca5a5':'#fb923c'}},
           _fbIsPaused(props.fbCfg)?'⏸ 同期停止中':autoSaveStatus==='saving'?'⏳ 自動保存中':autoSaveStatus==='ok'?'✓ 自動保存済':autoSaveStatus==='err'?'✕ 自動保存失敗':'🔥 自動保存ON'
         ),
-        /* 2026-04-20: 📊 表示・動作設定ボタン */
+        /* 2026-04-20: ⚙ 設定ボタン */
         ce("button",{onClick:function(){setShowDisplaySettings(true);},
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#1e3a5f",color:"#a5b4fc",fontWeight:700})},
-          "📊 表示・動作設定"),
+          "⚙ 設定"),
         !simMode&&ce("button",{onClick:function(){setCancelConfirm(true);},style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#333",color:"#ccc"})},"終了"),
         !simMode&&ce("button",{onClick:saveAndExport,style:Object.assign({},TS,{fontSize:12,padding:"6px 12px",background:"#2563eb",color:"#fff",fontWeight:700})},"💾 保存・出力")
       ),
@@ -9426,7 +9426,7 @@ function caSaveMeta(m){
   });
   try{localStorage.setItem(CA_META_KEY,JSON.stringify(lite));}catch(e){
     console.error('[caSaveMeta] save failed');
-    caStorageWarn('チャート一覧の保存に失敗しました（端末の保存容量が不足の可能性）。「各種設定→バックアップ」で退避し、不要データの削除をご検討ください');
+    caStorageWarn('チャート一覧の保存に失敗しました（端末の保存容量が不足の可能性）。「設定→バックアップ」で退避し、不要データの削除をご検討ください');
   }
 }
 /* 2026-06-21: チャートの最終閲覧日時 (ローカルのみ・{id:ts})。
@@ -15195,7 +15195,7 @@ function DraftLibrary(props){
     /* 2026-04-20: 画像mode撤去後、画像draftを開く時は警告して中断 */
     function handleLegacyImageDraft(d){
       if(d&&(d.orig_base64||d.base64||d.imageUrl)&&!d.analysisData){
-        window.caToast('このチャートは旧画像形式です。⚙ Firebase設定から「旧画像draftを削除」で整理してください','error');
+        window.caToast('このチャートは旧画像形式です。設定→連携・同期→Firebase設定 から「旧画像draftを削除」で整理してください','error');
         return true;  /* 中断 */
       }
       return false;  /* 続行 */
@@ -15515,19 +15515,13 @@ function DraftLibrary(props){
           display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}},
           trash.length)
       ),
-      /* Firebase設定ボタン (App側でモーダル管理) */
-      ce("button",{onClick:function(){if(props.onOpenFbSettings)props.onOpenFbSettings();},
-        style:Object.assign({},BT,{fontSize:13,fontWeight:700,
-          background:fbCfg.url?"#431407":"#2a2a2a",
-          color:fbCfg.url?"#fb923c":"#888",
-          padding:"7px 12px",borderRadius:8,whiteSpace:"nowrap",flexShrink:0})},
-        "🔥 Firebase設定"),
-      /* 2026-04-20: 表示設定ボタン (App側でモーダル管理) */
+      /* 2026-06-29: 独立Firebase設定ボタンは廃止(同期バッジclick + 設定→連携・同期タブから開ける) */
+      /* 設定ボタン (App側でモーダル管理。Firebase設定も連携タブから開ける) */
       ce("button",{onClick:function(){if(props.onOpenDisplaySettings)props.onOpenDisplaySettings();},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,
           background:"#2a2a2a",color:"#a5b4fc",
           padding:"7px 12px",borderRadius:8,whiteSpace:"nowrap",flexShrink:0})},
-        "📊 表示・動作設定"),
+        "⚙ 設定"),
       !showTrash&&ce("button",{onClick:function(){setAdding(true);setTimeout(function(){inputRef.current&&inputRef.current.focus();},50);},
         style:Object.assign({},BT,{fontSize:13,fontWeight:700,background:"#2563eb",
           color:"#fff",padding:"7px 14px",borderRadius:8,whiteSpace:"nowrap",flexShrink:0})},
