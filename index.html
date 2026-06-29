@@ -5745,6 +5745,8 @@ function ImageAnnotator(props){
      img._sim=true で起動。当日足をカットオフ時刻まで開示(slice)して1本ずつ表示。
      永続化は一切しない(draftId無し起動 + autosave gate)。前日チャートは自動でref連結。 */
   var simMode=!!(img&&img._sim);
+  /* 2026-06-29: ランダム・ブラインド練習。日付を隠し、終了時に正解を公開する */
+  var blind=!!(img&&img._blind);
 
   /* 2026-04-20 Step3: 画像mode canvasRef 撤去 */
   /* B1: モードタブ — 2026-04-20: 画像mode完全撤去、常時 'analysis' */
@@ -6019,6 +6021,12 @@ function ImageAnnotator(props){
   function simPrev(){simStepBy(-1);}
   /* シミュ終了: 元のチャート(_simReturn)へ戻る。無ければホームへ。保存は一切しない */
   function exitSim(){
+    /* 2026-06-29: ブラインド練習は終了時に正解(銘柄・日付)を公開する */
+    if(img&&img._blind&&props.onBlindSimExit){
+      props.onBlindSimExit(img._simAnswer||{ticker:img._ticker||'',
+        date:(analysisDataRef.current&&analysisDataRef.current.date)||(analysisData&&analysisData.date)||'',name:''});
+      return;
+    }
     if(props.onExitSim){props.onExitSim((img&&img._simReturn)||null);return;}
     onClose&&onClose();
   }
@@ -7963,11 +7971,17 @@ function ImageAnnotator(props){
               /* 上段: ticker・date・タグチップ・ボタン群 */
               ce("div",{style:{display:"flex",alignItems:"center",gap:6,padding:"5px 10px",flexWrap:"wrap",minHeight:32}},
                 ce("div",{style:{fontSize:13,fontWeight:700,color:"#ddd",flexShrink:0}},
-                  (analysisData.ticker||'?')+'　'+
-                  ((refAnalysis&&refAnalysis.analysisData)
-                    ?((refAnalysis.analysisData.date||'')+_dowLabel(refAnalysis.analysisData.date||'')+' ⇄ '+(analysisData.date||'')+_dowLabel(analysisData.date||''))
-                    :((analysisData.date||'')+_dowLabel(analysisData.date||'')))
+                  blind
+                    ? (analysisData.ticker||'?')
+                    : (analysisData.ticker||'?')+'　'+
+                      ((refAnalysis&&refAnalysis.analysisData)
+                        ?((refAnalysis.analysisData.date||'')+_dowLabel(refAnalysis.analysisData.date||'')+' ⇄ '+(analysisData.date||'')+_dowLabel(analysisData.date||''))
+                        :((analysisData.date||'')+_dowLabel(analysisData.date||'')))
                 ),
+                /* 2026-06-29: ブラインド練習中は日付を隠しバッジ表示 */
+                blind&&ce("span",{style:{fontSize:12,fontWeight:700,color:"#fdba74",
+                  background:"#2a1a0a",border:"1px solid #7c2d12",borderRadius:8,padding:"3px 10px",flexShrink:0}},
+                  "🎲 ブラインド練習（日付は終了時に公開）"),
                 /* タグチップ (inline) */
                 (function(){
                   var _td=caLoadTagDefs(); var _tById={};
@@ -7983,8 +7997,8 @@ function ImageAnnotator(props){
                       td.name);
                   });
                 })(),
-                /* SN チャート形状タグ (inline, 読み取り専用) */
-                (function(){
+                /* SN チャート形状タグ (inline, 読み取り専用)。2026-06-29: ブラインド練習中は日付ヒントになるので非表示 */
+                !blind&&(function(){
                   var snTicker=analysisData.ticker||img._ticker||'';
                   var snDate=analysisData.date||_caResolveMetaDate(img)||'';
                   if(!snDate||!snTicker)return null;
@@ -13419,6 +13433,21 @@ function CaSimPicker(props){
                   background:on?"#ea580c":"#2a2a2a",color:on?"#fff":"#bbb"})},tk);
             })
         ),
+        /* 2026-06-29: ランダムな日でブラインド練習 (銘柄を選んでから1日をランダム抽選・日付は終了まで非表示) */
+        selT&&charts.length>0&&ce("div",{style:{padding:"12px 14px",borderBottom:"1px solid #2a2a2a",flexShrink:0}},
+          ce("button",{onClick:function(){if(props.onPickRandom)props.onPickRandom(selT);},
+            style:Object.assign({},BT2,{width:"100%",display:"flex",alignItems:"center",gap:10,
+              background:"#7c2d12",border:"1px solid #9a3412",borderRadius:10,padding:"11px 12px",textAlign:"left"})},
+            ce("span",{style:{fontSize:20,flexShrink:0}},"🎲"),
+            ce("span",{style:{flex:1}},
+              ce("span",{style:{display:"block",fontSize:13,fontWeight:700,color:"#fed7aa"}},"ランダムな日でブラインド練習"),
+              ce("span",{style:{display:"block",fontSize:10,color:"#fdba74",marginTop:2}},
+                selT+" の保有チャートから1日をランダム抽選（日付は終了まで非表示）")
+            ),
+            ce("span",{style:{fontSize:12,fontWeight:700,color:"#fff",border:"1px solid #fdba74",borderRadius:8,padding:"7px 12px",flexShrink:0}},"スタート")
+          ),
+          ce("div",{style:{fontSize:10,color:"#666",marginTop:8}},"または下から日付を指定して選ぶ（従来どおり）")
+        ),
         /* 日付カード一覧 */
         ce("div",{style:{flex:1,overflowY:"auto",padding:14,display:"flex",flexWrap:"wrap",gap:10,alignContent:"flex-start"}},
           charts.length===0
@@ -13439,6 +13468,38 @@ function CaSimPicker(props){
                 )
               );
             })
+        )
+      )
+    ),
+    document.body
+  );
+}
+
+/* ─── 2026-06-29: SimRevealModal — ブラインド練習の終了時に正解(銘柄・日付)を公開＋リロール ─── */
+function SimRevealModal(props){
+  var ans=props.ans||{}, onRerollSame=props.onRerollSame, onPickAnother=props.onPickAnother, onClose=props.onClose;
+  var dd=ans.date||'(日付不明)';
+  return ReactDOM.createPortal(
+    ce("div",{onClick:function(e){if(e.target===e.currentTarget)onClose();},
+      style:{position:"fixed",inset:0,background:"rgba(0,0,0,.78)",zIndex:23000,
+        display:"flex",alignItems:"center",justifyContent:"center",padding:20}},
+      ce("div",{onClick:function(e){e.stopPropagation();},
+        style:{background:"#1c1c1e",borderRadius:18,padding:"24px 22px",width:"100%",maxWidth:360,textAlign:"center",
+          boxShadow:"0 24px 64px rgba(0,0,0,.8)",border:"1px solid #2a2a2a"}},
+        ce("div",{style:{fontSize:13,color:"#888",marginBottom:6}},"🎯 正解"),
+        ce("div",{style:{fontSize:20,fontWeight:700,color:"#fff",marginBottom:4}},ans.ticker||''),
+        ce("div",{style:{fontSize:18,fontWeight:700,color:"#fed7aa",marginBottom:18}},
+          dd+(ans.date?_dowLabel(ans.date):'')),
+        ce("div",{style:{display:"flex",flexDirection:"column",gap:8}},
+          ce("button",{onClick:onRerollSame,
+            style:{padding:"11px 0",fontSize:13,fontWeight:700,border:"none",borderRadius:10,
+              background:"#ea580c",color:"#fff",cursor:"pointer",fontFamily:"inherit"}},"🎲 同じ銘柄で別の日"),
+          ce("button",{onClick:onPickAnother,
+            style:{padding:"11px 0",fontSize:13,fontWeight:700,borderRadius:10,border:"1px solid #3a3a3a",
+              background:"#2a2a2a",color:"#ddd",cursor:"pointer",fontFamily:"inherit"}},"🔀 別の銘柄を選ぶ"),
+          ce("button",{onClick:onClose,
+            style:{padding:"8px 0",fontSize:13,fontWeight:600,border:"none",background:"transparent",
+              color:"#888",cursor:"pointer",fontFamily:"inherit"}},"閉じる")
         )
       )
     ),
@@ -14133,6 +14194,10 @@ function DraftLibrary(props){
   var sPatQ=useState(null);      var patSearchInitQuery=sPatQ[0],setPatSearchInitQuery=sPatQ[1];
   /* シミュレーション銘柄・日付選択モーダル */
   var sSimP=useState(false);     var simPickerOpen=sSimP[0],setSimPickerOpen=sSimP[1];
+  /* 2026-06-29: ブラインド練習の「別の銘柄を選ぶ」で App からピッカー再オープン要求が来たら開く */
+  useEffect(function(){
+    if(props.autoOpenSimPicker){ setSimPickerOpen(true); if(props.onConsumeAutoOpenSimPicker)props.onConsumeAutoOpenSimPicker(); }
+  },[props.autoOpenSimPicker]);
   /* 2026-06-18: マルチビュー (複数チャート一括表示) */
   var sMV=useState(false);       var mvOpen=sMV[0], setMvOpen=sMV[1];
   /* 選択したチャートを「シミュレーション(練習)モード」で開く (保存なし・前日自動連結) */
@@ -16330,6 +16395,8 @@ function DraftLibrary(props){
         meta:meta,
         initialTicker:selTicker||null,
         onPick:function(m){setSimPickerOpen(false);startSimulation(m);},
+        /* 2026-06-29: 銘柄を選んでランダムな日でブラインド練習 (App側で抽選/起動) */
+        onPickRandom:function(tk){setSimPickerOpen(false);if(props.onStartBlindSim)props.onStartBlindSim(tk);},
         onClose:function(){setSimPickerOpen(false);}
       }),
       /* 2026-06-18: マルチ表示モーダル (似た形/手動・最大16分割) */
@@ -16530,7 +16597,37 @@ function App(){
   var s6=useState(null); var highlightDate=s6[0],setHighlightDate=s6[1];
   /* 2026-04-30: C - エディタから「似た形検索」起動時のクエリ draft id */
   var s7=useState(null); var queryFromEditor=s7[0],setQueryFromEditor=s7[1];
+  /* 2026-06-29: ランダム・ブラインド練習 — 終了時の正解公開 / 別銘柄リロール時のピッカー再オープン */
+  var sSR=useState(null); var simReveal=sSR[0],setSimReveal=sSR[1];
+  var sAOP=useState(false); var autoOpenSimPicker=sAOP[0],setAutoOpenSimPicker=sAOP[1];
   var fileRef=useRef(null);
+  /* 2026-06-29: 指定銘柄の保有チャートから1日をランダム抽選し、ブラインド練習モードで起動。
+     avoidId を渡すと直前の日を避ける(他に日がある場合)。保存は一切しない。 */
+  function launchBlindSim(ticker, avoidId){
+    if(!ticker)return;
+    var all=caLoadMeta().filter(function(m){return m.ticker===ticker;});
+    if(!all.length){try{window.caToast&&window.caToast('「'+ticker+'」のチャートがありません','error');}catch(e){}return;}
+    var pool=all;
+    if(avoidId&&all.length>1){var f=all.filter(function(x){return x.id!==avoidId;});if(f.length)pool=f;}
+    var m=pool[Math.floor(Math.random()*pool.length)];
+    function launch(d){
+      if(!(d&&d.analysisData)){try{window.caToast&&window.caToast('このチャートにはデータがありません','error');}catch(e){}return;}
+      var ans={ticker:ticker, date:(d.analysisData.date||''), name:m.name||'', id:m.id};
+      setSimReveal(null);
+      setImg({analysisData:d.analysisData, _ticker:ticker, _name:'？？？',
+        _sim:true, _blind:true, _simAnswer:ans, _simReturn:null});
+    }
+    caLoadDataAsync(m.id,function(d){
+      if(d&&d.analysisData){launch(d);return;}
+      if(fbCfg.url){
+        var dataBase=fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
+        var auth=caAuthParam(fbCfg.secret);
+        fetch(dataBase+'/'+m.id+'.json'+auth).then(function(r){return r.ok?r.json():null;})
+          .then(function(fb){if(fb&&fb.analysisData)launch(fb);else window.caToast&&window.caToast('データが見つかりません','error');})
+          .catch(function(){window.caToast&&window.caToast('読込失敗','error');});
+      }else{window.caToast&&window.caToast('データが見つかりません','error');}
+    });
+  }
   /* ─── 起動時: URLパラメータ解析 (scalping-notebook連携) ───
      対応: ?{code}_{date}&id={id}
      - id あり & 該当チャート存在 → エディタ直接起動
@@ -16657,6 +16754,12 @@ function App(){
       onSave:function(saved){setImg(function(prev){return Object.assign({},prev,saved);});},
       /* 2026-06-29 D4: エディタ内 Firebase設定の保存をAppのfbCfgへ反映 */
       onFbCfgChange:function(nc){setFbCfg(nc);},
+      /* 2026-06-29: ブラインド練習終了 → 正解(銘柄・日付)を公開するモーダルを出す */
+      onBlindSimExit:function(ans){
+        try{sessionStorage.removeItem('ca_session');}catch(e){}
+        setImg(null);
+        setSimReveal(ans||null);
+      },
       onClose:function(ticker){
         try{sessionStorage.removeItem('ca_session');}catch(e){}
         setImg(null);
@@ -16690,7 +16793,11 @@ function App(){
       queryFromEditor:queryFromEditor,
       onConsumeQueryFromEditor:function(){setQueryFromEditor(null);},
       onOpenNotepad:function(){setShowNotepad(true);},
-      onOpenTagManager:function(){setShowTagManager(true);}
+      onOpenTagManager:function(){setShowTagManager(true);},
+      /* 2026-06-29: 銘柄を選んでランダムな日でブラインド練習 / 別銘柄リロール時のピッカー再オープン */
+      onStartBlindSim:function(tk){launchBlindSim(tk);},
+      autoOpenSimPicker:autoOpenSimPicker,
+      onConsumeAutoOpenSimPicker:function(){setAutoOpenSimPicker(false);}
     }),
     /* Firebase設定モーダル */
     showFbSettings&&ce(FbSettingsModal,{
@@ -16703,6 +16810,13 @@ function App(){
       fbCfg:fbCfg,
       onOpenFbSettings:function(){setShowDisplaySettings(false);setShowFbSettings(true);},
       onClose:function(){setShowDisplaySettings(false);}
+    }),
+    /* 2026-06-29: ブラインド練習の正解公開＋リロール */
+    simReveal&&ce(SimRevealModal,{
+      ans:simReveal,
+      onRerollSame:function(){var a=simReveal;setSimReveal(null);launchBlindSim(a.ticker,a.id);},
+      onPickAnother:function(){setSimReveal(null);setAutoOpenSimPicker(true);},
+      onClose:function(){setSimReveal(null);}
     })
   );
 }
