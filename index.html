@@ -7500,12 +7500,6 @@ function ImageAnnotator(props){
           title:"このチャートをシミュレーション(練習)モードで開く",
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#7c2d12",color:"#fed7aa",fontWeight:700})
         },"▶ シミュ"),
-        /* 2026-06-29: シミュ中「この日の分析をチェック」トグル (保存済み書き込み/メモ/タグを全日開示・読み取り専用) */
-        simMode && ce("button",{onClick:function(){setCheckAnalysis(function(v){return !v;});},
-          title:"この日の保存済み分析(書き込み・メモ・タグ)を表示/非表示",
-          style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",fontWeight:700,
-            background:checkAnalysis?"#0e7490":"#155e75",color:"#a5f3fc"})},
-          checkAnalysis?"📋 分析を隠す":"📋 この日の分析をチェック"),
         /* シミュ中の「終了」ボタン (バッジ位置に配置)。押すと元のチャートに戻る */
         simMode && ce("button",{onClick:exitSim,
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#333",color:"#ccc"})},"終了"),
@@ -8000,6 +7994,14 @@ function ImageAnnotator(props){
                 hideDate&&ce("span",{style:{fontSize:12,fontWeight:700,color:"#fdba74",
                   background:"#2a1a0a",border:"1px solid #7c2d12",borderRadius:8,padding:"3px 10px",flexShrink:0}},
                   "🎲 ブラインド練習（日付は終了時に公開）"),
+                /* 2026-06-29: 「この日の分析をチェック」トグルをバッジの右に配置(ツールバーから移設)。
+                   保存済み 書き込み/メモ/タグ を全日開示・読み取り専用で表示。再押下で練習に戻る。 */
+                simMode&&ce("button",{onClick:function(e){e.stopPropagation();setCheckAnalysis(function(v){return !v;});},
+                  title:"この日の保存済み分析(書き込み・メモ・タグ)を表示/非表示",
+                  style:{fontSize:11,fontWeight:700,fontFamily:"inherit",cursor:"pointer",flexShrink:0,
+                    border:"1px solid "+(checkAnalysis?"#0e7490":"#155e75"),borderRadius:8,padding:"3px 10px",
+                    background:checkAnalysis?"#0e7490":"#0b3a44",color:"#a5f3fc"}},
+                  checkAnalysis?"📋 分析を隠す":"📋 この日の分析をチェック"),
                 /* タグチップ (inline) */
                 (function(){
                   var _td=caLoadTagDefs(); var _tById={};
