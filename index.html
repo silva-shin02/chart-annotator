@@ -12893,6 +12893,7 @@ function CaCalendarModal(props){
   var charts=props.charts||[];
   var onOpenChart=props.onOpenChart||function(){};
   var onClose=props.onClose||function(){};
+  var onStartSim=props.onStartSim||function(){};  /* 2026-06-30: この日をシミュレーション起動 */
 
   /* デフォルト表示月: 最新チャートの月、なければ今月 */
   function _resolveDate(m){
@@ -13077,6 +13078,14 @@ function CaCalendarModal(props){
                             alignItems:'center',gap:6}},
                             ce('span',{style:{flex:1,fontSize:10,color:'#999',overflow:'hidden',
                               textOverflow:'ellipsis',whiteSpace:'nowrap'}},m.name||''),
+                            /* 2026-06-30: この日をシミュレーション(非ブラインド・startSimulation流用) */
+                            ce('button',{
+                              onClick:function(){onStartSim(m);},
+                              title:'この日をシミュレーション(練習)モードで開く',
+                              style:{background:'#ea580c',color:'#fff',border:'none',
+                                borderRadius:5,cursor:'pointer',fontSize:11,fontWeight:700,
+                                padding:'5px 10px',flexShrink:0,whiteSpace:'nowrap'}},
+                              '▶ シミュ'),
                             ce('button',{
                               onClick:function(){onOpenChart(m.id);onClose();},
                               style:{background:'#6366F1',color:'#fff',border:'none',
@@ -16492,7 +16501,9 @@ function DraftLibrary(props){
       calOpen&&selTicker&&ce(CaCalendarModal,{
         charts:meta.filter(function(m){return m.ticker===selTicker;}),
         onOpenChart:function(id){openChart(id);},
-        onClose:function(){setCalOpen(false);}
+        onClose:function(){setCalOpen(false);},
+        /* 2026-06-30: この日をシミュレーション(非ブラインド)。startSimulation/setCalOpenはDraftLibrary内 */
+        onStartSim:function(m){setCalOpen(false);startSimulation(m);}
       }),
       /* タグ検索モーダル */
       tagModalOpen&&ce(CaTagSearchModal,{
