@@ -8143,7 +8143,10 @@ function ImageAnnotator(props){
                 })
               )
             ),
-            ce(DataChart,{
+            /* 2026-06-30: シミュ中の1分+5分は「触れたペインにそのまま描ける」よう、
+               このペイン内だけ analysisTf を局所固定(上=topTf='1m')。非シミュは外側analysisTfのまま(tap-to-focus維持)。
+               引数渡しで外側値を捕捉(var巻き上げ回避)。 */
+            (function(analysisTf){return ce(DataChart,{
               data:simMode?simDisplayData:emaContinuedData, tf:topTf, showCrosshair:showCrosshair,
               /* C1+: 過去chartデータを渡して同一キャンバスに連結描画 */
               refData:refAnalysis?refAnalysis.analysisData:null,
@@ -8401,7 +8404,7 @@ function ImageAnnotator(props){
               _openedAt:Date.now()  // タッチ合成イベント暴発ガード用 (タブレット対応)
             });
           }
-        })
+        });})(simMode?topTf:analysisTf)
         ), /* end 現在チャート container div (統合chart: refAnalysis有でもこの1つに集約) */
           /* 2026-06-15: stackMode ディバイダ (上1m / 下5m、splitと同じ作法でリサイズ) */
           stackMode&&ce("div",{
@@ -8429,7 +8432,9 @@ function ImageAnnotator(props){
               background:"#111",borderBottom:"1px solid #222",flexShrink:0,gap:8}},
               ce("span",{style:{fontSize:11,color:"#888",fontWeight:700}},"5分足")
             ),
-            ce(DataChart,{
+            /* 2026-06-30: シミュ中はこの下段(5m)も常に描画可へ。ペイン内だけ analysisTf='5m' 局所固定。
+               非シミュは外側analysisTfのまま(tap-to-focus維持)。引数渡しで外側値を捕捉。 */
+            (function(analysisTf){return ce(DataChart,{
               data:simMode?simDisplayData:emaContinuedData, tf:'5m', showCrosshair:showCrosshair,
               /* 2026-06-25: stackMode 1m⇔5m カーソル連動 (この下段は常にstack時のみrender) */
               linkCursorRef:linkCursorRef, linkCursorBump:cursorBump, onLinkCursorChange:notifyLinkCursor,
@@ -8646,7 +8651,7 @@ function ImageAnnotator(props){
                   _openedAt:Date.now()
                 });
               }:null
-            })
+            });})(simMode?'5m':analysisTf)
           ),
           /* Divider - split mode only */
           splitChart&&ce("div",{
