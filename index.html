@@ -768,7 +768,8 @@ function caSaveFitMode(m){
 }
 /* 2026-06-29: 初期表示の足 '1m'|'5m'|'stack' */
 function caLoadDefaultTf(){
-  try{var v=localStorage.getItem(CA_DEFAULT_TF_KEY);return (v==='5m'||v==='stack')?v:'1m';}catch(e){return '1m';}
+  /* 2026-06-30: 既定の初期足を 1分+5分(stack) に変更。明示保存した '1m'/'5m' は尊重し、未設定/不正のみ stack */
+  try{var v=localStorage.getItem(CA_DEFAULT_TF_KEY);return (v==='1m'||v==='5m'||v==='stack')?v:'stack';}catch(e){return 'stack';}
 }
 function caSaveDefaultTf(t){
   var s=(t==='5m'||t==='stack')?t:'1m';
