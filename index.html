@@ -11617,6 +11617,7 @@ function CaChartCard(props){
   var highlightDate=props.highlightDate||null;
   var onOpen=props.onOpen;
   var onDelete=props.onDelete;
+  var onStartSim=props.onStartSim||function(){};  /* 2026-06-30: この日をシミュレーション起動 */
   var fbCfg=props.fbCfg||{};
   var BT2={border:'none',background:'none',cursor:'pointer',fontFamily:'inherit',padding:0};
 
@@ -11809,6 +11810,20 @@ function CaChartCard(props){
           border:tagOpen?'1px solid #22c55e':'1px solid #333',
           borderRadius:5,cursor:'pointer',flexShrink:0,lineHeight:1.4}},
         '🏷 タグ'
+      ),
+      /* 2026-06-30: この日をシミュレーション(非ブラインド・startSimulation流用) — タグの右 */
+      ce('button',{
+        onClick:function(e){
+          e.stopPropagation();
+          onStartSim(m);
+        },
+        title:'この日をシミュレーション(練習)モードで開く',
+        style:{padding:'4px 8px',fontSize:11,fontWeight:700,
+          background:'#7c2d12',
+          color:'#fed7aa',
+          border:'1px solid #9a3412',
+          borderRadius:5,cursor:'pointer',flexShrink:0,lineHeight:1.4}},
+        '▶ シミュ'
       )
     ),
 
@@ -16479,7 +16494,9 @@ function DraftLibrary(props){
                     highlightDate:highlightDate,
                     onOpen:openChart,
                     onDelete:deleteChart,
-                    fbCfg:fbCfg
+                    fbCfg:fbCfg,
+                    /* 2026-06-30: サムネカードからこの日をシミュレーション(非ブラインド) */
+                    onStartSim:function(){startSimulation(m);}
                   }));
                 });
               });
