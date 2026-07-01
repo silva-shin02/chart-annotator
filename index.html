@@ -9399,32 +9399,7 @@ function ImageAnnotator(props){
       );
     })(),
 
-    /* 2026-06-29: 分析チェック中のメモ/タグ表示 (読み取り専用・フローティング。書き込みはチャート上に表示済み) */
-    simMode&&checkAnalysis&&(function(){
-      var _pid=img._savedDraftId||img._draftId||'';
-      var _memo=_pid?caGetChartMemo(_pid):'';
-      var _tagIds=_pid?caGetChartTags(_pid):[];
-      var _defs=caLoadTagDefs(); var _byId={}; _defs.forEach(function(d){_byId[d.id]=d;});
-      var _tags=(_tagIds||[]).map(function(id){return _byId[id];}).filter(Boolean);
-      if(!_memo&&!_tags.length)return null;
-      return ce("div",{style:{position:"fixed",left:"50%",top:96,transform:"translateX(-50%)",zIndex:11500,
-        width:"min(92vw,440px)",maxHeight:"42vh",overflowY:"auto",
-        background:"rgba(8,20,24,0.96)",border:"1px solid #155e75",borderRadius:12,
-        boxShadow:"0 10px 32px rgba(0,0,0,.6)",padding:"12px 14px"}},
-        ce("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:8}},
-          ce("span",{style:{fontSize:13,fontWeight:700,color:"#a5f3fc",flex:1}},"📋 この日の分析（メモ・タグ）"),
-          ce("button",{onClick:function(){setCheckAnalysis(false);},
-            style:{border:"none",background:"#155e75",color:"#a5f3fc",fontSize:11,fontWeight:700,
-              borderRadius:7,padding:"5px 10px",cursor:"pointer",fontFamily:"inherit"}},"閉じる")
-        ),
-        _tags.length>0&&ce("div",{style:{display:"flex",flexWrap:"wrap",gap:6,marginBottom:_memo?10:0}},
-          _tags.map(function(td){return ce("span",{key:td.id,style:{fontSize:11,padding:"2px 9px",borderRadius:10,
-            background:td.color,color:"#fff",fontWeight:700,whiteSpace:"nowrap"}},td.name);})
-        ),
-        _memo&&ce("div",{style:{fontSize:13,color:"#e5e7eb",lineHeight:1.7,wordBreak:"break-word"},
-          dangerouslySetInnerHTML:{__html:_memo}})
-      );
-    })(),
+    /* 2026-06-30: 分析チェック中のメモ/タグ浮遊パネルは不要につき削除(ユーザー要望)。メモ/タグは通常エディタのメタ行で確認できる。 */
 
     /* ── キャンセル確認モーダル ── */
     cancelConfirm&&ce(CancelConfirmModal,{
