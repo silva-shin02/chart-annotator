@@ -2726,10 +2726,13 @@ function DataChart(props){
       /* 通常 = zoom (cursor中心) */
       var factor=e.deltaY<0?Z_FACTOR:1/Z_FACTOR;
       setZoom(function(z){
-        var newZ=z*factor;
+        /* 2026-06-30: z(親controlled state)が一瞬nullになる窓でホイールすると null*factor=0→Z_MIN に崩壊する。
+           ピンチと同じく never-null の zoomRef.current(実効倍率)を基準にフォールバックして防ぐ。 */
+        var base=(z==null)?zoomRef.current:z;
+        var newZ=base*factor;
         if(newZ<Z_MIN)newZ=Z_MIN;
         if(newZ>Z_MAX)newZ=Z_MAX;
-        if(Math.abs(newZ-z)<0.001)return z;
+        if(Math.abs(newZ-base)<0.001)return base;
         /* cursor位置の u値 / p値 を固定してzoom */
         var curU=L.uS + (cxAbs-L.padL-L.halfBarPx)/L.innerW*L.uSpan;
         var curP=L.dpmax - (cyAbs-L.priceTop)/L.pxPerYen;
@@ -6538,7 +6541,8 @@ function ImageAnnotator(props){
       setStack5mPShift(0);
       setStack5mZoom(null);
     }
-  },[analysisData,stackMode,emaSeedData]);
+    /* 2026-06-30: depsの emaSeedData→emaContinuedData。助走済みJSONは種読込でも表示データ参照不変=再フィットせず(倍率null化→初回スクロール崩壊/ちらつき回避)。未助走のみ連続EMAで再フィット。 */
+  },[analysisData,stackMode,emaContinuedData]);
   /* C-uaxis: analysisData/analysisTf/refAnalysis(id) 変更時に view/pShift をリセット (u軸、uTotal変化に追従)
      C8a-bugfix: deps を refAnalysis.id に絞る — refAnalysis全体だと setRefAnalysis(...analysisStrokes...) のたびに発火して
                  ref側書込直後に view が全体表示にreset され、書いた線が画面外にスクロール (=消えたように見える) する
@@ -6551,8 +6555,10 @@ function ImageAnnotator(props){
       setAnalysisPShift(0);
       setAnalysisZoom(null);
     }
-    /* emaSeedData(前日連続EMAの種)読込時も再フィット — gap日でも連続EMAを含めてY軸を合わせる */
-  },[analysisData,stackMode?'1m':analysisTf,refAnalysis?refAnalysis.id:null,emaSeedData,stackMode]);
+    /* 2026-06-30: depsを emaSeedData→emaContinuedData に変更。表示データ(emaContinuedData)が実際に変わった時だけ再フィット。
+       助走済みJSONは emaContinuedData===analysisData で参照不変=再フィットせず→倍率null化による初回スクロール崩壊/ちらつきを回避。
+       未助走(gap日等)は emaContinuedData が再計算され参照が変わるので従来どおり連続EMAでY軸再フィット。 */
+  },[analysisData,stackMode?'1m':analysisTf,refAnalysis?refAnalysis.id:null,emaContinuedData,stackMode]);
   /* F2: 十字カーソル共有 ({tm, yOffset}) — tmは絶対時刻(分)、yOffsetはpriceTop基準のcanvas内y */
   var analysisCursorRef=useRef(null);
   var stCB=useState(0); var cursorBump=stCB[0],setCursorBump=stCB[1];
