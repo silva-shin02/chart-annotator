@@ -5782,6 +5782,8 @@ function ImageAnnotator(props){
   var splitAutoSaveTimerRef=useRef(null);
   var sSA=useState('top'); var splitActive=sSA[0],setSplitActive=sSA[1];
   var sSR=useState(0.5); var splitRatio=sSR[0],setSplitRatio=sSR[1];
+  /* 2026-06-30: 分割比較ペインもcontrolled zoom化(stack5mZoomと同型)。null初期→子が1回フィット→親保持。 */
+  var sSPZ=useState(null); var splitZoom=sSPZ[0],setSplitZoom=sSPZ[1];
   var sSP=useState(false); var showSplitPicker=sSP[0],setShowSplitPicker=sSP[1];
   var splitContainerRef=useRef(null);
   var splitDragRef=useRef(null);
@@ -6559,6 +6561,12 @@ function ImageAnnotator(props){
        助走済みJSONは emaContinuedData===analysisData で参照不変=再フィットせず→倍率null化による初回スクロール崩壊/ちらつきを回避。
        未助走(gap日等)は emaContinuedData が再計算され参照が変わるので従来どおり連続EMAでY軸再フィット。 */
   },[analysisData,stackMode?'1m':analysisTf,refAnalysis?refAnalysis.id:null,emaContinuedData,stackMode]);
+  /* 2026-06-30: 分割比較(似た形/前日)ペインの再フィット制御。新規ロード(splitChart.id変化)/tf切替(analysisTf変化)で
+     1回だけsplitZoomをnull→子が再フィット。それ以外のdim変化(スタンプ選択でツールバー高さが変わる等・ディバイダ移動)では
+     倍率を保持=「勝手に倍率が変わる」不具合を防止。上ペインの再フィット条件と揃える。 */
+  useEffect(function(){
+    if(splitChart)setSplitZoom(null);
+  },[splitChart?splitChart.id:null,analysisTf]);
   /* F2: 十字カーソル共有 ({tm, yOffset}) — tmは絶対時刻(分)、yOffsetはpriceTop基準のcanvas内y */
   var analysisCursorRef=useRef(null);
   var stCB=useState(0); var cursorBump=stCB[0],setCursorBump=stCB[1];
@@ -8731,6 +8739,8 @@ function ImageAnnotator(props){
               onTwoFingerDoubleTap:null,
               onThreeFingerDoubleTap:null,
               onEraserSessionEnd:function(){},
+              /* 2026-06-30: controlled zoom (未指定だとprops.zoom===undefined→dim変化毎に再フィットし、スタンプ選択等で倍率が勝手に変わる) */
+              zoom:splitZoom, onZoomChange:setSplitZoom,
             })
           )
         ), /* end 横並び/縦並びコンテナ */
