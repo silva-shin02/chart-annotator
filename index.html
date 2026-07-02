@@ -3358,7 +3358,7 @@ function DataChart(props){
     /* C8a: xToSideTmでgap帯は近い側に境界clamp済み — gap block不要 */
     var tpSide=tp.side||'cur';
     if(drawTool==='measure'){
-      measureDragRef.current={startP:tp.p,startTm:tp.tm,startSide:tpSide,curP:tp.p};
+      measureDragRef.current={startP:Math.round(tp.p),startTm:tp.tm,startSide:tpSide,curP:Math.round(tp.p)};  /* 2026-06-30: 計測も1円刻みにスナップ(端点=整数円ちょうど) */
       drawCrosshair();
       return;
     }
@@ -3532,7 +3532,7 @@ function DataChart(props){
     /* 計測ティックドラッグ: 端点を個別移動 */
     if(measureTickDragRef.current){
       var tpTick=pxToTimePrice(e.clientX,e.clientY);
-      if(tpTick&&tpTick.p!=null)measureTickDragRef.current.curP=tpTick.p;
+      if(tpTick&&tpTick.p!=null)measureTickDragRef.current.curP=Math.round(tpTick.p);  /* 2026-06-30: 1円刻み */
       if(!rafRef.current){
         rafRef.current=requestAnimationFrame(function(){
           var tdr=measureTickDragRef.current;
@@ -3552,7 +3552,7 @@ function DataChart(props){
     /* 計測ツール: ドラッグ中の価格更新 */
     if(measureDragRef.current){
       var tpMeas=pxToTimePrice(e.clientX,e.clientY);
-      if(tpMeas&&tpMeas.p!=null)measureDragRef.current.curP=tpMeas.p;
+      if(tpMeas&&tpMeas.p!=null)measureDragRef.current.curP=Math.round(tpMeas.p);  /* 2026-06-30: 1円刻み */
       if(!rafRef.current){
         rafRef.current=requestAnimationFrame(function(){try{drawCrosshair();}catch(err){}rafRef.current=null;});
       }
