@@ -3059,7 +3059,7 @@ function DataChart(props){
       return Math.hypot(px-(x1+t*dx),py-(y1+t*dy));
     }
     for(var i=targetArr.length-1;i>=0;i--){
-      var s=targetArr[i]; if(!s||!s.anchors||!s.anchors.length)continue;
+      var s=targetArr[i]; if(!s||s._hidden||!s.anchors||!s.anchors.length)continue;
       var tp=s.type||s.tool;  // 後方互換
       if(tp==='horizontal'){
         var y=pToYloc(s.anchors[0].p);
@@ -3844,7 +3844,7 @@ function DataChart(props){
         /* line/dotted/arrow/marker/trade: 端点 + セグメント交差 */
         if(_segInPoly(pa.x,pa.y,pb.x,pb.y)){hits.push({side:side,idx:idx});return;}
       }
-      if(strokes)strokes.forEach(function(s,i){_checkStroke(s,i,'cur');});
+      if(strokes)strokes.forEach(function(s,i){if(s&&s._hidden)return;_checkStroke(s,i,'cur');});
       if(refStrokes)refStrokes.forEach(function(s,i){_checkStroke(s,i,'ref');});
       if(hits.length>0){setLassoSel(hits);setSelectedIdx(null);}
       else{setLassoSel(null);}
@@ -5066,6 +5066,8 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   function minToXRef(m){return minToX(m,'ref');}
   if(strokes&&strokes.length){
     strokes.forEach(function(s,idx){
+      /* 2026-06-30: チェック(現在まで)でcutoff超の書き込みは非表示(indexは保持し配列は残す・_hiddenでスキップ) */
+      if(s&&s._hidden)return;
       // 編集中のテキストは重複描画を避けるためスキップ (C6: side一致も見る)
       if(editingTextIdx&&editingTextIdx.side==='cur'&&editingTextIdx.idx===idx)return;
       /* 2026-04-20: 移動中stroke は元位置に描画しない (drawCrosshair側でshifted位置に描画) */
@@ -5757,6 +5759,8 @@ function ImageAnnotator(props){
        書き込みは従来どおり揮発・非保存)。チェックON時は analysisStrokes を実分析に差し替えて既存の描画/編集
        ハンドラをそのまま使い、変更を実チャートへ自動保存。OFFで練習用strokesに復帰。 */
   var sChk=useState(false); var checkAnalysis=sChk[0],setCheckAnalysis=sChk[1];
+  /* 2026-06-30: チェック中の表示範囲。false=シミュ現在時点(cutoff)まで(既定・ネタバレ防止)/true=全日開示。 */
+  var sChkFD=useState(false); var checkFullDay=sChkFD[0],setCheckFullDay=sChkFD[1];
   var hideDate=blind&&!checkAnalysis;
   var savedStrokesRef=useRef((img&&img._savedStrokes)||{'1m':[],'5m':[]});  /* 実チャートの保存済み書き込み(最新) */
   var practiceBackupRef=useRef(null);                                       /* チェック中に退避する練習用strokes */
@@ -6511,11 +6515,25 @@ function ImageAnnotator(props){
      無関係な再描画のたびに getFitZoom で再フィットしズーム/パンが飛ぶため。simCutoffTm変化時のみ更新。 */
   var simDisplayData=useMemo(function(){
     if(!(simMode&&analysisData))return analysisData;
-    /* 2026-06-29: 分析チェック中は当日を全日開示(切り出さない)。X軸は元々全日フィット、
-       Y(priceRange)はdata変化で再計算されるため両軸が自動で全日に収まる。 */
-    if(checkAnalysis)return analysisData;
+    /* 2026-06-30: チェック中は既定でシミュ現在時点(cutoff)まで開示(下の切り出し)。全日開示はcheckFullDay(トグル)ON時のみ。
+       (旧: チェック中は常に全日開示だったが、現在時点までに絞れるよう変更) */
+    if(checkAnalysis&&checkFullDay)return analysisData;
     return Object.assign({},analysisData,{bars_1m:simCutBars(analysisData.bars_1m),bars_5m:simGrow5mBars(analysisData.bars_5m,analysisData.bars_1m,simCutoffTm)});
-  },[simMode,analysisData,simCutoffTm,checkAnalysis]);
+  },[simMode,analysisData,simCutoffTm,checkAnalysis,checkFullDay]);
+  /* 2026-06-30: チェック中(現在まで)にcutoffより後の書き込みを非表示にする。配列長/index は保持し、未来ストロークだけ
+     _hidden:true の複製に差し替える→描画ループ/当たり判定が _hidden をスキップ(配列フィルタによる編集index不整合を防ぐ)。 */
+  function _clipStrokesForCheck(arr){
+    arr=arr||[];
+    if(!(simMode&&checkAnalysis&&!checkFullDay))return arr;
+    var c=simCutoffTm;
+    return arr.map(function(s){
+      if(!s)return s;
+      var mx=null;
+      if(s.anchors&&s.anchors.length){for(var i=0;i<s.anchors.length;i++){var a=s.anchors[i];if(a&&a.tm!=null&&(mx==null||a.tm>mx))mx=a.tm;}}
+      var future=(c<0)||(mx!=null&&mx>c);
+      return future?Object.assign({},s,{_hidden:true}):s;
+    });
+  }
   /* F1: 過去チャート選択モーダルの表示 */
   var stRPicker=useState(false); var showRefAnalysisPicker=stRPicker[0],setShowRefAnalysisPicker=stRPicker[1];
   /* F2: 両チャート連動用の共有 state */
@@ -8077,6 +8095,13 @@ function ImageAnnotator(props){
                     border:"1px solid "+(checkAnalysis?"#0e7490":"#155e75"),borderRadius:8,padding:"3px 10px",
                     background:checkAnalysis?"#0e7490":"#0b3a44",color:"#a5f3fc"}},
                   checkAnalysis?"📋 分析を隠す":"📋 この日の分析をチェック"),
+                /* 2026-06-30: チェック中の表示範囲トグル(現在まで/全日)。チェックON時のみ表示。 */
+                simMode&&checkAnalysis&&ce("button",{onClick:function(e){e.stopPropagation();setCheckFullDay(function(v){return !v;});},
+                  title:"チェックの表示範囲: シミュ現在時点まで / 全日 を切替",
+                  style:{fontSize:11,fontWeight:700,fontFamily:"inherit",cursor:"pointer",flexShrink:0,marginLeft:2,
+                    border:"1px solid #155e75",borderRadius:8,padding:"3px 10px",
+                    background:checkFullDay?"#0b3a44":"#0e7490",color:"#a5f3fc"}},
+                  checkFullDay?"📅 全日":"🕒 現在まで"),
                 /* タグチップ (inline) */
                 (function(){
                   var _td=caLoadTagDefs(); var _tById={};
@@ -8184,7 +8209,7 @@ function ImageAnnotator(props){
               linkCursorRef:stackMode?linkCursorRef:null,
               linkCursorBump:stackMode?cursorBump:0,
               onLinkCursorChange:stackMode?notifyLinkCursor:null,
-              strokes:(checkAnalysis||strokesVisible)?((analysisStrokes&&analysisStrokes[topTf])||[]):[],
+              strokes:(checkAnalysis||strokesVisible)?_clipStrokesForCheck((analysisStrokes&&analysisStrokes[topTf])||[]):[],
               quickColors:quickColors,
               /* 2026-04-23: 2本指ダブルタップで現ツール⇄消しゴム入れ替え */
               onTwoFingerDoubleTap:function(){
@@ -8465,7 +8490,7 @@ function ImageAnnotator(props){
               snippetsById:(function(){var m={};snippets.forEach(function(sn){if(sn&&sn.id)m[sn.id]=sn;});return m;})(),
               tradeDir:tradeDir,
               horiz:horiz,
-              strokes:(checkAnalysis||strokesVisible)?((analysisStrokes&&analysisStrokes['5m'])||[]):[],
+              strokes:(checkAnalysis||strokesVisible)?_clipStrokesForCheck((analysisStrokes&&analysisStrokes['5m'])||[]):[],
               quickColors:quickColors,
               onTwoFingerDoubleTap:function(){
                 if(tool==='eraser'){var prev=prevToolBeforeEraserRef.current||'pan';switchTool(prev);}
@@ -9369,7 +9394,7 @@ function ImageAnnotator(props){
     /* ── シミュレーション操作バー (フローティング: ハンドルでドラッグ移動可 / ← スライダー →)
        既定位置は中央・bottom 22%(出来高ゾーンより上)。ドラッグすると位置を記憶 ──
        2026-06-29: 分析チェック中(全日開示)は送り操作を隠す */
-    simMode&&analysisData&&!checkAnalysis&&(function(){
+    simMode&&analysisData&&!(checkAnalysis&&checkFullDay)&&(function(){
       var _arr=simBarsForTf(); var _tot=_arr.length; var _n=simRevealedCount();
       /* 2026-06-29: 最後に開示した足の時刻を「枠範囲 HH:MM～HH:MM」表記に(十字/スタンプと統一・crosshairTimeStr)。
          tfは送り対象=simBarsForTfと同じ(stack中は1m / 単独は表示足)。大引け15:30は単一表記。 */
