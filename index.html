@@ -2395,7 +2395,7 @@ function DataChart(props){
       /* 横線(同価格レベル: pmin/pmax線形式=価格ラベルと同基準) */
       var lcy=null;
       if(typeof lc.p==='number'&&L.pmax!=null&&L.pmin!=null&&L.pmax!==L.pmin){
-        var _ly=L.priceTop+(L.pmax-lc.p)/(L.pmax-L.pmin)*L.priceH;
+        var _ly=L.priceTop+(L.pmax-Math.round(lc.p))/(L.pmax-L.pmin)*L.priceH;  /* 2026-06-30: 連動カーソルも1円刻み */
         if(_ly>=L.priceTop&&_ly<=L.priceBot){
           lcy=_ly;
           ctx.beginPath(); ctx.moveTo(L.padL,Math.round(lcy)+0.5); ctx.lineTo(L.padL+L.chartW,Math.round(lcy)+0.5); ctx.stroke();
@@ -2413,7 +2413,7 @@ function DataChart(props){
       ctx.fillStyle='#000'; ctx.fillText(ltStr,lxc,lty+7);
       /* 価格ラベル */
       if(lcy!=null){
-        var lpStr=lc.p.toFixed(0), lpw=ctx.measureText(lpStr).width+10;
+        var lpStr=String(Math.round(lc.p)), lpw=ctx.measureText(lpStr).width+10;
         ctx.textAlign='left';
         ctx.fillStyle=LCC; ctx.fillRect(L.padL+L.chartW+2,lcy-8,lpw,16);
         ctx.fillStyle='#000'; ctx.fillText(lpStr,L.padL+L.chartW+7,lcy);
@@ -2442,6 +2442,13 @@ function DataChart(props){
       var xst=xToSideTm(cx);
       tmForLabel=xst.tm;
     }
+    /* 2026-06-30: 十字カーソルの横線/価格ラベルを1円刻みにスナップ(整数円ちょうどの位置に乗せる。縦線=時間は不変)。
+       編集時は pmin=dpmin/pmax=dpmax(地図モデル)なので、これで軸目盛・ローソクともズレない。 */
+    var snapCy=cy, snapPrice=null;
+    if(L.pmax!=null&&L.pmin!=null&&L.pmax!==L.pmin&&cy>=L.priceTop&&cy<=L.priceBot){
+      snapPrice=Math.round(L.pmax-((cy-L.priceTop)/L.priceH)*(L.pmax-L.pmin));
+      snapCy=L.priceTop+((L.pmax-snapPrice)/(L.pmax-L.pmin))*L.priceH;
+    }
     var CROSS='#4a9de3';
     ctx.strokeStyle=CROSS; ctx.setLineDash([3,3]); ctx.lineWidth=1;
     ctx.beginPath();
@@ -2450,8 +2457,8 @@ function DataChart(props){
     ctx.stroke();
     if(cy>=L.priceTop&&cy<=L.priceBot){
       ctx.beginPath();
-      ctx.moveTo(L.padL,Math.round(cy)+0.5);
-      ctx.lineTo(L.padL+L.chartW,Math.round(cy)+0.5);
+      ctx.moveTo(L.padL,Math.round(snapCy)+0.5);
+      ctx.lineTo(L.padL+L.chartW,Math.round(snapCy)+0.5);
       ctx.stroke();
     }
     ctx.setLineDash([]);
@@ -2467,15 +2474,13 @@ function DataChart(props){
     ctx.fillStyle='#000';
     ctx.fillText(tStr,cx,ty+7);
     if(cy>=L.priceTop&&cy<=L.priceBot){
-      var fracY=(cy-L.priceTop)/L.priceH;
-      var priceAt=L.pmax-fracY*(L.pmax-L.pmin);
-      var pStr=priceAt.toFixed(0);
+      var pStr=String(snapPrice!=null?snapPrice:Math.round(L.pmax-((cy-L.priceTop)/L.priceH)*(L.pmax-L.pmin)));
       var pw=ctx.measureText(pStr).width+10;
       ctx.textAlign='left';
       ctx.fillStyle=CROSS;
-      ctx.fillRect(L.padL+L.chartW+2,cy-8,pw,16);
+      ctx.fillRect(L.padL+L.chartW+2,snapCy-8,pw,16);
       ctx.fillStyle='#000';
-      ctx.fillText(pStr,L.padL+L.chartW+7,cy);
+      ctx.fillText(pStr,L.padL+L.chartW+7,snapCy);
     }
   }
 
