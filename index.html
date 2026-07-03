@@ -744,6 +744,55 @@ function caPrefsPull(cfg){
   }).catch(function(){});
 }
 
+/* ─── 2026-07-03: シミュレーション履歴 (どの日をシミュしたか) ───
+   目的: ランダム練習で「まだやっていない日」を優先する。
+   保存: localStorage ca_sim_hist_v1 = { chartId: 最終シミュ時刻ms }。
+   同期: Firebase chart-annotator-sim-history に {v:JSON文字列, t:ms} で保存し、端末間は
+         id 単位でマージ(union・各idは新しい時刻を採用)。prefs の LWW と違い他端末の履歴が消えない。 */
+var CA_SIMHIST_KEY='ca_sim_hist_v1';
+var _caSimHistPushTimer=null;
+var _caSimExhaustNotified={};   /* 銘柄→この銘柄は全日シミュ済みと今セッションで通知済みか */
+function caLoadSimHist(){
+  try{var v=JSON.parse(localStorage.getItem(CA_SIMHIST_KEY));return (v&&typeof v==='object')?v:{};}catch(e){return {};}
+}
+function _caSaveSimHistLocal(map){
+  try{localStorage.setItem(CA_SIMHIST_KEY,JSON.stringify(map||{}));}catch(e){caStorageWarn();}
+}
+function _caSimHistMerge(a,b){
+  var out=Object.assign({},a||{}),k=Object.keys(b||{});
+  for(var i=0;i<k.length;i++){var t=b[k[i]]||0;if(!(out[k[i]]>=t))out[k[i]]=t;}
+  return out;
+}
+/* シミュ開始時に呼ぶ。その日を「シミュ済み」として記録し、Firebase(あれば)へ追記同期。 */
+function caMarkSimulated(id){
+  if(!id)return;
+  var m=caLoadSimHist();m[id]=Date.now();_caSaveSimHistLocal(m);
+  caSimHistPush();
+}
+function caSimHistPush(){
+  var cfg=_caFbCfg;if(!cfg||!cfg.url||_fbIsPaused(cfg))return;
+  if(_caSimHistPushTimer)clearTimeout(_caSimHistPushTimer);
+  _caSimHistPushTimer=setTimeout(function(){
+    var base=cfg.url.replace(/\/$/,'')+'/chart-annotator-sim-history.json'+caAuthParam(cfg.secret);
+    /* リモートと id 単位でマージしてから書き戻す(端末間で追記・欠落防止) */
+    fetch(base).then(function(r){return r.ok?r.json():null;}).then(function(rem){
+      var remMap={};if(rem&&rem.v){try{remMap=JSON.parse(rem.v)||{};}catch(e){}}
+      var merged=_caSimHistMerge(caLoadSimHist(),remMap);
+      _caSaveSimHistLocal(merged);
+      return fetch(base,{method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({v:JSON.stringify(merged),t:Date.now()})});
+    }).catch(function(){});
+  },800);
+}
+function caSimHistPull(cfg){
+  if(!cfg||!cfg.url||_fbIsPaused(cfg))return;
+  var base=cfg.url.replace(/\/$/,'')+'/chart-annotator-sim-history.json'+caAuthParam(cfg.secret);
+  fetch(base).then(function(r){return r.ok?r.json():null;}).then(function(rem){
+    if(!rem||!rem.v)return;var remMap={};try{remMap=JSON.parse(rem.v)||{};}catch(e){return;}
+    _caSaveSimHistLocal(_caSimHistMerge(caLoadSimHist(),remMap));
+  }).catch(function(){});
+}
+
 /* 2026-06-29: 指標(EMA/VWAP)の表示ON/OFF。既定は全表示=後方互換 */
 function caLoadIndicatorVis(){
   var def={ema9:true,ema22:true,ema50:true,ema200:true,vwap:true};
@@ -5756,7 +5805,8 @@ function ImageAnnotator(props){
      img._sim=true で起動。当日足をカットオフ時刻まで開示(slice)して1本ずつ表示。
      永続化は一切しない(draftId無し起動 + autosave gate)。前日チャートは自動でref連結。 */
   var simMode=!!(img&&img._sim);
-  /* 2026-06-29: ランダム・ブラインド練習。日付を隠し、終了時に正解を公開する */
+  /* 2026-06-29→2026-07-03: ランダム練習。_blind=終了時に SimRevealModal(別の日/別銘柄/この日の分析) を出すフラグ。
+     日付ブラインド(隠し)は 2026-07-03 に廃止=日付・形状タグは常に表示(下の hideDate=false)。 */
   var blind=!!(img&&img._blind);
   /* 2026-06-29: 「この日の分析をチェック」= その日の保存済み分析(書き込み/メモ/タグ)を全日開示で表示。
      ブラインド練習中にチェックすると日付も公開する(ユーザー決定)。
@@ -5766,7 +5816,7 @@ function ImageAnnotator(props){
   var sChk=useState(false); var checkAnalysis=sChk[0],setCheckAnalysis=sChk[1];
   /* 2026-06-30: チェック中の表示範囲。false=シミュ現在時点(cutoff)まで(既定・ネタバレ防止)/true=全日開示。 */
   var sChkFD=useState(false); var checkFullDay=sChkFD[0],setCheckFullDay=sChkFD[1];
-  var hideDate=blind&&!checkAnalysis;
+  var hideDate=false;  /* 2026-07-03: 日付ブラインド廃止=常に表示(旧: blind&&!checkAnalysis)。blindは終了メニュー用に継続 */
   var savedStrokesRef=useRef((img&&img._savedStrokes)||{'1m':[],'5m':[]});  /* 実チャートの保存済み書き込み(最新) */
   var practiceBackupRef=useRef(null);                                       /* チェック中に退避する練習用strokes */
   var checkSaveTimerRef=useRef(null);
@@ -13595,16 +13645,16 @@ function CaSimPicker(props){
                   background:on?"#ea580c":"#2a2a2a",color:on?"#fff":"#bbb"})},tk);
             })
         ),
-        /* 2026-06-29: ランダムな日でブラインド練習 (銘柄を選んでから1日をランダム抽選・日付は終了まで非表示) */
+        /* 2026-06-29→2026-07-03: ランダムな日で練習 (銘柄を選んでから1日を抽選・未シミュの日を優先。日付は表示) */
         selT&&charts.length>0&&ce("div",{style:{padding:"12px 14px",borderBottom:"1px solid #2a2a2a",flexShrink:0}},
           ce("button",{onClick:function(){if(props.onPickRandom)props.onPickRandom(selT);},
             style:Object.assign({},BT2,{width:"100%",display:"flex",alignItems:"center",gap:10,
               background:"#7c2d12",border:"1px solid #9a3412",borderRadius:10,padding:"11px 12px",textAlign:"left"})},
             ce("span",{style:{fontSize:20,flexShrink:0}},"🎲"),
             ce("span",{style:{flex:1}},
-              ce("span",{style:{display:"block",fontSize:13,fontWeight:700,color:"#fed7aa"}},"ランダムな日でブラインド練習"),
+              ce("span",{style:{display:"block",fontSize:13,fontWeight:700,color:"#fed7aa"}},"ランダムな日で練習"),
               ce("span",{style:{display:"block",fontSize:10,color:"#fdba74",marginTop:2}},
-                selT+" の保有チャートから1日をランダム抽選（日付は終了まで非表示）")
+                selT+" の保有チャートから、まだやっていない日を優先して1日を抽選")
             ),
             ce("span",{style:{fontSize:12,fontWeight:700,color:"#fff",border:"1px solid #fdba74",borderRadius:8,padding:"7px 12px",flexShrink:0}},"スタート")
           ),
@@ -13649,7 +13699,7 @@ function SimRevealModal(props){
       ce("div",{onClick:function(e){e.stopPropagation();},
         style:{background:"#1c1c1e",borderRadius:18,padding:"24px 22px",width:"100%",maxWidth:360,textAlign:"center",
           boxShadow:"0 24px 64px rgba(0,0,0,.8)",border:"1px solid #2a2a2a"}},
-        ce("div",{style:{fontSize:13,color:"#888",marginBottom:6}},"🎯 正解"),
+        ce("div",{style:{fontSize:13,color:"#888",marginBottom:6}},"📅 この日"),
         ce("div",{style:{fontSize:20,fontWeight:700,color:"#fff",marginBottom:4}},ans.ticker||''),
         ce("div",{style:{fontSize:18,fontWeight:700,color:"#fed7aa",marginBottom:18}},
           dd+(ans.date?_dowLabel(ans.date):'')),
@@ -14375,6 +14425,7 @@ function DraftLibrary(props){
       /* _simReturn: シミュ終了時に開く「元のチャート」(通常エディタとして開く img) */
       var extra={_draftId:m.id,_ticker:m.ticker||'',_name:m.name||'',_thumb:m.thumb||'',_savedAt:m.savedAt||0};
       var returnImg=Object.assign({},d,extra);
+      caMarkSimulated(m.id);   /* 2026-07-03: 日付が見える通常シミュも「シミュ済み」に記録 */
       onOpen({analysisData:d.analysisData,_ticker:m.ticker||'',_name:m.name||'',_sim:true,_simReturn:returnImg,
         _savedStrokes:d.analysisStrokes||{'1m':[],'5m':[]},_savedDraftId:m.id});
     }
@@ -16756,7 +16807,7 @@ function App(){
   /* 2026-06-29: 設定のFirebase同期 — モジュールへ最新fbCfgを渡し、有効時は起動時/設定変更時に prefs(表示設定/銘柄コード/色等) を pull */
   useEffect(function(){
     caSetActiveFbCfg(fbCfg);
-    if(fbCfg&&fbCfg.url&&!_fbIsPaused(fbCfg))caPrefsPull(fbCfg);
+    if(fbCfg&&fbCfg.url&&!_fbIsPaused(fbCfg)){caPrefsPull(fbCfg);caSimHistPull(fbCfg);}
   },[fbCfg]);
   var s3=useState(false); var showFbSettings=s3[0],setShowFbSettings=s3[1];
   /* 2026-04-20: 表示・動作設定モーダル */
@@ -16781,12 +16832,25 @@ function App(){
     if(!all.length){try{window.caToast&&window.caToast('「'+ticker+'」のチャートがありません','error');}catch(e){}return;}
     var pool=all;
     if(avoidId&&all.length>1){var f=all.filter(function(x){return x.id!==avoidId;});if(f.length)pool=f;}
-    var m=pool[Math.floor(Math.random()*pool.length)];
+    /* 2026-07-03: まだシミュしていない日を優先。全部やり切っていたら通常ランダム(1セッション1回だけ通知)。 */
+    var _hist=caLoadSimHist();
+    var _fresh=pool.filter(function(x){return !_hist[x.id];});
+    var m;
+    if(_fresh.length){ m=_fresh[Math.floor(Math.random()*_fresh.length)]; }
+    else {
+      m=pool[Math.floor(Math.random()*pool.length)];
+      if(!_caSimExhaustNotified[ticker]){
+        _caSimExhaustNotified[ticker]=true;
+        try{window.caToast&&window.caToast('「'+ticker+'」は全'+all.length+'日をシミュ済み。以降はランダムに出します');}catch(e){}
+      }
+    }
     function launch(d){
       if(!(d&&d.analysisData)){try{window.caToast&&window.caToast('このチャートにはデータがありません','error');}catch(e){}return;}
       var ans={ticker:ticker, date:(d.analysisData.date||''), name:m.name||'', id:m.id};
+      caMarkSimulated(m.id);   /* この日を「シミュ済み」に記録(Firebaseあれば同期) */
       setSimReveal(null);
-      setImg({analysisData:d.analysisData, _ticker:ticker, _name:'？？？',
+      /* 2026-07-03: ブラインド廃止=名前も隠さず表示(_nameを実名に)。日付表示は hideDate=false 側で制御。 */
+      setImg({analysisData:d.analysisData, _ticker:ticker, _name:m.name||'',
         _sim:true, _blind:true, _simAnswer:ans, _simReturn:null,
         _savedStrokes:d.analysisStrokes||{'1m':[],'5m':[]}, _savedDraftId:m.id});
     }
