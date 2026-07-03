@@ -3564,7 +3564,10 @@ function DataChart(props){
     if(drawTool==='line'||drawTool==='dotted'||drawTool==='arrow'||
        drawTool==='rect'||drawTool==='circle'||drawTool==='marker'||
        drawTool==='trade'){
-      drawRef.current={on:true, side:tpSide, sTM:tp.tm, sP:tp.p, cTM:tp.tm, cP:tp.p};
+      /* 2026-07-03: 2点ツールの価格を1円刻みにスナップ(十字カーソル/計測と同基準=Math.round)。
+         水平点線(dottedは既定でhoriz)が整数円ちょうど・ガイド線と一致して乗る。tm(時間)は不変。 */
+      var _sp0=(tp.p!=null?Math.round(tp.p):tp.p);
+      drawRef.current={on:true, side:tpSide, sTM:tp.tm, sP:_sp0, cTM:tp.tm, cP:_sp0};
       drawCrosshair();
     }
   }
@@ -3700,7 +3703,7 @@ function DataChart(props){
           }
         } else {
           // 2点ツール
-          var ep=tp.p;
+          var ep=Math.round(tp.p);  /* 2026-07-03: 価格を1円刻みにスナップ(sPと同基準) */
           if(props.horiz){
             var snapped=applyHorizSnap(drawRef.current.sTM,drawRef.current.sP,etm,ep);
             etm=snapped.tm; ep=snapped.p;
