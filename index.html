@@ -13640,6 +13640,7 @@ function CaSimPicker(props){
 /* ─── 2026-06-29: SimRevealModal — ブラインド練習の終了時に正解(銘柄・日付)を公開＋リロール ─── */
 function SimRevealModal(props){
   var ans=props.ans||{}, onRerollSame=props.onRerollSame, onPickAnother=props.onPickAnother, onClose=props.onClose;
+  var onStartAnalysis=props.onStartAnalysis;
   var dd=ans.date||'(日付不明)';
   return ReactDOM.createPortal(
     ce("div",{onClick:function(e){if(e.target===e.currentTarget)onClose();},
@@ -13656,6 +13657,10 @@ function SimRevealModal(props){
           ce("button",{onClick:onRerollSame,
             style:{padding:"11px 0",fontSize:13,fontWeight:700,border:"none",borderRadius:10,
               background:"#ea580c",color:"#fff",cursor:"pointer",fontFamily:"inherit"}},"🎲 同じ銘柄で別の日"),
+          /* 2026-07-03: この日の実チャートを通常編集で開く(緑) */
+          ce("button",{onClick:onStartAnalysis,
+            style:{padding:"11px 0",fontSize:13,fontWeight:700,border:"none",borderRadius:10,
+              background:"#16a34a",color:"#fff",cursor:"pointer",fontFamily:"inherit"}},"📈 この日の分析を始める"),
           ce("button",{onClick:onPickAnother,
             style:{padding:"11px 0",fontSize:13,fontWeight:700,borderRadius:10,border:"1px solid #3a3a3a",
               background:"#2a2a2a",color:"#ddd",cursor:"pointer",fontFamily:"inherit"}},"🔀 別の銘柄を選ぶ"),
@@ -16796,6 +16801,32 @@ function App(){
       }else{window.caToast&&window.caToast('データが見つかりません','error');}
     });
   }
+  /* ─── 2026-07-03: SimReveal「この日の分析を始める」→ その日の実チャートを通常編集で開く ───
+     openChart 相当を App 側で実装。データは IDB→Firebase フォールバックで読込 (launchBlindSim と同経路)。
+     _sim/_blind は付けない = 通常エディタ (初期足は既定 caLoadDefaultTf = 1分+5分stack)。 */
+  function startDayAnalysis(ans){
+    if(!(ans&&ans.id)){try{window.caToast&&window.caToast('この日のチャートを特定できません','error');}catch(e){}return;}
+    var id=ans.id;
+    var mi=caLoadMeta().find(function(m){return m.id===id;});
+    var extra={_draftId:id,_ticker:(mi&&mi.ticker)||ans.ticker||'',_name:(mi&&mi.name)||ans.name||'',
+      _thumb:(mi&&mi.thumb)||'',_savedAt:(mi&&mi.savedAt)||0};
+    function open(d){
+      if(!(d&&d.analysisData)){try{window.caToast&&window.caToast('このチャートにはデータがありません','error');}catch(e){}return;}
+      setSimReveal(null);
+      setDraftInitTicker(null); setHighlightDate(null);
+      setImg(Object.assign({},d,extra));
+    }
+    caLoadDataAsync(id,function(d){
+      if(d&&d.analysisData){open(d);return;}
+      if(fbCfg.url){
+        var dataBase=fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data';
+        var auth=caAuthParam(fbCfg.secret);
+        fetch(dataBase+'/'+id+'.json'+auth).then(function(r){return r.ok?r.json():null;})
+          .then(function(fb){if(fb&&fb.analysisData)open(fb);else window.caToast&&window.caToast('データが見つかりません','error');})
+          .catch(function(){window.caToast&&window.caToast('読込失敗','error');});
+      }else{window.caToast&&window.caToast('データが見つかりません','error');}
+    });
+  }
   /* ─── 起動時: URLパラメータ解析 (scalping-notebook連携) ───
      対応: ?{code}_{date}&id={id}
      - id あり & 該当チャート存在 → エディタ直接起動
@@ -16984,6 +17015,8 @@ function App(){
       ans:simReveal,
       onRerollSame:function(){var a=simReveal;setSimReveal(null);launchBlindSim(a.ticker,a.id);},
       onPickAnother:function(){setSimReveal(null);setAutoOpenSimPicker(true);},
+      /* 2026-07-03: この日の分析を始める → 実チャートを通常編集で開く */
+      onStartAnalysis:function(){startDayAnalysis(simReveal);},
       onClose:function(){setSimReveal(null);}
     })
   );
