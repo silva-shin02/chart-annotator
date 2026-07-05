@@ -7356,11 +7356,12 @@ function ImageAnnotator(props){
         setColor(mem.color);
         if(t!=="marker"){setLineW(mem.lineW);setOpacity(mem.opacity);}
         if(t==="text"){setFontSize(mem.fontSize);setFontSizeStr(String(mem.fontSize));}
-        // horiz: 保存済みがあればそれを使う (未保存=null/undefinedの場合はdottedのみtrue)
-        setHoriz(mem.horiz!=null?!!mem.horiz:t==="dotted");
+        // horiz: 保存済みがあればそれを使う (未保存=null/undefinedの場合はdotted/lineがtrue)
+        // 2026-07-05: 直線(line)も選択時に垂直・水平スナップを既定ON(点線と同様。✛で解除可)
+        setHoriz(mem.horiz!=null?!!mem.horiz:(t==="dotted"||t==="line"));
       } else {
-        // 初回進入: dottedは水平スナップON、その他はOFF
-        setHoriz(t==="dotted");
+        // 初回進入: dotted/lineは水平・垂直スナップON、その他はOFF (2026-07-05: lineを追加)
+        setHoriz(t==="dotted"||t==="line");
       }
     }
   }
