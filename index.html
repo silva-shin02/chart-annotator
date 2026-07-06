@@ -793,6 +793,182 @@ function caSimHistPull(cfg){
   }).catch(function(){});
 }
 
+/* ─── 2026-07-07: チャート形状 (形状カタログ + 部分スクショ登録) ───
+   目的: 「22EMAでのブリッジ」のような形状名ごとに、チャートの部分切り抜き(サムネ)付きで
+         銘柄・日時の実例を蓄積するカタログ。
+   保存:
+     - 形状定義   localStorage ca_shapes_v1     = [{id,name,repRegId,ut,del?}]
+     - 登録記録   localStorage ca_shape_regs_v1 = [{id,shapeId,chartId,ticker,date,tf,tmFrom,tmTo,pMin,pMax,imgUrl?,ut,del?}]
+     - 切り抜き画像 IndexedDB shapeimg_<regId> (PNG dataURL) + メモリキャッシュ
+     - 形状メモ   localStorage ca_shape_memos_v1 = {shapeId: html} (チャートメモと同システム)
+   同期 (シミュ履歴と同じ id マージ方式・削除はトゥームストーン del:true で他端末に伝播):
+     - RTDB chart-annotator-shapes / chart-annotator-shape-regs = {v:JSON文字列, t:ms}
+     - 画像は Firebase Storage (uploadThumbToStorage 流用、id='shape_'+regId) → imgUrl
+     - 形状メモは ca-shape-memos/<id> (チャートメモ ca-chart-memos と同形) */
+var CA_SHAPES_KEY='ca_shapes_v1';
+var CA_SHAPE_REGS_KEY='ca_shape_regs_v1';
+var CA_SHAPE_MEMO_KEY='ca_shape_memos_v1';
+function caShapeNewId(prefix){return prefix+'_'+Date.now()+'_'+Math.floor(Math.random()*1e6);}
+function caLoadShapes(){
+  try{var v=JSON.parse(localStorage.getItem(CA_SHAPES_KEY));return Array.isArray(v)?v:[];}catch(e){return [];}
+}
+function _caSaveShapesLocal(arr){
+  try{localStorage.setItem(CA_SHAPES_KEY,JSON.stringify(arr||[]));}catch(e){caStorageWarn();}
+}
+function caLoadShapeRegs(){
+  try{var v=JSON.parse(localStorage.getItem(CA_SHAPE_REGS_KEY));return Array.isArray(v)?v:[];}catch(e){return [];}
+}
+function _caSaveShapeRegsLocal(arr){
+  try{localStorage.setItem(CA_SHAPE_REGS_KEY,JSON.stringify(arr||[]));}catch(e){caStorageWarn();}
+}
+/* 生存 (未削除) のみ */
+function caAliveShapes(){return caLoadShapes().filter(function(s){return s&&s.id&&!s.del;});}
+function caAliveShapeRegs(){return caLoadShapeRegs().filter(function(r){return r&&r.id&&!r.del;});}
+/* id 単位マージ: 同一idは ut が新しい方を採用 (トゥームストーン含む)。他端末の追加/削除が両立 */
+function _caShapeListMerge(a,b){
+  var m={},order=[];
+  function put(x){
+    if(!x||!x.id)return;
+    if(!m[x.id]){m[x.id]=x;order.push(x.id);}
+    else if((x.ut||0)>(m[x.id].ut||0))m[x.id]=x;
+  }
+  (a||[]).forEach(put);(b||[]).forEach(put);
+  return order.map(function(id){return m[id];});
+}
+/* upsert (ローカル保存 + push)。UI側は保存後 'ca_shapes_changed' を拾って再読込 */
+function caShapeUpsert(s){
+  if(!s||!s.id)return;
+  _caSaveShapesLocal(_caShapeListMerge(caLoadShapes(),[s]));
+  caShapesPush();
+  try{window.dispatchEvent(new CustomEvent('ca_shapes_changed'));}catch(e){}
+}
+function caShapeRegUpsert(r){
+  if(!r||!r.id)return;
+  _caSaveShapeRegsLocal(_caShapeListMerge(caLoadShapeRegs(),[r]));
+  caShapeRegsPush();
+  try{window.dispatchEvent(new CustomEvent('ca_shapes_changed'));}catch(e){}
+}
+/* 記録の削除 (トゥームストーン化 + 画像破棄 + 代表差し替え) */
+function caShapeRegDelete(regId){
+  if(!regId)return;
+  var now=Date.now(),affected=null;
+  var regs=caLoadShapeRegs().map(function(r){
+    if(r&&r.id===regId&&!r.del){affected=r;return Object.assign({},r,{del:true,ut:now});}
+    return r;
+  });
+  _caSaveShapeRegsLocal(regs);
+  caShapeImgDelete(regId);
+  /* 代表サムネがこの記録を指していたら、残りで最新の記録へ差し替え */
+  if(affected){
+    var sh=null;
+    caLoadShapes().forEach(function(s){if(s&&s.id===affected.shapeId&&!s.del)sh=s;});
+    if(sh&&sh.repRegId===regId){
+      var rest=caAliveShapeRegs().filter(function(r){return r.shapeId===sh.id;});
+      rest.sort(function(a,b){return (b.ut||0)-(a.ut||0);});
+      caShapeUpsert(Object.assign({},sh,{repRegId:rest.length?rest[0].id:null,ut:now}));
+    }
+  }
+  caShapeRegsPush();
+  try{window.dispatchEvent(new CustomEvent('ca_shapes_changed'));}catch(e){}
+}
+/* 形状の削除 (配下の記録・画像・メモも削除) */
+function caShapeDelete(shapeId){
+  if(!shapeId)return;
+  var now=Date.now();
+  _caSaveShapesLocal(caLoadShapes().map(function(s){
+    return (s&&s.id===shapeId&&!s.del)?Object.assign({},s,{del:true,ut:now}):s;
+  }));
+  _caSaveShapeRegsLocal(caLoadShapeRegs().map(function(r){
+    if(r&&r.shapeId===shapeId&&!r.del){caShapeImgDelete(r.id);return Object.assign({},r,{del:true,ut:now});}
+    return r;
+  }));
+  caSetShapeMemo(shapeId,'');
+  caShapesPush();caShapeRegsPush();
+  try{window.dispatchEvent(new CustomEvent('ca_shapes_changed'));}catch(e){}
+}
+/* Firebase 同期 (sim-history と同型: リモートとマージしてから書き戻し) */
+function _caShapeNodePush(node,key,timerName){
+  var cfg=_caFbCfg;if(!cfg||!cfg.url||_fbIsPaused(cfg))return;
+  if(window[timerName])clearTimeout(window[timerName]);
+  window[timerName]=setTimeout(function(){
+    var base=cfg.url.replace(/\/$/,'')+'/'+node+'.json'+caAuthParam(cfg.secret);
+    fetch(base).then(function(r){return r.ok?r.json():null;}).then(function(rem){
+      var remArr=[];if(rem&&rem.v){try{remArr=JSON.parse(rem.v)||[];}catch(e){}}
+      var localArr=[];try{localArr=JSON.parse(localStorage.getItem(key))||[];}catch(e){}
+      var merged=_caShapeListMerge(localArr,remArr);
+      try{localStorage.setItem(key,JSON.stringify(merged));}catch(e){}
+      return fetch(base,{method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({v:JSON.stringify(merged),t:Date.now()})});
+    }).catch(function(){});
+  },800);
+}
+function caShapesPush(){_caShapeNodePush('chart-annotator-shapes',CA_SHAPES_KEY,'_caShapesPushTimerG');}
+function caShapeRegsPush(){_caShapeNodePush('chart-annotator-shape-regs',CA_SHAPE_REGS_KEY,'_caShapeRegsPushTimerG');}
+function caShapesPull(cfg){
+  if(!cfg||!cfg.url||_fbIsPaused(cfg))return;
+  var a=caAuthParam(cfg.secret),base=cfg.url.replace(/\/$/,'');
+  function pullOne(node,key){
+    fetch(base+'/'+node+'.json'+a).then(function(r){return r.ok?r.json():null;}).then(function(rem){
+      if(!rem||!rem.v)return;
+      var remArr=[];try{remArr=JSON.parse(rem.v)||[];}catch(e){return;}
+      var localArr=[];try{localArr=JSON.parse(localStorage.getItem(key))||[];}catch(e){}
+      try{localStorage.setItem(key,JSON.stringify(_caShapeListMerge(localArr,remArr)));}catch(e){}
+      try{window.dispatchEvent(new CustomEvent('ca_shapes_changed'));}catch(e){}
+    }).catch(function(){});
+  }
+  pullOne('chart-annotator-shapes',CA_SHAPES_KEY);
+  pullOne('chart-annotator-shape-regs',CA_SHAPE_REGS_KEY);
+}
+/* 切り抜き画像: メモリ → IndexedDB → Firebase Storage(imgUrl) の順で解決 */
+var _caShapeImgMem={};
+function caShapeImgSave(regId,dataUrl){
+  if(!regId||!dataUrl)return;
+  _caShapeImgMem[regId]=dataUrl;
+  idbSet('shapeimg_'+regId,dataUrl);
+}
+function caShapeImgDelete(regId){
+  if(!regId)return;
+  delete _caShapeImgMem[regId];
+  idbDel('shapeimg_'+regId);
+}
+function caShapeImgLoad(reg,cb){
+  cb=cb||function(){};
+  if(!reg||!reg.id){cb(null);return;}
+  if(_caShapeImgMem[reg.id]){cb(_caShapeImgMem[reg.id]);return;}
+  idbGet('shapeimg_'+reg.id,function(v){
+    if(v){_caShapeImgMem[reg.id]=v;cb(v);return;}
+    if(reg.imgUrl){
+      /* 他端末で撮られた画像: Storage からDL → IDBキャッシュ */
+      storageUrlToBase64(reg.imgUrl).then(function(r){
+        if(r&&r.base64){
+          var du='data:'+(r.mt||'image/png')+';base64,'+r.base64;
+          caShapeImgSave(reg.id,du);cb(du);
+        }else cb(null);
+      }).catch(function(){cb(null);});
+    }else cb(null);
+  });
+}
+/* 形状メモ (チャートメモ ca_chart_memos_v1 と同システム: idキーのhtmlマップ) */
+function caLoadShapeMemos(){
+  try{var v=JSON.parse(localStorage.getItem(CA_SHAPE_MEMO_KEY));if(v&&typeof v==='object')return v;}catch(e){}
+  return {};
+}
+function caSaveShapeMemos(obj){
+  try{localStorage.setItem(CA_SHAPE_MEMO_KEY,JSON.stringify(obj||{}));}catch(e){caStorageWarn();}
+}
+function caGetShapeMemo(id){
+  if(!id)return '';
+  return caLoadShapeMemos()[id]||'';
+}
+function caSetShapeMemo(id,html){
+  if(!id)return;
+  var m=caLoadShapeMemos();
+  if(html)m[id]=html; else delete m[id];
+  caSaveShapeMemos(m);
+}
+/* 記録タップ→チャートを開いた後に撮影範囲へジャンプするための一時指示 (ImageAnnotator が消費) */
+var _caShapeJumpReq=null;
+
 /* 2026-06-29: 指標(EMA/VWAP)の表示ON/OFF。既定は全表示=後方互換 */
 function caLoadIndicatorVis(){
   var def={ema9:true,ema22:true,ema50:true,ema200:true,vwap:true};
@@ -2022,6 +2198,14 @@ function DataChart(props){
   /* 2026-04-20: 移動中のストローク非表示用ヒント — moveRefの{side,idx}と同期、
      drawDataChartに渡してforEachで該当stroke描画をskipする */
   var sMH=useState(null); var moveHint=sMH[0],setMoveHint=sMH[1];
+  /* 2026-07-07: チャート形状 登録モード — 範囲ドラッグ選択 {phase:'drag'|'sized',x0,y0,x1,y1}
+     オーバーレイdivが入力を占有するため既存 onMouseDown/onTouch* とは干渉しない */
+  var sShapeCap=useState(null); var shapeCapSel=sShapeCap[0],setShapeCapSel=sShapeCap[1];
+  var shapeCapDragRef=useRef(null);   /* {mode:'new'|'corner', corner?} */
+  useEffect(function(){
+    if(!props.shapeCapture)setShapeCapSel(null);
+    shapeCapDragRef.current=null;
+  },[props.shapeCapture]);
 
   // C1+: 統合chart用 — refData から refBars を算出
   var refData=props.refData;
@@ -2863,16 +3047,54 @@ function DataChart(props){
 
   /* 2026-04-20: 親コンポーネント (ImageAnnotator) からpxToTimePrice を呼ぶ用のAPI 
      editor overlayの「…」ボタンdrag終了時に新screen座標を tm/p 変換するのに使用 */
+  /* 2026-07-07: チャート形状ジャンプ — 記録した時間/価格範囲を中央に表示する。
+     layout/priceRange 未確定なら false を返し、呼び出し側(ImageAnnotator)がリトライする */
+  function focusChartRange(tmFrom,tmTo,pMin,pMax){
+    var L=layoutRef.current; if(!L||!priceRange)return false;
+    var rect=getCanvasRect(); if(!rect.width||!rect.height)return false;
+    var chartW=L.innerW||L.chartW, priceH=L.priceH;
+    if(!chartW||!priceH)return false;
+    var baseStep=(tf==='5m'?5:1);
+    var u0=tmToVis(Math.min(tmFrom,tmTo))-L.tmVisStart;
+    var u1=tmToVis(Math.max(tmFrom,tmTo))-L.tmVisStart;
+    if(L.hasRef){u0+=L.tmVisSpan+L.gapVis;u1+=L.tmVisSpan+L.gapVis;}
+    var uSpanSel=Math.max(u1-u0,baseStep*3);
+    /* 横: 選択幅が画面の6割 / 縦: 選択価格幅が7割に収まる倍率の小さい方 */
+    var z=chartW*baseStep*0.8/(Z_BASE_BAR_PX*(uSpanSel/0.6));
+    if(pMin!=null&&pMax!=null&&pMax>pMin){
+      var zY=priceH*10/(Z_BASE_PRICE_PX*((pMax-pMin)/0.7));
+      if(zY<z)z=zY;
+    }
+    z=Math.max(Z_MIN,Math.min(Z_MAX,z));
+    setZoom(z);
+    var uSpanNew=uSpanFromZoom(z,chartW);
+    var uMid=(u0+u1)/2;
+    var uS=uMid-uSpanNew/2;
+    if(uS<0)uS=0;
+    setView({uS:uS,uE:uS+uSpanNew});
+    if(pMin!=null&&pMax!=null){
+      /* dpmax = priceRange.max + pShift → 選択の中央価格が画面中央に来る pShift */
+      var pxPerYenNew=(Z_BASE_PRICE_PX/10)*z;
+      var visSpan=priceH/pxPerYenNew;
+      setPShift((pMin+pMax)/2+visSpan/2-priceRange.max);
+    }
+    return true;
+  }
+
   useEffect(function(){
     if(props.chartAPIRef){
       props.chartAPIRef.current={
-        pxToTimePrice:function(cx,cy){return pxToTimePrice(cx,cy);}
+        pxToTimePrice:function(cx,cy){return pxToTimePrice(cx,cy);},
+        /* 2026-07-07: チャート形状ジャンプ (tf は呼び出し側の切替完了判定に使う) */
+        tf:tf,
+        focusRange:function(tmFrom,tmTo,pMin,pMax){return focusChartRange(tmFrom,tmTo,pMin,pMax);}
       };
     }
     return function(){
       if(props.chartAPIRef)props.chartAPIRef.current=null;
     };
-  },[]);
+    /* focusChartRange が tf/hasRef/priceRange を閉じ込むため deps に含めて登録し直す */
+  },[tf,hasRef,priceRange]);
 
   /* ヒットテスト: クリック位置に近いストロークを返す (全ツール対応)
      C6: {side, idx} を返す。hasRef時は クリック側の strokes (cur or ref) のみ対象。
@@ -4668,7 +4890,156 @@ function DataChart(props){
           },'×')
         )
       );
-    })
+    }),
+    /* ── 2026-07-07: チャート形状 登録モード オーバーレイ (ドラッグで範囲選択→切り抜き) ── */
+    props.shapeCapture&&(function(){
+      var sel=shapeCapSel;
+      var rx=0,ry=0,rw=0,rh=0;
+      if(sel){
+        rx=Math.min(sel.x0,sel.x1);ry=Math.min(sel.y0,sel.y1);
+        rw=Math.abs(sel.x1-sel.x0);rh=Math.abs(sel.y1-sel.y0);
+      }
+      function _pt(e){
+        var r=getCanvasRect();
+        return {x:Math.max(0,Math.min(e.clientX-r.left,r.width)),
+                y:Math.max(0,Math.min(e.clientY-r.top,r.height))};
+      }
+      function onCapDown(e){
+        e.stopPropagation();e.preventDefault();
+        try{e.currentTarget.setPointerCapture(e.pointerId);}catch(err){}
+        var p=_pt(e);
+        shapeCapDragRef.current={mode:'new'};
+        setShapeCapSel({phase:'drag',x0:p.x,y0:p.y,x1:p.x,y1:p.y});
+      }
+      function onCapMove(e){
+        var d=shapeCapDragRef.current; if(!d)return;
+        e.stopPropagation();e.preventDefault();
+        var p=_pt(e);
+        setShapeCapSel(function(s){
+          if(!s)return s;
+          if(d.mode==='new')return Object.assign({},s,{x1:p.x,y1:p.y});
+          var ns=Object.assign({},s);
+          if(d.corner==='tl'){ns.x0=p.x;ns.y0=p.y;}
+          else if(d.corner==='tr'){ns.x1=p.x;ns.y0=p.y;}
+          else if(d.corner==='bl'){ns.x0=p.x;ns.y1=p.y;}
+          else {ns.x1=p.x;ns.y1=p.y;}
+          return ns;
+        });
+      }
+      function onCapUp(e){
+        var d=shapeCapDragRef.current; if(!d)return;
+        e.stopPropagation();
+        shapeCapDragRef.current=null;
+        setShapeCapSel(function(s){
+          if(!s)return s;
+          if(Math.abs(s.x1-s.x0)<12||Math.abs(s.y1-s.y0)<12)return null;  /* 小さすぎ→選び直し */
+          return Object.assign({},s,{phase:'sized'});
+        });
+      }
+      /* 角ハンドル: 正規化(左上=x0y0/右下=x1y1)してから該当角をドラッグ */
+      function cornerDown(corner){
+        return function(e){
+          e.stopPropagation();e.preventDefault();
+          try{e.currentTarget.setPointerCapture(e.pointerId);}catch(err){}
+          setShapeCapSel(function(s){
+            if(!s)return s;
+            return {phase:'drag',x0:Math.min(s.x0,s.x1),y0:Math.min(s.y0,s.y1),
+                    x1:Math.max(s.x0,s.x1),y1:Math.max(s.y0,s.y1)};
+          });
+          shapeCapDragRef.current={mode:'corner',corner:corner};
+        };
+      }
+      function doCapConfirm(e){
+        e.stopPropagation();
+        if(!sel||rw<8||rh<8)return;
+        var cv=canvasRef.current; if(!cv)return;
+        var r=getCanvasRect();
+        /* canvas 実解像度と CSS px の比 (iPad DPR cap 2 を含め実測比で吸収) */
+        var sx=cv.width/(r.width||1), sy=cv.height/(r.height||1);
+        var outW=Math.round(rw*sx),outH=Math.round(rh*sy);
+        var cap=800/Math.max(outW,outH); if(cap>1)cap=1;
+        var oc=document.createElement('canvas');
+        oc.width=Math.max(1,Math.round(outW*cap)); oc.height=Math.max(1,Math.round(outH*cap));
+        var octx=oc.getContext('2d');
+        octx.imageSmoothingEnabled=true;octx.imageSmoothingQuality='high';
+        var du='';
+        try{
+          octx.drawImage(cv,Math.round(rx*sx),Math.round(ry*sy),
+            Math.max(1,Math.round(rw*sx)),Math.max(1,Math.round(rh*sy)),0,0,oc.width,oc.height);
+          du=oc.toDataURL('image/png');
+        }catch(err){window.caToast('切り抜きに失敗しました','error');return;}
+        /* 範囲メタ: 左右端→時間、上下端→価格 (ジャンプ/他端末再生成用) */
+        var stL=xToSideTm(rx), stR=xToSideTm(rx+rw);
+        var Lc=layoutRef.current, pTop=null,pBot=null;
+        if(Lc&&typeof Lc.dpmax==='number'&&typeof Lc.pxPerYen==='number'&&Lc.pxPerYen>0){
+          pTop=Lc.dpmax-(ry-Lc.priceTop)/Lc.pxPerYen;
+          pBot=Lc.dpmax-(ry+rh-Lc.priceTop)/Lc.pxPerYen;
+        }
+        if(props.onShapeCaptured)props.onShapeCaptured({
+          dataUrl:du, tf:tf,
+          tmFrom:(stL&&stL.tm!=null)?Math.round(stL.tm):null,
+          tmTo:(stR&&stR.tm!=null)?Math.round(stR.tm):null,
+          pMin:(pBot!=null)?Math.round(pBot):null,
+          pMax:(pTop!=null)?Math.round(pTop):null
+        });
+        setShapeCapSel(null);
+      }
+      var hasRect=!!(sel&&rw>=12&&rh>=12);
+      var HS=16;  /* 角ハンドルの見た目サイズ */
+      /* 確定バー位置: 矩形の下、はみ出すなら内側 */
+      var barTop=hasRect?(ry+rh+10):0;
+      var contH=(getCanvasRect().height||dim.h||0);
+      if(hasRect&&barTop>contH-46)barTop=Math.max(4,ry+rh-46);
+      return ce('div',{
+        key:'shape-cap',
+        onPointerDown:onCapDown,onPointerMove:onCapMove,onPointerUp:onCapUp,
+        onPointerCancel:onCapUp,
+        onMouseDown:function(e){e.stopPropagation();},
+        onTouchStart:function(e){e.stopPropagation();},
+        style:{position:'absolute',inset:0,zIndex:200,cursor:'crosshair',
+          touchAction:'none',background:'rgba(0,0,0,0.10)'}},
+        /* 上部の案内バナー + 終了 */
+        ce('div',{style:{position:'absolute',top:8,left:'50%',transform:'translateX(-50%)',
+          display:'flex',alignItems:'center',gap:8,whiteSpace:'nowrap',
+          background:'rgba(15,46,42,0.95)',border:'1px solid #0d9488',borderRadius:9,
+          padding:'5px 8px 5px 11px',boxShadow:'0 4px 16px rgba(0,0,0,.55)',maxWidth:'92%'},
+          onPointerDown:function(e){e.stopPropagation();}},
+          ce('span',{style:{fontSize:11.5,color:'#5eead4',fontWeight:700,overflow:'hidden',textOverflow:'ellipsis'}},
+            hasRect?'📐 範囲を確認して「登録」を押す（角で微調整／ドラッグで選び直し）':'📐 ドラッグで登録する範囲を囲んでください'),
+          ce('button',{
+            onClick:function(e){e.stopPropagation();if(props.onShapeCaptureCancel)props.onShapeCaptureCancel();},
+            onPointerDown:function(e){e.stopPropagation();},
+            style:{border:'none',background:'rgba(255,255,255,0.08)',color:'#aaa',
+              fontSize:12,fontWeight:700,cursor:'pointer',borderRadius:5,padding:'3px 8px'}},'終了 ✕')
+        ),
+        /* 選択矩形 */
+        sel&&ce('div',{style:{position:'absolute',left:rx,top:ry,width:rw,height:rh,
+          border:'2px dashed #22d3ee',background:'rgba(34,211,238,0.08)',
+          boxSizing:'border-box',pointerEvents:'none'}}),
+        /* 角ハンドル (sized 時のみ) */
+        hasRect&&sel.phase==='sized'&&['tl','tr','bl','br'].map(function(c){
+          var hx=(c==='tl'||c==='bl')?rx:rx+rw;
+          var hy=(c==='tl'||c==='tr')?ry:ry+rh;
+          return ce('div',{key:c,onPointerDown:cornerDown(c),
+            style:{position:'absolute',left:hx-HS/2,top:hy-HS/2,width:HS,height:HS,
+              background:'#22d3ee',borderRadius:3,cursor:'pointer',touchAction:'none',
+              boxShadow:'0 0 0 2px rgba(0,0,0,0.5)'}});
+        }),
+        /* 確定バー */
+        hasRect&&sel.phase==='sized'&&ce('div',{
+          onPointerDown:function(e){e.stopPropagation();},
+          style:{position:'absolute',left:Math.max(4,Math.min(rx,(getCanvasRect().width||dim.w||0)-190)),top:barTop,
+            display:'flex',gap:6,alignItems:'center'}},
+          ce('button',{onClick:doCapConfirm,
+            style:{border:'none',background:'#0d9488',color:'#fff',fontSize:12,fontWeight:700,
+              cursor:'pointer',borderRadius:7,padding:'7px 12px',boxShadow:'0 4px 14px rgba(0,0,0,.5)'}},
+            '✓ この範囲で登録'),
+          ce('button',{onClick:function(e){e.stopPropagation();setShapeCapSel(null);},
+            style:{border:'none',background:'#333',color:'#ccc',fontSize:12,fontWeight:700,
+              cursor:'pointer',borderRadius:7,padding:'7px 12px'}},'選び直し')
+        )
+      );
+    })()
   );
 }
 
@@ -6595,6 +6966,60 @@ function ImageAnnotator(props){
   }
   /* F1: 過去チャート選択モーダルの表示 */
   var stRPicker=useState(false); var showRefAnalysisPicker=stRPicker[0],setShowRefAnalysisPicker=stRPicker[1];
+  /* 2026-07-07: チャート形状 登録モード (範囲撮影) + 撮影結果ペイロード (登録先ピッカー表示中) */
+  var stShapeCap=useState(false); var shapeCapMode=stShapeCap[0],setShapeCapMode=stShapeCap[1];
+  var stShapePick=useState(null); var shapeCapPayload=stShapePick[0],setShapeCapPayload=stShapePick[1];
+  /* 2026-07-07: 形状ページの記録タップ→撮影範囲へジャンプ (_caShapeJumpReq を消費)。
+     tf切替後は DataChart 側の chartAPI 再登録(api.tf が目標tfになる)を待って focusRange をリトライ */
+  useEffect(function(){
+    var req=_caShapeJumpReq;
+    if(!req||!img||!img._draftId||req.chartId!==img._draftId||!analysisData)return;
+    _caShapeJumpReq=null;
+    var tgtTf=(req.tf==='5m')?'5m':'1m';
+    setStackMode(false);
+    setAnalysisTf(tgtTf);
+    if(req.tmFrom==null||req.tmTo==null)return;
+    var tries=0;
+    var timer=setInterval(function(){
+      tries++;
+      var api=chartAPIRefAnalysis.current;
+      var ok=false;
+      if(api&&api.focusRange&&api.tf===tgtTf){
+        try{ok=!!api.focusRange(req.tmFrom,req.tmTo,req.pMin,req.pMax);}catch(e){ok=true;}
+      }
+      if(ok||tries>25)clearInterval(timer);
+    },120);
+    return function(){clearInterval(timer);};
+  },[img,analysisData]);
+  /* 2026-07-07: 撮影ペイロードを形状へ登録 (画像IDB→記録upsert→Storage UL→imgUrl追記) */
+  function registerShapeCapture(shapeId,shapeName){
+    var payload=shapeCapPayload;
+    if(!payload||!shapeId)return;
+    var cid=img._draftId||savedDraftIdRef.current||null;
+    if(!cid){window.caToast('先にチャートを保存してください','info');return;}
+    var now=Date.now();
+    var regId=caShapeNewId('srg');
+    caShapeImgSave(regId,payload.dataUrl);
+    var dateStr=(analysisData&&analysisData.date)||_caResolveMetaDate({analysisDate:'',name:img._name||''})||'';
+    var reg={id:regId,shapeId:shapeId,chartId:cid,
+      ticker:img._ticker||(analysisData&&analysisData.ticker)||'',
+      date:dateStr,tf:payload.tf||'1m',
+      tmFrom:payload.tmFrom,tmTo:payload.tmTo,pMin:payload.pMin,pMax:payload.pMax,ut:now};
+    caShapeRegUpsert(reg);
+    /* 代表サムネ未設定なら最初の登録を自動で代表に (後から「代表に設定」で変更可) */
+    var sh=null;caAliveShapes().forEach(function(s){if(s.id===shapeId)sh=s;});
+    if(sh&&!sh.repRegId)caShapeUpsert(Object.assign({},sh,{repRegId:regId,ut:now}));
+    /* 画像を Storage へ (成功したら imgUrl を追記=他端末でもサムネ表示可) */
+    var cfg=props.fbCfg;
+    if(cfg&&cfg.storageBucket&&!_fbIsPaused(cfg)){
+      uploadThumbToStorage(cfg,'shape_'+regId,payload.dataUrl).then(function(url){
+        if(url)caShapeRegUpsert(Object.assign({},reg,{imgUrl:url,ut:Date.now()}));
+      });
+    }
+    window.caToast('「'+(shapeName||'形状')+'」に登録しました','success');
+    setShapeCapPayload(null);
+    setShapeCapMode(false);
+  }
   /* F2: 両チャート連動用の共有 state */
   /* C8a: uTotal計算helper (tf依存、ImageAnnotator内でview計算に使用) */
   function getUTotalIA(tf,hasR){
@@ -7639,6 +8064,17 @@ function ImageAnnotator(props){
             background:splitChart?"#16a34a":"#4a1e5f",
             color:splitChart?"#bbf7d0":"#c4a5f7"})
         },"🔎 似た形"),
+        /* 2026-07-07: チャート形状 登録モード (保存済みチャートのみ・シミュ中は非表示) */
+        analysisData && img && img._draftId && !simMode && ce("button",{
+          onClick:function(){
+            setShapeCapPayload(null);
+            setShapeCapMode(function(v){return !v;});
+          },
+          title:shapeCapMode?"形状登録を終了":"チャートを四角で囲んで形状カタログに登録",
+          style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",
+            background:shapeCapMode?"#16a34a":"#134e4a",
+            color:shapeCapMode?"#bbf7d0":"#5eead4",fontWeight:700})
+        },shapeCapMode?"📐 撮影中…":"📐 形状登録"),
         /* シミュレーション: このチャートを練習モードで開く (前日自動連結・保存なし) */
         analysisData && !simMode && ce("button",{
           onClick:function(){
@@ -8306,6 +8742,10 @@ function ImageAnnotator(props){
               onMeasureCommit:measureCommit,
               /* 2026-04-20: 「…」ボタンdrag終了時のtm/p変換用 */
               chartAPIRef:chartAPIRefAnalysis,
+              /* 2026-07-07: チャート形状 登録モード */
+              shapeCapture:shapeCapMode,
+              onShapeCaptured:function(p){setShapeCapPayload(p);},
+              onShapeCaptureCancel:function(){setShapeCapMode(false);},
           /* C6: onStrokeAdd - s.side で cur/ref 分岐 */
           onStrokeAdd:function(s){
             var side=s.side||'cur';
@@ -8568,6 +9008,10 @@ function ImageAnnotator(props){
               measuresControlRef:measuresControlRefStack5m,
               onMeasureCommit:measureCommit,
               chartAPIRef:chartAPIRefStack5m,
+              /* 2026-07-07: チャート形状 登録モード (下段5mでも撮影可・tf='5m'で記録) */
+              shapeCapture:shapeCapMode,
+              onShapeCaptured:function(p){setShapeCapPayload(p);},
+              onShapeCaptureCancel:function(){setShapeCapMode(false);},
               /* 以下のストローク系ハンドラは上段(1m)と同一実装の複製。
                  analysisTf は 5mフォーカス時に '5m' なので analysisStrokes['5m'] を操作する。 */
               onStrokeAdd:function(s){
@@ -9594,6 +10038,13 @@ function ImageAnnotator(props){
         setShowRefAnalysisPicker(false);
       },
       onClose:function(){setShowRefAnalysisPicker(false);}
+    }),
+
+    /* ── 2026-07-07: チャート形状 登録先ピッカー (撮影確定後) ── */
+    shapeCapPayload&&ce(CaShapePickerModal,{
+      previewDataUrl:shapeCapPayload.dataUrl,
+      onPick:function(sh){registerShapeCapture(sh.id,sh.name);},
+      onClose:function(){setShapeCapPayload(null);}
     })
 
   ); /* end return */
@@ -13325,6 +13776,412 @@ function CaStampLogModal(props){
   );
 }
 
+/* ─── 2026-07-07: チャート形状 ───────────────────────────────
+   CaShapeThumb: 登録記録の切り抜き画像 (メモリ→IDB→Storage の順で解決)
+   CaShapePickerModal: 撮影確定後の「どの形状に登録するか」ピッカー (＋新規作成)
+   CaShapePageModal: ホームの「📐 チャート形状」ページ (ギャラリー2階層) */
+function _caShapeFmtTm(tm){
+  if(tm==null||isNaN(tm))return '';
+  var h=Math.floor(tm/60),m=Math.round(tm%60);
+  return h+':'+('0'+m).slice(-2);
+}
+function CaShapeThumb(props){
+  var reg=props.reg||null;
+  var h=props.height||64;
+  var sU=useState(function(){return (reg&&_caShapeImgMem[reg.id])||null;});
+  var url=sU[0],setUrl=sU[1];
+  useEffect(function(){
+    var alive=true;
+    if(!reg){setUrl(null);return;}
+    if(_caShapeImgMem[reg.id]){setUrl(_caShapeImgMem[reg.id]);return;}
+    setUrl(null);
+    caShapeImgLoad(reg,function(du){if(alive&&du)setUrl(du);});
+    return function(){alive=false;};
+  },[reg&&reg.id,reg&&reg.imgUrl]);
+  if(!url){
+    return ce('div',{style:{width:'100%',height:h,background:'#0d0d0d',display:'flex',
+      alignItems:'center',justifyContent:'center',color:'#333',fontSize:Math.min(22,h-8)}},'📈');
+  }
+  return ce('div',{style:{width:'100%',height:h,background:'#0d0d0d',overflow:'hidden',
+    display:'flex',alignItems:'center',justifyContent:'center'}},
+    ce('img',{src:url,draggable:false,
+      style:{maxWidth:'100%',maxHeight:'100%',display:'block',objectFit:'contain'}}));
+}
+function CaShapePickerModal(props){
+  var previewDataUrl=props.previewDataUrl||'';
+  var onPick=props.onPick||function(){};
+  var onClose=props.onClose||function(){};
+  var sBump=useState(0); var bump=sBump[0],setBump=sBump[1];
+  useEffect(function(){
+    function h(){setBump(function(b){return b+1;});}
+    window.addEventListener('ca_shapes_changed',h);
+    return function(){window.removeEventListener('ca_shapes_changed',h);};
+  },[]);
+  var shapes=useMemo(function(){return caAliveShapes();},[bump]);
+  var regs=useMemo(function(){return caAliveShapeRegs();},[bump]);
+  var regById=useMemo(function(){var m={};regs.forEach(function(r){m[r.id]=r;});return m;},[regs]);
+  var countByShape=useMemo(function(){
+    var m={};regs.forEach(function(r){m[r.shapeId]=(m[r.shapeId]||0)+1;});return m;
+  },[regs]);
+  var ordered=useMemo(function(){
+    var arr=shapes.slice();
+    arr.sort(function(a,b){
+      var dc=(countByShape[b.id]||0)-(countByShape[a.id]||0);
+      if(dc!==0)return dc;
+      return (b.ut||0)-(a.ut||0);
+    });
+    return arr;
+  },[shapes,countByShape]);
+  var sNm=useState(''); var newName=sNm[0],setNewName=sNm[1];
+  function createAndPick(){
+    var nm=(newName||'').trim();
+    if(!nm){window.caToast('形状名を入力してください','info');return;}
+    var shape={id:caShapeNewId('shp'),name:nm,repRegId:null,ut:Date.now()};
+    caShapeUpsert(shape);
+    onPick(shape);
+  }
+  var BT={border:'none',cursor:'pointer',fontFamily:'inherit'};
+  return ReactDOM.createPortal(
+    ce('div',{onClick:onClose,
+      style:{position:'fixed',inset:0,background:'rgba(0,0,0,.78)',zIndex:3200,
+        display:'flex',alignItems:'center',justifyContent:'center',padding:16}},
+      ce('div',{onClick:function(e){e.stopPropagation();},
+        style:{background:'#1a1a1a',borderRadius:14,boxShadow:'0 8px 40px rgba(0,0,0,.9)',
+          display:'flex',flexDirection:'column',maxWidth:420,width:'100%',
+          maxHeight:'min(85vh,620px)',overflow:'hidden'}},
+        ce('div',{style:{padding:'12px 16px 10px',borderBottom:'1px solid #2a2a2a',
+          display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0}},
+          ce('div',{style:{fontWeight:700,fontSize:14,color:'#fff'}},'どの形状に登録しますか？'),
+          ce('button',{onClick:onClose,
+            style:Object.assign({},BT,{background:'none',color:'#888',fontSize:18,padding:'0 4px'})},'✕')
+        ),
+        /* 撮影プレビュー */
+        previewDataUrl&&ce('div',{style:{padding:'10px 16px 0',flexShrink:0}},
+          ce('div',{style:{background:'#0d0d0d',borderRadius:8,border:'1px solid #2a2a2a',
+            display:'flex',alignItems:'center',justifyContent:'center',padding:6}},
+            ce('img',{src:previewDataUrl,draggable:false,
+              style:{maxWidth:'100%',maxHeight:110,display:'block',objectFit:'contain'}}))
+        ),
+        /* 既存形状リスト (タップで即登録) */
+        ce('div',{style:{flex:1,overflowY:'auto',padding:'10px 16px',minHeight:60}},
+          ordered.length===0
+            ?ce('div',{style:{padding:'18px 4px',textAlign:'center',color:'#555',fontSize:12}},
+                'まだ形状がありません。下の欄から作成できます')
+            :ce('div',{style:{display:'flex',flexDirection:'column',gap:6}},
+                ordered.map(function(sh){
+                  var rep=sh.repRegId?regById[sh.repRegId]:null;
+                  return ce('button',{key:sh.id,onClick:function(){onPick(sh);},
+                    style:Object.assign({},BT,{display:'flex',alignItems:'center',gap:10,
+                      padding:'7px 9px',background:'#111',borderRadius:8,border:'1px solid #2a2a2a',
+                      textAlign:'left',width:'100%'})},
+                    ce('div',{style:{width:52,flexShrink:0,borderRadius:4,overflow:'hidden'}},
+                      ce(CaShapeThumb,{reg:rep,height:32})),
+                    ce('span',{style:{fontSize:12.5,fontWeight:600,color:'#ddd',flex:1,
+                      overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},sh.name||'(無題)'),
+                    ce('span',{style:{fontSize:10,color:'#555',flexShrink:0}},(countByShape[sh.id]||0)+'件'));
+                }))
+        ),
+        /* 新規作成 */
+        ce('div',{style:{padding:'10px 16px 14px',borderTop:'1px solid #2a2a2a',
+          display:'flex',gap:6,flexShrink:0}},
+          ce('input',{type:'text',value:newName,placeholder:'＋ 新しい形状名を入力…',
+            onChange:function(e){setNewName(e.target.value);},
+            onKeyDown:function(e){if(e.key==='Enter')createAndPick();},
+            style:{flex:1,background:'#111',border:'1px solid #333',borderRadius:7,
+              color:'#ddd',fontSize:12,padding:'8px 10px',fontFamily:'inherit',outline:'none'}}),
+          ce('button',{onClick:createAndPick,
+            style:Object.assign({},BT,{background:'#0d9488',color:'#fff',fontSize:12,
+              fontWeight:700,borderRadius:7,padding:'8px 12px',flexShrink:0})},'作成して登録')
+        )
+      )
+    ),
+    document.body
+  );
+}
+function CaShapePageModal(props){
+  var onOpenChart=props.onOpenChart||function(){};
+  var onClose=props.onClose||function(){};
+  var fbCfg=props.fbCfg||{};
+  var sBump=useState(0); var bump=sBump[0],setBump=sBump[1];
+  useEffect(function(){
+    function h(){setBump(function(b){return b+1;});}
+    window.addEventListener('ca_shapes_changed',h);
+    return function(){window.removeEventListener('ca_shapes_changed',h);};
+  },[]);
+  var shapes=useMemo(function(){return caAliveShapes();},[bump]);
+  var regs=useMemo(function(){return caAliveShapeRegs();},[bump]);
+  var regById=useMemo(function(){var m={};regs.forEach(function(r){m[r.id]=r;});return m;},[regs]);
+  var countByShape=useMemo(function(){
+    var m={};regs.forEach(function(r){m[r.shapeId]=(m[r.shapeId]||0)+1;});return m;
+  },[regs]);
+  var metaById=useMemo(function(){
+    var m={};caLoadMeta().forEach(function(x){if(x&&x.id)m[x.id]=x;});return m;
+  },[bump]);
+  var sSel=useState(null); var selShapeId=sSel[0],setSelShapeId=sSel[1];
+  var sSort=useState('date'); var sortMode=sSort[0],setSortMode=sSort[1];
+  var sNew=useState(false); var newOpen=sNew[0],setNewOpen=sNew[1];
+  var sNm=useState(''); var newName=sNm[0],setNewName=sNm[1];
+  var sRen=useState(false); var renOpen=sRen[0],setRenOpen=sRen[1];
+  var sRnV=useState(''); var renName=sRnV[0],setRenName=sRnV[1];
+  var selShape=null;
+  shapes.forEach(function(s){if(s.id===selShapeId)selShape=s;});
+  /* 選択中形状が削除されたら一覧に戻る */
+  useEffect(function(){
+    if(selShapeId&&!selShape)setSelShapeId(null);
+  },[selShapeId,selShape]);
+  /* 形状一覧の並び: 登録件数順 (スタンプ記録と同じ)、同数は更新が新しい順 */
+  var orderedShapes=useMemo(function(){
+    var arr=shapes.slice();
+    arr.sort(function(a,b){
+      var dc=(countByShape[b.id]||0)-(countByShape[a.id]||0);
+      if(dc!==0)return dc;
+      return (b.ut||0)-(a.ut||0);
+    });
+    return arr;
+  },[shapes,countByShape]);
+  /* 記録の表示用フィールド解決 (保存値優先、無ければ meta から) */
+  function regDisp(r){
+    var m=metaById[r.chartId];
+    return {
+      ticker:r.ticker||(m&&m.ticker)||'—',
+      date:r.date||(m?_caResolveMetaDate(m):'')||''
+    };
+  }
+  var shownRegs=useMemo(function(){
+    if(!selShapeId)return [];
+    var list=regs.filter(function(r){return r.shapeId===selShapeId;});
+    list.sort(function(a,b){
+      var da=regDisp(a),db=regDisp(b);
+      if(sortMode==='ticker'){
+        var tc=String(da.ticker).localeCompare(String(db.ticker),'ja');
+        if(tc!==0)return tc;
+      }
+      var dc=String(db.date).localeCompare(String(da.date));
+      if(dc!==0)return dc;
+      var tmc=(a.tmFrom||0)-(b.tmFrom||0);
+      if(tmc!==0)return tmc;
+      return (b.ut||0)-(a.ut||0);
+    });
+    return list;
+  },[selShapeId,regs,sortMode,metaById]);
+  function createShape(){
+    var nm=(newName||'').trim();
+    if(!nm){window.caToast('形状名を入力してください','info');return;}
+    var shape={id:caShapeNewId('shp'),name:nm,repRegId:null,ut:Date.now()};
+    caShapeUpsert(shape);
+    setNewName('');setNewOpen(false);
+    setSelShapeId(shape.id);
+  }
+  function renameShape(){
+    if(!selShape)return;
+    var nm=(renName||'').trim();
+    if(!nm){window.caToast('形状名を入力してください','info');return;}
+    caShapeUpsert(Object.assign({},selShape,{name:nm,ut:Date.now()}));
+    setRenOpen(false);
+  }
+  function deleteShape(){
+    if(!selShape)return;
+    var cnt=countByShape[selShape.id]||0;
+    window.caConfirm('「'+(selShape.name||'(無題)')+'」を削除しますか？\n登録'+cnt+'件とサムネ画像も削除されます。',
+      function(){
+        caShapeDelete(selShape.id);
+        setSelShapeId(null);
+        window.caToast('形状を削除しました','success');
+      },null,{yesLabel:'削除する',noLabel:'キャンセル',danger:true});
+  }
+  function deleteReg(r){
+    window.caConfirm('この登録を削除しますか？',function(){
+      caShapeRegDelete(r.id);
+      window.caToast('登録を削除しました','success');
+    },null,{yesLabel:'削除する',noLabel:'キャンセル',danger:true});
+  }
+  function setRep(r){
+    if(!selShape)return;
+    caShapeUpsert(Object.assign({},selShape,{repRegId:r.id,ut:Date.now()}));
+    window.caToast('代表サムネイルに設定しました','success');
+  }
+  function openReg(r){
+    var m=metaById[r.chartId];
+    if(!m){window.caToast('このチャートが見つかりません（削除された可能性）','error');return;}
+    /* 撮影範囲へジャンプする指示を置いてからチャートを開く (ImageAnnotator が消費) */
+    _caShapeJumpReq={chartId:r.chartId,tf:r.tf||'1m',tmFrom:r.tmFrom,tmTo:r.tmTo,pMin:r.pMin,pMax:r.pMax};
+    onOpenChart(r.chartId);
+    onClose();
+  }
+  /* 形状メモ (チャートメモと同システム: localStorage + Firebase per-id PUT) */
+  function handleMemoSave(h){
+    if(!selShapeId)return;
+    caSetShapeMemo(selShapeId,h);
+    setBump(function(b){return b+1;});
+    if(fbCfg&&fbCfg.url&&!_fbIsPaused(fbCfg)){
+      var a=caAuthParam(fbCfg.secret);
+      var u=fbCfg.url.replace(/\/$/,'')+'/ca-shape-memos/'+encodeURIComponent(selShapeId)+'.json'+a;
+      fetch(u,{method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({html:h,updatedAt:Date.now()})}).catch(function(){});
+    }
+  }
+  var BT={border:'none',cursor:'pointer',fontFamily:'inherit'};
+  var totalRegs=regs.length;
+  return ReactDOM.createPortal(
+    ce('div',{onClick:onClose,
+      style:{position:'fixed',inset:0,background:'rgba(0,0,0,.78)',zIndex:3000,
+        display:'flex',alignItems:'center',justifyContent:'center',padding:16}},
+      ce('div',{onClick:function(e){e.stopPropagation();},
+        style:{background:'#1a1a1a',borderRadius:14,boxShadow:'0 8px 40px rgba(0,0,0,.9)',
+          display:'flex',flexDirection:'column',maxWidth:1000,width:'100%',
+          maxHeight:'min(88vh,720px)',height:'100%',overflow:'hidden'}},
+        /* ヘッダー */
+        ce('div',{style:{padding:'12px 16px 10px',borderBottom:'1px solid #2a2a2a',
+          display:'flex',alignItems:'center',gap:10,flexShrink:0}},
+          selShape
+            ?ce(Fragment,null,
+                ce('button',{onClick:function(){setSelShapeId(null);setRenOpen(false);},
+                  style:Object.assign({},BT,{background:'#242424',color:'#93c5fd',fontSize:12,
+                    fontWeight:700,borderRadius:7,padding:'6px 12px',flexShrink:0})},'← 一覧'),
+                renOpen
+                  ?ce('div',{style:{display:'flex',gap:6,alignItems:'center',flex:1,minWidth:0}},
+                      ce('input',{type:'text',value:renName,
+                        onChange:function(e){setRenName(e.target.value);},
+                        onKeyDown:function(e){if(e.key==='Enter')renameShape();},
+                        style:{flex:1,minWidth:0,background:'#111',border:'1px solid #333',borderRadius:7,
+                          color:'#ddd',fontSize:13,fontWeight:700,padding:'6px 10px',fontFamily:'inherit',outline:'none'}}),
+                      ce('button',{onClick:renameShape,
+                        style:Object.assign({},BT,{background:'#0d9488',color:'#fff',fontSize:11,
+                          fontWeight:700,borderRadius:6,padding:'6px 10px',flexShrink:0})},'保存'),
+                      ce('button',{onClick:function(){setRenOpen(false);},
+                        style:Object.assign({},BT,{background:'#333',color:'#aaa',fontSize:11,
+                          fontWeight:700,borderRadius:6,padding:'6px 10px',flexShrink:0})},'キャンセル'))
+                  :ce('div',{style:{fontWeight:700,fontSize:14,color:'#fff',flex:1,minWidth:0,
+                      overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},
+                      selShape.name||'(無題)',
+                      ce('span',{style:{color:'#666',fontWeight:400,fontSize:12,marginLeft:8}},
+                        (countByShape[selShape.id]||0)+'件')),
+                !renOpen&&ce('button',{
+                  onClick:function(){setRenName(selShape.name||'');setRenOpen(true);},
+                  title:'名称を変更',
+                  style:Object.assign({},BT,{background:'none',color:'#888',fontSize:13,padding:'2px 4px',flexShrink:0})},'✏'),
+                !renOpen&&ce('button',{onClick:deleteShape,title:'この形状を削除',
+                  style:Object.assign({},BT,{background:'none',color:'#7f1d1d',fontSize:13,padding:'2px 4px',flexShrink:0}),
+                },'🗑'))
+            :ce('div',{style:{fontWeight:700,fontSize:14,color:'#fff',flex:1}},'📐 チャート形状',
+                ce('span',{style:{color:'#666',fontWeight:400,fontSize:12,marginLeft:8}},
+                  shapes.length+'形状・'+totalRegs+'件')),
+          ce('button',{onClick:onClose,
+            style:Object.assign({},BT,{background:'none',color:'#888',fontSize:18,padding:'0 4px',flexShrink:0})},'✕')
+        ),
+        /* 本文 */
+        selShape
+          ?ce('div',{style:{flex:1,minHeight:0,overflowY:'auto',padding:'12px 16px'}},
+              /* メモ欄 (最上部・チャートメモと同システム) */
+              ce('div',{style:{background:'#141414',border:'1px solid #262626',borderRadius:10,
+                padding:'8px 10px',marginBottom:12}},
+                ce(CaMemoEditableField,{
+                  key:'shapememo_'+selShape.id,
+                  html:caGetShapeMemo(selShape.id),
+                  placeholder:'クリックしてこの形状のメモを追加…',
+                  guardOwner:'shapeMemo_'+selShape.id,
+                  hideEditButton:true,
+                  onSave:handleMemoSave
+                })
+              ),
+              /* 並び替え */
+              ce('div',{style:{display:'flex',alignItems:'center',gap:6,marginBottom:10}},
+                ce('span',{style:{fontSize:10,color:'#555'}},'並び'),
+                [{id:'date',label:'日時順'},{id:'ticker',label:'銘柄順'}].map(function(sm){
+                  var isA=sortMode===sm.id;
+                  return ce('button',{key:sm.id,onClick:function(){setSortMode(sm.id);},
+                    style:Object.assign({},BT,{fontSize:10,fontWeight:isA?700:400,padding:'4px 10px',
+                      borderRadius:6,background:isA?'#2563eb':'#222',color:isA?'#fff':'#888'})},sm.label);
+                }),
+                ce('span',{style:{flex:1}}),
+                ce('span',{style:{fontSize:10,color:'#555'}},shownRegs.length+'件')
+              ),
+              /* 登録一覧 */
+              shownRegs.length===0
+                ?ce('div',{style:{padding:'36px 12px',textAlign:'center',color:'#555',fontSize:12,lineHeight:1.8}},
+                    'まだ登録がありません',ce('br'),
+                    'チャート画面の「📐 形状登録」から範囲を囲んで登録できます')
+                :ce('div',{style:{display:'grid',gap:10,
+                    gridTemplateColumns:'repeat(auto-fill,minmax(170px,1fr))'}},
+                    shownRegs.map(function(r){
+                      var d=regDisp(r);
+                      var isRep=selShape.repRegId===r.id;
+                      var tmLabel=(r.tmFrom!=null&&r.tmTo!=null)
+                        ?(_caShapeFmtTm(r.tmFrom)+'〜'+_caShapeFmtTm(r.tmTo)):'';
+                      return ce('div',{key:r.id,
+                        style:{background:'#111',border:'1px solid #2a2a2a',borderRadius:10,overflow:'hidden'}},
+                        ce('div',{onClick:function(){openReg(r);},style:{cursor:'pointer'}},
+                          ce(CaShapeThumb,{reg:r,height:96}),
+                          ce('div',{style:{padding:'7px 9px 4px'}},
+                            ce('div',{style:{fontSize:12,fontWeight:700,color:'#ddd',
+                              overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},d.ticker),
+                            ce('div',{style:{fontSize:10.5,color:'#888',marginTop:2}},
+                              (d.date||'日付不明')+'・'+(r.tf==='5m'?'5分':'1分')+(tmLabel?('・'+tmLabel):''))
+                          )
+                        ),
+                        ce('div',{style:{display:'flex',alignItems:'center',gap:2,padding:'2px 6px 6px'}},
+                          ce('button',{onClick:function(e){e.stopPropagation();setRep(r);},
+                            title:isRep?'代表サムネイルです':'この画像を代表サムネイルにする',
+                            style:Object.assign({},BT,{background:'none',fontSize:12,padding:'2px 5px',
+                              color:isRep?'#fbbf24':'#444'})},isRep?'★ 代表':'☆ 代表に'),
+                          ce('span',{style:{flex:1}}),
+                          ce('button',{onClick:function(e){e.stopPropagation();deleteReg(r);},
+                            title:'この登録を削除',
+                            style:Object.assign({},BT,{background:'none',color:'#555',fontSize:11,padding:'2px 5px'})},'✕')
+                        )
+                      );
+                    }))
+            )
+          :ce('div',{style:{flex:1,minHeight:0,overflowY:'auto',padding:'12px 16px'}},
+              /* 新しい形状 */
+              ce('div',{style:{display:'flex',gap:6,marginBottom:12,alignItems:'center'}},
+                newOpen
+                  ?ce(Fragment,null,
+                      ce('input',{type:'text',value:newName,placeholder:'形状名 (例: 22EMAでのブリッジ)',
+                        autoFocus:true,
+                        onChange:function(e){setNewName(e.target.value);},
+                        onKeyDown:function(e){if(e.key==='Enter')createShape();},
+                        style:{flex:1,background:'#111',border:'1px solid #333',borderRadius:7,
+                          color:'#ddd',fontSize:12,padding:'8px 10px',fontFamily:'inherit',outline:'none'}}),
+                      ce('button',{onClick:createShape,
+                        style:Object.assign({},BT,{background:'#0d9488',color:'#fff',fontSize:12,
+                          fontWeight:700,borderRadius:7,padding:'8px 12px',flexShrink:0})},'作成'),
+                      ce('button',{onClick:function(){setNewOpen(false);setNewName('');},
+                        style:Object.assign({},BT,{background:'#333',color:'#aaa',fontSize:12,
+                          fontWeight:700,borderRadius:7,padding:'8px 12px',flexShrink:0})},'キャンセル'))
+                  :ce('button',{onClick:function(){setNewOpen(true);},
+                      style:Object.assign({},BT,{background:'none',color:'#5eead4',fontSize:12,
+                        fontWeight:700,border:'1px dashed #134e4a',borderRadius:8,padding:'8px 14px'})},
+                      '＋ 新しい形状')
+              ),
+              /* 形状ギャラリー */
+              orderedShapes.length===0
+                ?ce('div',{style:{padding:'48px 12px',textAlign:'center',color:'#555',fontSize:12,lineHeight:1.8}},
+                    'まだ形状がありません',ce('br'),
+                    '「＋ 新しい形状」で作成するか、チャート画面の「📐 形状登録」から登録してください')
+                :ce('div',{style:{display:'grid',gap:10,
+                    gridTemplateColumns:'repeat(auto-fill,minmax(180px,1fr))'}},
+                    orderedShapes.map(function(sh){
+                      var rep=sh.repRegId?regById[sh.repRegId]:null;
+                      return ce('div',{key:sh.id,
+                        onClick:function(){setSelShapeId(sh.id);setSortMode('date');setRenOpen(false);},
+                        style:{background:'#111',border:'1px solid #2a2a2a',borderRadius:10,
+                          overflow:'hidden',cursor:'pointer'}},
+                        ce(CaShapeThumb,{reg:rep,height:104}),
+                        ce('div',{style:{padding:'8px 10px 9px'}},
+                          ce('div',{style:{fontSize:12.5,fontWeight:700,color:'#ddd',
+                            overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},sh.name||'(無題)'),
+                          ce('div',{style:{fontSize:10.5,color:'#666',marginTop:2}},(countByShape[sh.id]||0)+'件')
+                        )
+                      );
+                    }))
+            )
+      )
+    ),
+    document.body
+  );
+}
+
 /* ─── CaTagSearchModal: タグからチャートを探す (CA タグ + SN タグ) ─── */
 function CaTagSearchModal(props){
   var ticker=props.ticker||'';  /* 表示用ラベルのみ、フィルタには使わない */
@@ -14410,6 +15267,8 @@ function DraftLibrary(props){
   var sTagM=useState(false); var tagModalOpen=sTagM[0],setTagModalOpen=sTagM[1];
   /* スタンプ記録モーダル */
   var sStL=useState(false); var stampLogOpen=sStL[0],setStampLogOpen=sStL[1];
+  /* 2026-07-07: チャート形状モーダル */
+  var sShpP=useState(false); var shapePageOpen=sShpP[0],setShapePageOpen=sShpP[1];
   /* 2026-04-30: パターン検索 (Phase 1: 寄り天) */
   var sPat=useState(false);      var showPatternSearch=sPat[0],setShowPatternSearch=sPat[1];
   /* 2026-04-30: C - エディタから起動された時の初期クエリ */
@@ -14550,6 +15409,19 @@ function DraftLibrary(props){
           if(v&&v.html!=null)local[decodeURIComponent(id)]=v.html;
         });
         caSaveChartMemos(local);
+      }).catch(function(){});
+
+    /* 2026-07-07: 形状メモ一括取得 (チャートメモと同形) */
+    fetch(base+'/ca-shape-memos.json'+a)
+      .then(function(r){return r.ok?r.json():null;})
+      .then(function(d){
+        if(!d||typeof d!=='object')return;
+        var local=caLoadShapeMemos();
+        Object.keys(d).forEach(function(id){
+          var v=d[id];
+          if(v&&v.html!=null)local[decodeURIComponent(id)]=v.html;
+        });
+        caSaveShapeMemos(local);
       }).catch(function(){});
 
     /* タグ定義: バージョン確認 → 双方向マージ */
@@ -16453,6 +17325,11 @@ function DraftLibrary(props){
             style:Object.assign({},BT,{fontSize:11,fontWeight:700,padding:"5px 10px",borderRadius:7,
               background:"#b45309",color:"#fff"})},
             "📍 スタンプ記録"),
+          /* 2026-07-07: チャート形状 (形状カタログ) */
+          ce("button",{onClick:function(){setShapePageOpen(true);},
+            style:Object.assign({},BT,{fontSize:11,fontWeight:700,padding:"5px 10px",borderRadius:7,
+              background:"#0d9488",color:"#fff"})},
+            "📐 チャート形状"),
           /* シミュレーション (銘柄・日付を選んで練習モードで開く) */
           ce("button",{onClick:function(){setSimPickerOpen(true);},
             style:Object.assign({},BT,{fontSize:11,fontWeight:700,padding:"5px 10px",borderRadius:7,
@@ -16617,6 +17494,12 @@ function DraftLibrary(props){
         charts:meta,
         onOpenChart:function(id){openChart(id);},
         onClose:function(){setStampLogOpen(false);}
+      }),
+      /* 2026-07-07: チャート形状モーダル (常に全チャート対象) */
+      shapePageOpen&&ce(CaShapePageModal,{
+        fbCfg:fbCfg,
+        onOpenChart:function(id){openChart(id);},
+        onClose:function(){setShapePageOpen(false);}
       }),
       /* シミュレーション: 銘柄・日付選択モーダル */
       simPickerOpen&&ce(CaSimPicker,{
@@ -16812,7 +17695,7 @@ function App(){
   /* 2026-06-29: 設定のFirebase同期 — モジュールへ最新fbCfgを渡し、有効時は起動時/設定変更時に prefs(表示設定/銘柄コード/色等) を pull */
   useEffect(function(){
     caSetActiveFbCfg(fbCfg);
-    if(fbCfg&&fbCfg.url&&!_fbIsPaused(fbCfg)){caPrefsPull(fbCfg);caSimHistPull(fbCfg);}
+    if(fbCfg&&fbCfg.url&&!_fbIsPaused(fbCfg)){caPrefsPull(fbCfg);caSimHistPull(fbCfg);caShapesPull(fbCfg);}
   },[fbCfg]);
   var s3=useState(false); var showFbSettings=s3[0],setShowFbSettings=s3[1];
   /* 2026-04-20: 表示・動作設定モーダル */
