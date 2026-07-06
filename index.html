@@ -307,13 +307,13 @@ function ColorPicker(props){
   function pick(c){
     onChange(c); onHistory(c);
     if(editingSlot!==null){ var nq=quickColors.slice(); nq[editingSlot]=c; onQuickColors(nq); }
-    else if(!quickColors.includes(c)) onQuickColors([c].concat(quickColors).slice(0,8));
+    else if(!quickColors.includes(c)) onQuickColors([c].concat(quickColors).slice(0,9));
     closeAll();
   }
   function addCustom(){
     if(!presets.includes(customVal)) savePresets(presets.concat([customVal]));
     onChange(customVal); onHistory(customVal);
-    if(!quickColors.includes(customVal)) onQuickColors([customVal].concat(quickColors).slice(0,8));
+    if(!quickColors.includes(customVal)) onQuickColors([customVal].concat(quickColors).slice(0,9));
     setTab("preset");
   }
   function remPreset(c){ savePresets(presets.filter(function(x){return x!==c;})); }
@@ -6295,11 +6295,12 @@ function ImageAnnotator(props){
   var st1=useState(function(){return caLoadDrawDefaults().color;}); var color=st1[0],setColor=st1[1];
   var st2=useState([]);      var colorHist=st2[0],setColorHist=st2[1];
   var st3=useState(function(){
-    var DEFQC=["#E53935","#EC407A","#FF9800","#FFEB3B","#1565C0","#ffffff","#8BC34A","#9C27B0"];
+    /* 2026-07-05: クイックカラーを8→9スロットに。9色目=シアン(#00BCD4)を追加 */
+    var DEFQC=["#E53935","#EC407A","#FF9800","#FFEB3B","#1565C0","#ffffff","#8BC34A","#9C27B0","#00BCD4"];
     try{var q=JSON.parse(localStorage.getItem("annot_quickcolors_v1"));
-      if(q&&q.length){ /* 旧7色保存値を8スロットに移行(不足分をDEFQCの未使用色で埋める) */
-        for(var _i=0;q.length<8&&_i<DEFQC.length;_i++){ if(q.indexOf(DEFQC[_i])<0)q.push(DEFQC[_i]); }
-        return q.slice(0,8);
+      if(q&&q.length){ /* 旧保存値(7/8色)を9スロットに移行(不足分をDEFQCの未使用色で埋める) */
+        for(var _i=0;q.length<9&&_i<DEFQC.length;_i++){ if(q.indexOf(DEFQC[_i])<0)q.push(DEFQC[_i]); }
+        return q.slice(0,9);
       }
     }catch(e){}
     return DEFQC;
