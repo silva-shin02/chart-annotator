@@ -699,8 +699,11 @@ var CA_FIT_MODE_KEY='ca_fit_mode_v1';
 var CA_DEFAULT_TF_KEY='ca_default_tf_v1';
 var CA_DRAW_DEFAULTS_KEY='ca_draw_defaults_v1';
 var CA_PEN_ONLY_KEY='ca_pen_only_v1';
+/* 2026-07-07: 価格軸グリッドの最小刻み (5 or 10円)。既定10=従来。5でグリッド線/ラベルを5円刻みで表示 */
+var CA_PRICE_GRID_STEP_KEY='ca_price_grid_step_v1';
 var CA_SYNC_PREF_KEYS=[CA_PRICE_PX_KEY,CA_AUTO_PAN_KEY,CA_CHART_BG_KEY,CA_TICKER_CODES_KEY,
   CA_INDICATOR_VIS_KEY,CA_FIT_MODE_KEY,CA_DEFAULT_TF_KEY,CA_DRAW_DEFAULTS_KEY,CA_PEN_ONLY_KEY,
+  CA_PRICE_GRID_STEP_KEY,
   'ca_search_words_v1','scalping_annot_presets_v1','annot_quickcolors_v1'];
 var CA_PREF_EVENTS={};
 CA_PREF_EVENTS[CA_PRICE_PX_KEY]='ca_price_px_changed';
@@ -709,6 +712,7 @@ CA_PREF_EVENTS[CA_CHART_BG_KEY]='ca_chart_bg_changed';
 CA_PREF_EVENTS[CA_TICKER_CODES_KEY]='ca_ticker_codes_changed';
 CA_PREF_EVENTS[CA_INDICATOR_VIS_KEY]='ca_indicator_vis_changed';
 CA_PREF_EVENTS[CA_FIT_MODE_KEY]='ca_fit_mode_changed';
+CA_PREF_EVENTS[CA_PRICE_GRID_STEP_KEY]='ca_price_grid_step_changed';
 var _caFbCfg=null;            /* App から最新の fbCfg をセット */
 function caSetActiveFbCfg(c){_caFbCfg=c;}
 var _caPrefPushTimers={};
@@ -990,6 +994,17 @@ function caSaveFitMode(m){
   try{localStorage.setItem(CA_FIT_MODE_KEY,s);}catch(e){caStorageWarn();}
   caPrefPush(CA_FIT_MODE_KEY);
   try{window.dispatchEvent(new CustomEvent('ca_fit_mode_changed',{detail:s}));}catch(e){}
+}
+/* 2026-07-07: 価格軸グリッドの最小刻み。10=従来(10円刻み) / 5=5円刻みでグリッド線・ラベルを表示。既定10。
+   数値(5|10)で返す。ラベル密度の自動切替(価格軸ラベル最小間隔px)はこの刻みを起点に働く。 */
+function caLoadPriceGridStep(){
+  try{var v=localStorage.getItem(CA_PRICE_GRID_STEP_KEY);return v==='5'?5:10;}catch(e){return 10;}
+}
+function caSavePriceGridStep(n){
+  var s=(n===5||n==='5')?'5':'10';
+  try{localStorage.setItem(CA_PRICE_GRID_STEP_KEY,s);}catch(e){caStorageWarn();}
+  caPrefPush(CA_PRICE_GRID_STEP_KEY);
+  try{window.dispatchEvent(new CustomEvent('ca_price_grid_step_changed',{detail:+s}));}catch(e){}
 }
 /* 2026-06-29: 初期表示の足 '1m'|'5m'|'stack' */
 function caLoadDefaultTf(){
@@ -1500,6 +1515,9 @@ function DisplaySettingsModal(props){
     var n=(v|0); if(n<0)n=0; if(n>100)n=100;
     setPricePxLocal(n); caSavePricePx(n);
   }
+  /* 2026-07-07: 価格軸グリッド刻み (5/10円) */
+  var sPGS=useState(caLoadPriceGridStep()); var priceGridStep=sPGS[0],setPriceGridStepLocal=sPGS[1];
+  function updatePriceGridStep(n){var s=(n===5)?5:10;setPriceGridStepLocal(s);caSavePriceGridStep(s);}
   /* ツール自動復帰 ON/OFF */
   var sAP=useState(caLoadAutoPan()); var autoPan=sAP[0],setAutoPan=sAP[1];
   function updateAutoPan(b){setAutoPan(!!b); caSaveAutoPan(!!b);}
@@ -1632,7 +1650,24 @@ function DisplaySettingsModal(props){
                 "＋"),
               ce("span",{style:{fontSize:11,color:"#666",flexShrink:0}},"px")
             ),
-            pricePx===0&&ce("div",{style:{fontSize:10,color:"#666",marginTop:6}},"自動切替OFF (常に10円ピッチ表示)")
+            pricePx===0&&ce("div",{style:{fontSize:10,color:"#666",marginTop:6}},"自動切替OFF (常に"+priceGridStep+"円ピッチ表示)")
+          ),
+          /* 2026-07-07: 価格軸グリッド刻み (5円 / 10円) */
+          ce("div",{style:CARD},
+            ce("div",{style:HEAD},"🪜 価格軸グリッド刻み"),
+            ce("div",{style:DESC},
+              "横グリッド線・価格ラベルの最小刻み。",ce("br",null),
+              "・10円(従来): 10円ごと ・5円: 5円ごと(細い補助線を追加)",ce("br",null),
+              "※ズームが浅いと上の「最小間隔」設定で自動的に粗くなります"),
+            ce("div",{style:{display:"flex",gap:8}},
+              [{v:10,label:'10円 (従来)'},{v:5,label:'5円'}].map(function(o){
+                var sel=priceGridStep===o.v;
+                return ce("button",{key:o.v,onClick:function(){updatePriceGridStep(o.v);},
+                  style:{flex:1,padding:"9px 6px",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer",
+                    borderRadius:8,border:"1px solid "+(sel?"#6366F1":"#3a3a3a"),
+                    background:sel?"#26204d":"#2a2a2a",color:sel?"#c4b5fd":"#aaa"}},o.label+(sel?" ✓":""));
+              })
+            )
           ),
           /* 2026-06-29 C1: 指標の表示ON/OFF */
           ce("div",{style:CARD},
@@ -2091,6 +2126,13 @@ function DataChart(props){
     window.addEventListener('ca_fit_mode_changed',handler);
     return function(){window.removeEventListener('ca_fit_mode_changed',handler);};
   },[]);
+  /* 2026-07-07: 価格軸グリッド刻み (5/10円) — 設定変更で再描画 */
+  var stPGS=useState(caLoadPriceGridStep()); var priceGridStep=stPGS[0],setPriceGridStep=stPGS[1];
+  useEffect(function(){
+    function handler(){setPriceGridStep(caLoadPriceGridStep());}
+    window.addEventListener('ca_price_grid_step_changed',handler);
+    return function(){window.removeEventListener('ca_price_grid_step_changed',handler);};
+  },[]);
   /* C8a: 昼休み(11:30=690〜12:30=750)の60分を g分(=ローソク1本分) に圧縮した仮想時間軸
      drawDataChart と同じ定義 (props.tf依存) */
   function tmToVis(t){
@@ -2349,7 +2391,7 @@ function DataChart(props){
     var rafId=requestAnimationFrame(function(){
       /* 2026-04-21: 地図モデルズーム化 — dim に zoom を追加 (drawDataChart 内で派生値計算)
          pricePx は最小ラベル間隔px として転用 */
-      var dimWithPx=Object.assign({},dim,{pricePx:pricePx,zoom:zoom,fitBarW:props.fitBarW});
+      var dimWithPx=Object.assign({},dim,{pricePx:pricePx,zoom:zoom,fitBarW:props.fitBarW,priceGridStep:priceGridStep});
       var canvas=canvasRef.current; if(!canvas)return;
       /* 2026-04-23: iPad DPR上限2 (1では描画がぼやける、3以上はメモリ過大のためcap) */
       var origDPR=window.devicePixelRatio||1;
@@ -2370,7 +2412,7 @@ function DataChart(props){
       drawCrosshair();
     });
     return function(){cancelAnimationFrame(rafId);};
-  },[data,bars,dim,tf,view,pShift,zoom,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes,moveHint,pricePx,chartBg,lassoSel,indVis]);
+  },[data,bars,dim,tf,view,pShift,zoom,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes,moveHint,pricePx,chartBg,lassoSel,indVis,priceGridStep]);
 
   // showCrosshair 切替時: OFFなら消す、ONなら再描画
   useEffect(function(){
@@ -5095,6 +5137,8 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   var padL=40, padR=40, padT=10, padB=22;
   /* 2026-04-21: pricePx の意味変更 — 価格軸ラベル最小間隔px (旧 priceRange 縮減は廃止) */
   var minLabelGapPx=(dim&&typeof dim.pricePx==='number'&&dim.pricePx>0)?dim.pricePx:0;
+  /* 2026-07-07: 価格軸グリッドの最小刻み (5 or 10円)。既定10=従来。サムネは常に10円固定 */
+  var baseGridStep=(dim&&dim.priceGridStep===5)?5:10;
   /* 2026-04-22: サムネイル専用モード — 地図モデル無効化、X/Y独立フィット (地図モデル導入前と同じ挙動)
      dim.thumbnail=true で有効
        - barW は uSpan 派生 (従来式): (chartW/uSpan) * baseStep * 0.8
@@ -5271,8 +5315,11 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
      10/20/50/100/500/1000円 から、pxPerStep >= minLabelGapPx を満たす最小pStepを採用
      minLabelGapPx=0 のとき自動切替OFF (常に10円)
      2026-04-22: サムネモードは pStep=10 固定 */
-  var pStepCandidates=[10,20,50,100,500,1000];
-  var pStep=10;
+  /* 2026-07-07: 5円刻み設定(baseGridStep===5)時は候補先頭に5を足し、既定pStepも5に。
+     サムネは従来どおり10固定。ラベル密度の自動切替(minLabelGapPx)はこの起点から粗くしていく。 */
+  var _use5=(baseGridStep===5 && !isThumbnail);
+  var pStepCandidates=_use5?[5,10,20,50,100,500,1000]:[10,20,50,100,500,1000];
+  var pStep=_use5?5:10;
   if(!isThumbnail && minLabelGapPx>0){
     for(var ci=0;ci<pStepCandidates.length;ci++){
       if(pStepCandidates[ci]*pxPerYen>=minLabelGapPx){pStep=pStepCandidates[ci];break;}
@@ -5283,18 +5330,26 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   ctx.textBaseline='middle'; ctx.textAlign='right';
   var pStart=Math.ceil(pmin/pStep)*pStep;
   var pEnd=Math.floor(pmax/pStep)*pStep;
-  /* 2026-04-21: pStep はラベル密度自動切替で 10/20/50/100/500/1000 から選択済み
-     ラウンドナンバー強調 (1000円=最太、100/50円=中太、それ以外=細) */
+  /* 2026-04-21: pStep はラベル密度自動切替で 5/10/20/50/100/500/1000 から選択済み
+     ラウンドナンバー強調 (1000円=最太、100/50円=中太、10円=細、5円=最も淡い)
+     2026-07-07: _isR10 段を追加。10円刻み時は p が常に10の倍数=_isR10が常にtrue(else枝=5円線は未使用)。
+                 既定の黒背景では 10円線=旧#262626と同一表示(=デフォルトは不変)。5円刻み時のみ
+                 「10の倍数でない5円線」が最下段(淡い)に落ちる。 */
   for(var p=pStart;p<=pEnd;p+=pStep){
     var y=pToY(p);
-    var _isR1000=(p%1000===0), _isR100=(p%100===0), _isR50=(p%50===0);
+    var _isR1000=(p%1000===0), _isR100=(p%100===0), _isR50=(p%50===0), _isR10=(p%10===0);
     if(_isR1000){      ctx.strokeStyle='rgba(255,255,255,0.22)'; ctx.lineWidth=1.8; }
     else if(_isR100){  ctx.strokeStyle='rgba(255,255,255,0.14)'; ctx.lineWidth=1.3; }
     else if(_isR50){   ctx.strokeStyle='rgba(255,255,255,0.09)'; ctx.lineWidth=1.0; }
-    else {             ctx.strokeStyle='#262626';                 ctx.lineWidth=0.8; }
+    /* 2026-07-07: 10円/5円線を半透明白に変更(50/100/1000円線は元から半透明白)。
+       旧#262626/#1c1c1c(不透明)は濃灰背景#1a1a1aにほぼ埋もれ、5円線が可視化されなかったため。
+       10円=α0.15は既定の黒背景で0.15*255≈38=旧#262626と同一(=デフォルト表示は不変)。
+       任意の暗背景でも 10円>5円>背景 の順で可視。5円=α0.11(黒でrgb約28=旧#1c1c1c相当)。 */
+    else if(_isR10){   ctx.strokeStyle='rgba(255,255,255,0.15)'; ctx.lineWidth=0.8; }
+    else {             ctx.strokeStyle='rgba(255,255,255,0.11)'; ctx.lineWidth=0.6; }
     ctx.beginPath(); ctx.moveTo(padL,Math.round(y)+0.5); ctx.lineTo(padL+chartW,Math.round(y)+0.5); ctx.stroke();
-    ctx.fillStyle=_isR1000?'#ccc':_isR100?'#aaa':_isR50?'#888':'#666';
-    ctx.font=_isR1000?'bold 11px -apple-system,Helvetica,sans-serif':_isR100?'bold 10px -apple-system,Helvetica,sans-serif':_isR50?'10px -apple-system,Helvetica,sans-serif':'10px -apple-system,Helvetica,sans-serif';
+    ctx.fillStyle=_isR1000?'#ccc':_isR100?'#aaa':_isR50?'#888':_isR10?'#666':'#555';
+    ctx.font=_isR1000?'bold 11px -apple-system,Helvetica,sans-serif':_isR100?'bold 10px -apple-system,Helvetica,sans-serif':'10px -apple-system,Helvetica,sans-serif';
     // 右側ラベル (textAlign='right' 前提、末端より4px内側)
     ctx.fillText(p.toFixed(0),padL+chartW+padR-4,y);
     // 左側ラベル (左padLの右端より4px内側、textAlign='right' 継承)
