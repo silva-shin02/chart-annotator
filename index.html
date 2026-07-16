@@ -5024,7 +5024,9 @@ function DataChart(props){
           pMin:(pBot!=null)?Math.round(pBot):null,
           pMax:(pTop!=null)?Math.round(pTop):null
         });
-        setShapeCapSel(null);
+        /* 2026-07-07: ここで選択矩形を消さない。ピッカーを閉じた(=登録せず戻った)ときに
+           矩形と「登録」バーが残っていれば押し直せる。登録成功時は shapeCapture=false に
+           なり、上の useEffect が矩形を消す。 */
       }
       var hasRect=!!(sel&&rw>=12&&rh>=12);
       var HS=16;  /* 角ハンドルの見た目サイズ */
@@ -8125,11 +8127,11 @@ function ImageAnnotator(props){
             setShapeCapPayload(null);
             setShapeCapMode(function(v){return !v;});
           },
-          title:shapeCapMode?"形状登録を終了":"チャートを四角で囲んで形状カタログに登録",
+          title:shapeCapMode?"形状登録(撮影)をやめる":"チャートを四角で囲んで形状カタログに登録",
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",
-            background:shapeCapMode?"#16a34a":"#134e4a",
-            color:shapeCapMode?"#bbf7d0":"#5eead4",fontWeight:700})
-        },shapeCapMode?"📐 撮影中…":"📐 形状登録"),
+            background:shapeCapMode?"#7f1d1d":"#134e4a",
+            color:shapeCapMode?"#fca5a5":"#5eead4",fontWeight:700})
+        },shapeCapMode?"📐 撮影をやめる":"📐 形状登録"),
         /* シミュレーション: このチャートを練習モードで開く (前日自動連結・保存なし) */
         analysisData && !simMode && ce("button",{
           onClick:function(){
@@ -13906,8 +13908,12 @@ function CaShapePickerModal(props){
           maxHeight:'min(85vh,620px)',overflow:'hidden'}},
         ce('div',{style:{padding:'12px 16px 10px',borderBottom:'1px solid #2a2a2a',
           display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0}},
-          ce('div',{style:{fontWeight:700,fontSize:14,color:'#fff'}},'どの形状に登録しますか？'),
-          ce('button',{onClick:onClose,
+          ce('div',null,
+            ce('div',{style:{fontWeight:700,fontSize:14,color:'#fff'}},'どの形状に登録しますか？'),
+            ce('div',{style:{fontSize:10.5,color:'#666',marginTop:2}},
+              '形状をタップすると登録されます（閉じても撮影範囲は残ります）')
+          ),
+          ce('button',{onClick:onClose,title:'閉じて範囲を選び直す',
             style:Object.assign({},BT,{background:'none',color:'#888',fontSize:18,padding:'0 4px'})},'✕')
         ),
         /* 撮影プレビュー */
