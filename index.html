@@ -17413,10 +17413,13 @@ function DraftLibrary(props){
                   });
                 }
                 var canDrag = (tickerSortMode==='custom');
+                /* 2026-07-07: 銘柄コード(名前→コード)を1回読み込み、名前の下に表示 */
+                var _tickerCodes = caLoadTickerCodes();
                 return displayedTickers.map(function(t){
                   var realIdx = tickers.indexOf(t);
                   var info = _tickerLatestDate(t, meta);
                   var cnt = info.count;
+                  var code = _tickerCodes[t]||'';
                   var dispLine2 = (cnt===0)
                     ? "(チャートなし)"
                     : (info.latestDate ? cnt+"件 · "+info.latestDate.slice(5) : cnt+"件");
@@ -17453,6 +17456,9 @@ function DraftLibrary(props){
                           /* 2026-07-07: 銘柄名は折り返して全文表示 (nowrap+ellipsisで「…」に切れていたのを解消) */
                           ce("div",{style:{fontSize:12,fontWeight:isS?700:400,color:isS?"#a5b4fc":"#ccc",
                             whiteSpace:"normal",wordBreak:"break-word",overflowWrap:"anywhere",lineHeight:1.25}},t),
+                          /* 2026-07-07: 銘柄コード番号 (設定済みのみ・名前の直下) */
+                          code&&ce("div",{style:{fontSize:10,fontWeight:600,color:isS?"#93c5fd":"#7f8a99",
+                            marginTop:1,fontVariantNumeric:"tabular-nums",letterSpacing:"0.03em"}},code),
                           ce("div",{style:{fontSize:10,color:isS?"#888":"#555",marginTop:1,
                             overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},dispLine2)
                         ),
