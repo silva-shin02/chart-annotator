@@ -15199,6 +15199,9 @@ function DraftLibrary(props){
   var s3=useState(false);           var adding=s3[0],setAdding=s3[1];
   var s4=useState('');              var newName=s4[0],setNewName=s4[1];
   var s4c=useState('');             var newCode=s4c[0],setNewCode=s4c[1];
+  /* 2026-07-07: 銘柄改名 (どの銘柄をインライン編集中か + 入力値) */
+  var s4r=useState(null);           var renamingTicker=s4r[0],setRenamingTicker=s4r[1];
+  var s4rv=useState('');            var renameValue=s4rv[0],setRenameValue=s4rv[1];
   var s5=useState(null);            var syncStatus=s5[0],setSyncStatus=s5[1];
   var s6=useState(null);            var dragOver=s6[0],setDragOver=s6[1];
   var s7=useState(false);           var showTrash=s7[0],setShowTrash=s7[1];
@@ -16267,6 +16270,92 @@ function DraftLibrary(props){
     caSaveDelTickers(dt);setDelTickers(dt);
     setNewName('');setNewCode('');setAdding(false);setSelTicker(n);
   }
+  /* 2026-07-07: 銘柄改名 — 名前をキーに紐づく全永続データを新名へ付け替える。
+     対象: 銘柄リスト / 各チャート(meta.ticker+FB) / 銘柄コード対応(再取込の紐づけ維持) /
+           銘柄メモ(ローカル+FB) / ゴミ箱チャート(+FB) / 削除銘柄リスト / チャート形状の登録 /
+           UI状態(選択中/展開状態)。表示名の付け替えのみで、EMA等チャートデータには非干渉。 */
+  function renameTicker(oldName, rawNew){
+    var newName=(rawNew||'').trim();
+    if(!newName||newName===oldName){ setRenamingTicker(null); setRenameValue(''); return; }
+    /* 既存の別銘柄・削除銘柄との衝突は禁止 (誤統合防止) */
+    if(tickers.indexOf(newName)>=0 || caLoadDelTickers().some(function(x){return x.name===newName;})){
+      window.caToast('「'+newName+'」は既にあります','error'); return;
+    }
+    var auth2=caAuthParam(fbCfg.secret);
+    var fbOn=!!(fbCfg.url&&!_fbIsPaused(fbCfg));
+    var draftsBase=makeDraftsBase(), trashBaseU=makeTrashBase();
+
+    /* ① 銘柄リスト (順序保持) */
+    var nt=tickers.map(function(x){return x===oldName?newName:x;});
+    setTickers(nt); caSaveTickers(nt); fbSyncTickers(nt);
+
+    /* ② チャート(meta.ticker) — 付け替え + FBは該当draftのみPATCH */
+    var curMeta=caLoadMeta();
+    var affected=curMeta.filter(function(m){return m.ticker===oldName;}).map(function(m){return m.id;});
+    var nm=curMeta.map(function(m){return m.ticker===oldName?Object.assign({},m,{ticker:newName}):m;});
+    caSaveMeta(nm); setMeta(nm);
+    if(fbOn&&draftsBase){
+      affected.forEach(function(id){
+        fetch(draftsBase+'/'+id+'.json'+auth2,{method:'PATCH',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({ticker:newName})}).catch(function(){});
+      });
+    }
+
+    /* ③ 銘柄コード対応 (コード→新名に移す＝取込時の逆引きを維持し再取込でも新名に入る) */
+    var codes=caLoadTickerCodes();
+    if(codes.hasOwnProperty(oldName)){ codes[newName]=codes[oldName]; delete codes[oldName]; caSaveTickerCodes(codes); }
+
+    /* ④ 銘柄メモ (ローカル + FB。旧キーは削除) */
+    var noteOld=caGetTickerNote(oldName);
+    if(noteOld){
+      caSetTickerNote(newName,noteOld); caSetTickerNote(oldName,'');
+      if(fbOn){
+        var nb=fbCfg.url.replace(/\/$/,'')+'/chart-annotator-ticker-notes/';
+        fetch(nb+encodeURIComponent(newName)+'.json'+auth2,{method:'PUT',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({note:noteOld,updatedAt:Date.now()})}).catch(function(){});
+        fetch(nb+encodeURIComponent(oldName)+'.json'+auth2,{method:'DELETE'}).catch(function(){});
+      }
+    }
+
+    /* ⑤ ゴミ箱内チャート(trash.ticker) */
+    var curTrash=caLoadTrash();
+    var trAff=curTrash.filter(function(m){return m.ticker===oldName;}).map(function(m){return m.id;});
+    if(trAff.length){
+      var ntr=curTrash.map(function(m){return m.ticker===oldName?Object.assign({},m,{ticker:newName}):m;});
+      caSaveTrash(ntr); setTrash(ntr);
+      if(fbOn&&trashBaseU){
+        trAff.forEach(function(id){
+          fetch(trashBaseU+'/'+id+'.json'+auth2,{method:'PATCH',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({ticker:newName})}).catch(function(){});
+        });
+      }
+    }
+
+    /* ⑥ 削除銘柄リスト (旧名がゴミ箱側に残っている場合) */
+    var dtl=caLoadDelTickers();
+    if(dtl.some(function(x){return x.name===oldName;})){
+      var ndt=dtl.map(function(x){return x.name===oldName?Object.assign({},x,{name:newName}):x;});
+      caSaveDelTickers(ndt); setDelTickers(ndt);
+    }
+
+    /* ⑦ チャート形状の登録 (denorm された ticker 表示名を更新) */
+    try{
+      caAliveShapeRegs().forEach(function(r){
+        if(r.ticker===oldName) caShapeRegUpsert(Object.assign({},r,{ticker:newName,ut:Date.now()}));
+      });
+    }catch(e){}
+
+    /* ⑧ UI状態 (選択中の銘柄・年月展開state) */
+    if(selTicker===oldName) setSelTicker(newName);
+    setExpandedYM(function(prev){
+      if(!prev||!prev[oldName])return prev;
+      var np=Object.assign({},prev); np[newName]=np[oldName]; delete np[oldName]; return np;
+    });
+
+    setRenamingTicker(null); setRenameValue('');
+    window.caToast('「'+oldName+'」→「'+newName+'」に改名'+(affected.length?('（'+affected.length+'件）'):''),'success');
+  }
+  function startRenameTicker(t){ setRenamingTicker(t); setRenameValue(t); }
   function deleteTicker(t){
     window.caConfirm('"'+t+'"を削除しますか？（チャートはゴミ箱に移動されます）',function(){
       var toDelete=meta.filter(function(m){return m.ticker===t;});
@@ -17331,14 +17420,15 @@ function DraftLibrary(props){
                     ? "(チャートなし)"
                     : (info.latestDate ? cnt+"件 · "+info.latestDate.slice(5) : cnt+"件");
                   var isS=selTicker===t;var isDO=dragOver===realIdx;
+                  var isRen=renamingTicker===t;
                   return ce("div",Object.assign({key:t,
                     ref: isS ? selTickerEntryRef : null,
-                    draggable:canDrag,
+                    draggable:canDrag&&!isRen,
                     style:{display:"flex",alignItems:"center",borderBottom:"1px solid #1e1e1e",
-                      background:isS?"#1e2a3a":isDO?"#1a1a3a":"transparent",
-                      borderLeft:isS?"3px solid #6366F1":isDO?"3px solid #6366F1":"3px solid transparent",
+                      background:isRen?"#12202e":isS?"#1e2a3a":isDO?"#1a1a3a":"transparent",
+                      borderLeft:(isS||isRen)?"3px solid #6366F1":isDO?"3px solid #6366F1":"3px solid transparent",
                       transition:"background .1s",opacity:dragSrcRef.current===realIdx?0.4:1}},
-                    canDrag?{
+                    (canDrag&&!isRen)?{
                       onDragStart:function(e){onDragStart(e,realIdx);},
                       onDragOver:function(e){onDragOver2(e,realIdx);},
                       onDrop:function(e){onDrop2(e,realIdx);},
@@ -17347,21 +17437,48 @@ function DraftLibrary(props){
                     ce("span",{style:{padding:"0 4px 0 6px",color:canDrag?"#444":"#222",fontSize:14,
                       cursor:canDrag?"grab":"default",
                       flexShrink:0,userSelect:"none",lineHeight:1}},"⠿"),
-                    ce("div",{onClick:function(){setSelTicker(t);},style:{flex:1,padding:"11px 6px 11px 4px",minWidth:0}},
-                      ce("div",{style:{fontSize:12,fontWeight:isS?700:400,color:isS?"#a5b4fc":"#ccc",
-                        overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},t),
-                      ce("div",{style:{fontSize:10,color:isS?"#888":"#555",marginTop:1,
-                        overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},dispLine2)
-                    ),
-                    canDrag && ce("div",{style:{display:"flex",flexDirection:"column",flexShrink:0,gap:1,padding:"0 3px"}},
+                    isRen
+                      ? ce("input",{value:renameValue,autoFocus:true,
+                          onClick:function(e){e.stopPropagation();},
+                          onChange:function(e){setRenameValue(e.target.value);},
+                          onKeyDown:function(e){
+                            if(e.key==="Enter")renameTicker(t,renameValue);
+                            else if(e.key==="Escape"){setRenamingTicker(null);setRenameValue('');}
+                          },
+                          style:{flex:1,minWidth:0,margin:"6px 4px 6px 2px",padding:"7px 8px",
+                            background:"#2a2a2a",border:"1px solid #6366F1",borderRadius:6,
+                            color:"#fff",fontSize:13,outline:"none"}})
+                      : ce("div",{onClick:function(){setSelTicker(t);},style:{flex:1,padding:"11px 6px 11px 4px",minWidth:0}},
+                          ce("div",{style:{fontSize:12,fontWeight:isS?700:400,color:isS?"#a5b4fc":"#ccc",
+                            overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},t),
+                          ce("div",{style:{fontSize:10,color:isS?"#888":"#555",marginTop:1,
+                            overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},dispLine2)
+                        ),
+                    (canDrag&&!isRen) && ce("div",{style:{display:"flex",flexDirection:"column",flexShrink:0,gap:1,padding:"0 3px"}},
                       ce("button",{onClick:function(e){e.stopPropagation();moveTicker(realIdx,-1);},
                         style:Object.assign({},BT,{fontSize:9,color:"#555",background:"none",padding:"1px 3px",lineHeight:1})},IS_TOUCH?"↑":""),
                       ce("button",{onClick:function(e){e.stopPropagation();moveTicker(realIdx,1);},
                         style:Object.assign({},BT,{fontSize:9,color:"#555",background:"none",padding:"1px 3px",lineHeight:1})},IS_TOUCH?"↓":"")
                     ),
-                    ce("button",{onClick:function(e){e.stopPropagation();deleteTicker(t);},
-                      style:Object.assign({},BT,{fontSize:11,color:"#555",padding:"4px 5px",
-                        background:"none",borderRadius:4,lineHeight:1,flexShrink:0})},"✕")
+                    /* 2026-07-07: 改名中は ✓保存 / それ以外は ✎改名 */
+                    isRen
+                      ? ce("button",{onClick:function(e){e.stopPropagation();renameTicker(t,renameValue);},
+                          title:"保存",
+                          style:Object.assign({},BT,{fontSize:12,color:"#86efac",padding:"4px 6px",
+                            background:"none",borderRadius:4,lineHeight:1,flexShrink:0,fontWeight:700})},"✓")
+                      : ce("button",{onClick:function(e){e.stopPropagation();startRenameTicker(t);},
+                          title:"銘柄名を変更",
+                          style:Object.assign({},BT,{fontSize:12,color:"#555",padding:"4px 5px",
+                            background:"none",borderRadius:4,lineHeight:1,flexShrink:0})},"✎"),
+                    /* 改名中は ✕ でキャンセル / それ以外は ✕ で削除 */
+                    isRen
+                      ? ce("button",{onClick:function(e){e.stopPropagation();setRenamingTicker(null);setRenameValue('');},
+                          title:"キャンセル",
+                          style:Object.assign({},BT,{fontSize:11,color:"#888",padding:"4px 6px",
+                            background:"none",borderRadius:4,lineHeight:1,flexShrink:0})},"✕")
+                      : ce("button",{onClick:function(e){e.stopPropagation();deleteTicker(t);},
+                          style:Object.assign({},BT,{fontSize:11,color:"#555",padding:"4px 5px",
+                            background:"none",borderRadius:4,lineHeight:1,flexShrink:0})},"✕")
                   );
                 });
             })()
