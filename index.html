@@ -17374,8 +17374,9 @@ function DraftLibrary(props){
 
     /* ── 通常ビュー ── */
     !showTrash&&!showSearch&&!showImport&&ce("div",{style:{display:"flex",flex:1,overflow:"hidden"}},
-      /* ticker list (2026-05-03: ソートヘッダ + スクロール領域 構造に改訂) */
-      ce("div",{style:{width:IS_TOUCH?130:155,background:"#161616",borderRight:"1px solid #2a2a2a",
+      /* ticker list (2026-05-03: ソートヘッダ + スクロール領域 構造に改訂)
+         2026-07-07: 幅を広げ、銘柄名は折り返し表示(下記)でフルネームが切れないように */
+      ce("div",{style:{width:IS_TOUCH?165:195,background:"#161616",borderRight:"1px solid #2a2a2a",
         flexShrink:0,display:"flex",flexDirection:"column"}},
         /* ソートUIヘッダ (固定) */
         ce("div",{style:{padding:"6px 6px 5px",borderBottom:"1px solid #2a2a2a",flexShrink:0}},
@@ -17448,9 +17449,10 @@ function DraftLibrary(props){
                           style:{flex:1,minWidth:0,margin:"6px 4px 6px 2px",padding:"7px 8px",
                             background:"#2a2a2a",border:"1px solid #6366F1",borderRadius:6,
                             color:"#fff",fontSize:13,outline:"none"}})
-                      : ce("div",{onClick:function(){setSelTicker(t);},style:{flex:1,padding:"11px 6px 11px 4px",minWidth:0}},
+                      : ce("div",{onClick:function(){setSelTicker(t);},style:{flex:1,padding:"9px 6px 9px 4px",minWidth:0}},
+                          /* 2026-07-07: 銘柄名は折り返して全文表示 (nowrap+ellipsisで「…」に切れていたのを解消) */
                           ce("div",{style:{fontSize:12,fontWeight:isS?700:400,color:isS?"#a5b4fc":"#ccc",
-                            overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},t),
+                            whiteSpace:"normal",wordBreak:"break-word",overflowWrap:"anywhere",lineHeight:1.25}},t),
                           ce("div",{style:{fontSize:10,color:isS?"#888":"#555",marginTop:1,
                             overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},dispLine2)
                         ),
