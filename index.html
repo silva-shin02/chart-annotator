@@ -142,6 +142,10 @@ var ce         = R.createElement;   // ← h ではなく ce を使う
 
 var IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
 var HAS_HOVER = typeof matchMedia!=='undefined' && matchMedia('(hover: hover)').matches;
+/* 2026-07-26: 文字サイズスライダーの可動域。実際の上下限 (1〜200) より狭い「実用域」だけを
+   スライダーに割り当てて指で狙いやすくする。域外へは −/+ ボタンで到達できる */
+var FS_SLIDER_MIN = 8, FS_SLIDER_MAX = 72;
+function fsSliderVal(v){ return Math.min(FS_SLIDER_MAX, Math.max(FS_SLIDER_MIN, v|0)); }
 /* C-uaxis+C6+C7: 過去chartと現在chartを同一キャンバスに連結表示 (旧左右分離レイアウトはC7で削除) */
 /* C8a: 隙間幅はローソク足1本分 (1m=1分, 5m=5分)。昼休み(60分)と夜間gapの両方に適用 */
 function getCandleGap(tf){ return tf==='1m'?1:5; }
@@ -8256,6 +8260,11 @@ function ImageAnnotator(props){
             ce("span",{style:{fontSize:10,color:"#666",flexShrink:0}},"サイズ"),
             ce("span",{onClick:function(){var v=Math.max(1,fontSize-1);setFontSize(v);setFontSizeStr(String(v));},
               style:{padding:"2px 7px",borderRadius:5,cursor:"pointer",fontSize:12,fontWeight:700,background:"#2a2a2a",color:"#fff",userSelect:"none"}},"−"),
+            /* 2026-07-26: サイズスライダー (編集中ツールバーと同じ実用域 8〜72。域外は −/+ と数値入力で到達) */
+            ce("input",{type:"range",min:FS_SLIDER_MIN,max:FS_SLIDER_MAX,step:1,
+              value:fsSliderVal(fontSize),
+              onChange:function(e){var v=parseInt(e.target.value,10);setFontSize(v);setFontSizeStr(String(v));},
+              style:{width:IS_TOUCH?120:110,accentColor:"#a5b4fc",flexShrink:0}}),
             ce("input",{value:fontSizeStr,
               onChange:function(e){setFontSizeStr(e.target.value);var n=parseInt(e.target.value);if(!isNaN(n)&&n>=1&&n<=200)setFontSize(n);},
               onBlur:function(){var n=parseInt(fontSizeStr);var v=isNaN(n)?fontSize:Math.min(200,Math.max(1,n));setFontSize(v);setFontSizeStr(String(v));},
@@ -9645,6 +9654,24 @@ function ImageAnnotator(props){
           window.addEventListener('touchend',onEnd);
           window.addEventListener('touchcancel',onEnd);
         }
+        /* 2026-07-26: フォントサイズ変更の単一入口 (−/+ とスライダー共用)。
+           サイズを変えたら textarea の実寸を測り直す — スライダーは一気に飛ぶので、
+           onInput 時と同じ幅/高さ再計算をしないと文字が枠から見切れる */
+        function applyAtiFontSize(v){
+          var nv=Math.min(200,Math.max(1,Math.round(v)));
+          if(!isFinite(nv))return;
+          setAnalysisTextInput(Object.assign({},analysisTextInputRef.current||ati,{fontSize:nv}));
+          requestAnimationFrame(function(){
+            var el=analysisTextareaRef.current; if(!el)return;
+            if(!ctrlBoxW){
+              el.style.width="auto";
+              el.style.width=Math.max(50,Math.min(maxW,el.scrollWidth+8))+"px";
+            }
+            el.style.height="auto";
+            el.style.height=el.scrollHeight+"px";
+            syncAtiOverlays();
+          });
+        }
         return ce(Fragment,null,
           /* 全画面クリックで確定 (open直後400msは暴発ガード — タブレットでタッチ合成イベントが即confirmするのを防ぐ) */
           ce("div",{
@@ -9665,7 +9692,9 @@ function ImageAnnotator(props){
               var w=el.offsetWidth, h=el.offsetHeight;
               if(!w||!vw)return;
               var L=Math.min(Math.max(4,sx), Math.max(4, vw-w-4));
-              var T=Math.max(4, sy-46);
+              /* 2026-07-26: 2段化で高さが変わるため実寸から算出 (底辺をテキストの 6px 上に合わせる)。
+                 旧 sy-46 は1段(高さ約40px)前提の固定値だった */
+              var T=Math.max(4, sy-h-6);
               if(T+h>vh-4) T=Math.max(4, vh-h-4);
               el.style.left=L+"px";
               el.style.top=T+"px";
@@ -9673,13 +9702,16 @@ function ImageAnnotator(props){
             style:{
               position:"fixed",
               left:Math.max(4,sx),top:Math.max(4,sy-46),
-              zIndex:11003,display:"flex",gap:5,alignItems:"center",
+              zIndex:11003,display:"flex",flexDirection:"column",gap:6,alignItems:"stretch",
               background:"rgba(18,18,18,.96)",borderRadius:10,
               padding:"6px 10px",boxShadow:"0 4px 20px rgba(0,0,0,.6)",
               backdropFilter:"blur(10px)",maxWidth:"calc(100vw - 8px)",
               overflowX:"auto",WebkitOverflowScrolling:"touch"
             }
           },
+          /* 2026-07-26: 2段レイアウト — 1段目=色、2段目=サイズ(スライダー付)/太字/確定。
+             1行に並べると横幅が画面を超えて確定ボタンが見切れるため段組みにした */
+          ce("div",{style:{display:"flex",gap:5,alignItems:"center",minWidth:"max-content"}},
             ce("span",{style:{fontSize:10,color:"#888",flexShrink:0}},"色"),
             quickColors.map(function(qc,qi){
               var isA=ati.color===qc;
@@ -9722,17 +9754,29 @@ function ImageAnnotator(props){
               ce("input",{type:"color",value:ati.color||"#ff3b30",
                 onChange:function(e){setAnalysisTextInput(Object.assign({},analysisTextInputRef.current||ati,{color:e.target.value}));},
                 style:{position:"absolute",opacity:0,width:1,height:1}})
-            ),
-            ce("div",{style:{width:1,height:16,background:"#444",margin:"0 2px"}}),
+            )
+          ),
+          ce("div",{style:{display:"flex",gap:5,alignItems:"center",minWidth:"max-content",
+              borderTop:"1px solid #2a2a2a",paddingTop:6}},
             ce("span",{style:{fontSize:10,color:"#888",flexShrink:0}},"サイズ"),
             ce("span",{
               onMouseDown:function(e){e.preventDefault();e.stopPropagation();},
-              onClick:function(){setAnalysisTextInput(Object.assign({},analysisTextInputRef.current||ati,{fontSize:Math.max(1,(ati.fontSize||15)-1)}));if(analysisTextareaRef.current)analysisTextareaRef.current.focus();},
+              onClick:function(){applyAtiFontSize((ati.fontSize||15)-1);if(analysisTextareaRef.current)analysisTextareaRef.current.focus();},
               style:{padding:"2px 7px",borderRadius:4,cursor:"pointer",fontSize:12,fontWeight:700,background:"#2a2a2a",color:"#fff",userSelect:"none",flexShrink:0}},"−"),
+            /* 2026-07-26: サイズスライダー。親の onMouseDown が preventDefault するとドラッグが死ぬので
+               ここで stopPropagation して親へ上げない。代わりに離した時に textarea へフォーカスを戻す */
+            ce("input",{type:"range",min:FS_SLIDER_MIN,max:FS_SLIDER_MAX,step:1,
+              value:fsSliderVal(ati.fontSize||15),
+              onMouseDown:function(e){e.stopPropagation();},
+              onTouchStart:function(e){e.stopPropagation();},
+              onChange:function(e){applyAtiFontSize(parseInt(e.target.value,10));},
+              onMouseUp:function(){if(analysisTextareaRef.current)analysisTextareaRef.current.focus();},
+              onTouchEnd:function(){if(analysisTextareaRef.current)analysisTextareaRef.current.focus();},
+              style:{width:IS_TOUCH?150:140,accentColor:"#6366F1",flexShrink:0,margin:"0 2px"}}),
             ce("span",{style:{fontSize:12,color:"#ccc",minWidth:22,textAlign:"center",flexShrink:0}},ati.fontSize||15),
             ce("span",{
               onMouseDown:function(e){e.preventDefault();e.stopPropagation();},
-              onClick:function(){setAnalysisTextInput(Object.assign({},analysisTextInputRef.current||ati,{fontSize:Math.min(200,(ati.fontSize||15)+1)}));if(analysisTextareaRef.current)analysisTextareaRef.current.focus();},
+              onClick:function(){applyAtiFontSize((ati.fontSize||15)+1);if(analysisTextareaRef.current)analysisTextareaRef.current.focus();},
               style:{padding:"2px 7px",borderRadius:4,cursor:"pointer",fontSize:12,fontWeight:700,background:"#2a2a2a",color:"#fff",userSelect:"none",flexShrink:0}},"+"),
             ce("span",{
               onMouseDown:function(e){e.preventDefault();e.stopPropagation();},
@@ -9756,7 +9800,7 @@ function ImageAnnotator(props){
               onClick:cancelAnalysisText,
               style:{padding:"4px 10px",fontSize:12,background:"#2a2a2a",color:"#aaa",
                 border:"none",borderRadius:6,cursor:"pointer",flexShrink:0}},"✕")
-          ),
+          )),
           /* textarea — C9後: 入力中は枠線不要、テキスト幅に合わせて自動拡張。既存編集時は boxW controlled
              2026-04-22: boxW未指定の既存テキストは 初期化時に measureText で実幅を測って設定
              (maxWidth による勝手な折返しを防止) */
