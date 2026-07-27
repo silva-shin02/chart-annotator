@@ -15289,6 +15289,32 @@ function DraftLibrary(props){
     }
     pin();
   },[]);  /* 再マウント(=エディタから戻った)時に1回 */
+  /* 2026-07-26: 「↑ 一番上へ」フロートボタン — 一覧を少し下へスクロールした時だけ出す。
+     スクロール容器は window ではなく mainScrollRef (flex:1/overflowY:auto) なのでそちらを監視する */
+  var CA_TOPBTN_SHOW_AT=300;
+  var sTOP=useState(false);         var showTopBtn=sTOP[0],setShowTopBtn=sTOP[1];
+  useEffect(function(){
+    var el=mainScrollRef.current; if(!el)return;
+    var raf=0;
+    function onScroll(){
+      if(raf)return;                                   /* 1フレーム1回に間引き (iPadの慣性スクロール対策) */
+      raf=requestAnimationFrame(function(){
+        raf=0;
+        var el2=mainScrollRef.current; if(!el2)return;
+        setShowTopBtn(el2.scrollTop>CA_TOPBTN_SHOW_AT); /* 同値なら React 側で再描画されない */
+      });
+    }
+    el.addEventListener('scroll',onScroll,{passive:true});
+    onScroll();                                        /* 位置復元で既に下にいる場合に備えて初回も判定 */
+    return function(){
+      el.removeEventListener('scroll',onScroll);
+      if(raf&&typeof cancelAnimationFrame==='function')cancelAnimationFrame(raf);
+    };
+  },[]);
+  function scrollLibToTop(){
+    var el=mainScrollRef.current; if(!el)return;
+    try{ el.scrollTo({top:0,behavior:'smooth'}); }catch(e){ el.scrollTop=0; }
+  }
   /* 2026-05-03: 銘柄リスト用ソートモード (左サイド select) */
   var CA_TICKER_SORT_KEY='ca_ticker_sort_v1';
   var TICKER_SORT_MODES=[
@@ -17694,6 +17720,17 @@ function DraftLibrary(props){
             })()
       )
       ),
+      /* 2026-07-26: 「↑ 一番上へ」フロートボタン。DraftLibrary のルートが position:fixed/zIndex:9000 なので
+         この中の zIndex は各モーダル(9500〜)より下にしておけば重ならない */
+      showTopBtn&&ce("button",{
+        onClick:scrollLibToTop,
+        title:"チャート一覧の先頭へ戻る",
+        style:Object.assign({},BT,{position:"fixed",right:18,bottom:18,zIndex:50,
+          display:"flex",alignItems:"center",gap:5,
+          padding:IS_TOUCH?"11px 17px":"9px 15px",fontSize:IS_TOUCH?13:12,fontWeight:700,
+          background:"#2563eb",color:"#fff",border:"1px solid #60a5fa",borderRadius:22,
+          boxShadow:"0 4px 14px rgba(0,0,0,.5)"})
+      },"↑ 一番上へ"),
       /* 2026-04-30: パターン検索モーダル */
       ce(PatternSearchModal,{
         open:showPatternSearch, meta:meta, fbCfg:fbCfg, tickers:tickers,
