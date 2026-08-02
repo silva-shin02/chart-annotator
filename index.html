@@ -12125,11 +12125,13 @@ function _caSimMonthOf(m){
   var d=_caResolveMetaDate(m);
   return /^\d{4}-\d{2}/.test(d)?d.slice(0,7):'';
 }
-/* 2026-08-02: 'YYYY-MM' → '2026年6月' */
-function _caSimMonLabel(mo){
-  var p=String(mo||'').split('-');
-  if(p.length<2)return String(mo||'');
-  return p[0]+'年'+String(Number(p[1]))+'月';
+/* 2026-08-02: 抽選期間ラベル。'2026-06'→'2026年6月' / '2026'→'2026年' / ''→'' */
+function _caSimPeriodLabel(p){
+  var s=String(p||'');
+  var m=s.match(/^(\d{4})-(\d{2})$/);
+  if(m)return m[1]+'年'+String(Number(m[2]))+'月';
+  if(/^\d{4}$/.test(s))return s+'年';
+  return s;
 }
 /* スタンプストロークの実効テキスト (snipId参照 → 定義テキスト、編集済みは backup) */
 function caSnipEffText(s, byId){
@@ -14583,13 +14585,27 @@ function CaSimPicker(props){
   var tickerList=Object.keys(tickerSet).sort();
   var sT=useState(initialTicker&&tickerSet[initialTicker]?initialTicker:(tickerList[0]||null));
   var selT=sT[0],setSelT=sT[1];
-  /* 2026-08-02: 月(YYYY-MM)で絞り込み。'' = 全期間。銘柄を変えてその月が無ければ自動で全期間に戻る */
+  /* 2026-08-02: 年→月の2段で絞り込み。selY='YYYY'(''=全期間) / selM='MM'(''=その年ぜんぶ)。
+     銘柄を変えてその年/月が無ければ自動で1段上に戻る (effY/effM)。
+     抽選・一覧に渡す実効期間 effP は '' | 'YYYY' | 'YYYY-MM' の前方一致キー。 */
+  var sY=useState(''); var selY=sY[0],setSelY=sY[1];
   var sM=useState(''); var selM=sM[0],setSelM=sM[1];
   var ofTicker=meta.filter(function(m){return m.ticker===selT;});
-  var monCnt={}; ofTicker.forEach(function(m){var mo=_caSimMonthOf(m); if(mo)monCnt[mo]=(monCnt[mo]||0)+1;});
-  var monList=Object.keys(monCnt).sort().reverse();
-  var effM=(selM&&monCnt[selM])?selM:'';
-  var charts=ofTicker.filter(function(m){return !effM||_caSimMonthOf(m)===effM;}).sort(function(a,b){
+  var yrCnt={},ymCnt={};
+  ofTicker.forEach(function(m){
+    var mo=_caSimMonthOf(m); if(!mo)return;
+    yrCnt[mo.slice(0,4)]=(yrCnt[mo.slice(0,4)]||0)+1;
+    ymCnt[mo]=(ymCnt[mo]||0)+1;
+  });
+  var yrList=Object.keys(yrCnt).sort().reverse();
+  var effY=(selY&&yrCnt[selY])?selY:'';
+  var monList=effY?Object.keys(ymCnt).filter(function(k){return k.slice(0,4)===effY;}).sort().reverse():[];
+  var effM=(effY&&selM&&ymCnt[effY+'-'+selM])?selM:'';
+  var effP=effY?(effM?(effY+'-'+effM):effY):'';
+  var charts=ofTicker.filter(function(m){
+    if(!effP)return true;
+    var mo=_caSimMonthOf(m); return !!mo&&mo.indexOf(effP)===0;
+  }).sort(function(a,b){
     var da=_effDate(a),db=_effDate(b);
     if(da&&db)return db.localeCompare(da);
     if(da)return -1; if(db)return 1;
@@ -14621,34 +14637,50 @@ function CaSimPicker(props){
                   background:on?"#ea580c":"#2a2a2a",color:on?"#fff":"#bbb"})},tk);
             })
         ),
-        /* 2026-08-02: 月セレクタ (この銘柄に実在する年月だけ・新しい順)。ランダム抽選と日付一覧の両方に効く */
-        selT&&monList.length>0&&ce("div",{style:{padding:"9px 14px",borderBottom:"1px solid #2a2a2a",display:"flex",gap:6,
+        /* 2026-08-02: 年セレクタ (この銘柄に実在する年だけ・新しい順)。ランダム抽選と日付一覧の両方に効く */
+        selT&&yrList.length>0&&ce("div",{style:{padding:"9px 14px",borderBottom:"1px solid #2a2a2a",display:"flex",gap:6,
           alignItems:"center",flexWrap:"wrap",flexShrink:0,maxHeight:92,overflowY:"auto"}},
-          ce("span",{style:{fontSize:10,fontWeight:700,color:"#777",flexShrink:0,marginRight:2}},"月"),
-          ce("button",{onClick:function(){setSelM('');},
+          ce("span",{style:{fontSize:10,fontWeight:700,color:"#777",flexShrink:0,marginRight:2,width:14}},"年"),
+          ce("button",{onClick:function(){setSelY('');setSelM('');},
             style:Object.assign({},BT2,{fontSize:11,fontWeight:700,padding:"4px 10px",borderRadius:7,
-              background:effM===''?"#ea580c":"#2a2a2a",color:effM===''?"#fff":"#bbb"})},"全期間"),
-          monList.map(function(mo){
-            var on=(mo===effM);
-            return ce("button",{key:mo,onClick:function(){setSelM(on?'':mo);},
+              background:effY===''?"#ea580c":"#2a2a2a",color:effY===''?"#fff":"#bbb"})},"全期間"),
+          yrList.map(function(y){
+            var on=(y===effY);
+            return ce("button",{key:y,onClick:function(){if(on){setSelY('');setSelM('');}else{setSelY(y);setSelM('');}},
               style:Object.assign({},BT2,{fontSize:11,fontWeight:700,padding:"4px 10px",borderRadius:7,
                 background:on?"#ea580c":"#2a2a2a",color:on?"#fff":"#bbb"})},
-              _caSimMonLabel(mo)+" ("+monCnt[mo]+")");
+              y+"年 ("+yrCnt[y]+")");
+          })
+        ),
+        /* 2026-08-02: 月セレクタ (年を選んだときだけ表示。その年に実在する月だけ・新しい順) */
+        selT&&effY&&monList.length>0&&ce("div",{style:{padding:"9px 14px",borderBottom:"1px solid #2a2a2a",display:"flex",gap:6,
+          alignItems:"center",flexWrap:"wrap",flexShrink:0,maxHeight:92,overflowY:"auto"}},
+          ce("span",{style:{fontSize:10,fontWeight:700,color:"#777",flexShrink:0,marginRight:2,width:14}},"月"),
+          ce("button",{onClick:function(){setSelM('');},
+            style:Object.assign({},BT2,{fontSize:11,fontWeight:700,padding:"4px 10px",borderRadius:7,
+              background:effM===''?"#ea580c":"#2a2a2a",color:effM===''?"#fff":"#bbb"})},
+            effY+"年すべて ("+yrCnt[effY]+")"),
+          monList.map(function(mo){
+            var mm=mo.slice(5), on=(mm===effM);
+            return ce("button",{key:mo,onClick:function(){setSelM(on?'':mm);},
+              style:Object.assign({},BT2,{fontSize:11,fontWeight:700,padding:"4px 10px",borderRadius:7,
+                background:on?"#ea580c":"#2a2a2a",color:on?"#fff":"#bbb"})},
+              String(Number(mm))+"月 ("+ymCnt[mo]+")");
           })
         ),
         /* 2026-06-29→2026-07-03: ランダムな日で練習 (銘柄を選んでから1日を抽選・未シミュの日を優先。日付は表示)
-           2026-08-02: 月を選んでいればその月の中だけで抽選 */
+           2026-08-02: 年/年月を選んでいればその期間の中だけで抽選 */
         selT&&charts.length>0&&ce("div",{style:{padding:"12px 14px",borderBottom:"1px solid #2a2a2a",flexShrink:0}},
-          ce("button",{onClick:function(){if(props.onPickRandom)props.onPickRandom(selT,effM);},
+          ce("button",{onClick:function(){if(props.onPickRandom)props.onPickRandom(selT,effP);},
             style:Object.assign({},BT2,{width:"100%",display:"flex",alignItems:"center",gap:10,
               background:"#7c2d12",border:"1px solid #9a3412",borderRadius:10,padding:"11px 12px",textAlign:"left"})},
             ce("span",{style:{fontSize:20,flexShrink:0}},"🎲"),
             ce("span",{style:{flex:1}},
               ce("span",{style:{display:"block",fontSize:13,fontWeight:700,color:"#fed7aa"}},
-                "ランダムな日で練習"+(effM?("（"+_caSimMonLabel(effM)+"）"):"")),
+                "ランダムな日で練習"+(effP?("（"+_caSimPeriodLabel(effP)+"）"):"")),
               ce("span",{style:{display:"block",fontSize:10,color:"#fdba74",marginTop:2}},
-                effM
-                  ?(selT+" の "+_caSimMonLabel(effM)+" 全"+charts.length+"日から、まだやっていない日を優先して1日を抽選")
+                effP
+                  ?(selT+" の "+_caSimPeriodLabel(effP)+" 全"+charts.length+"日から、まだやっていない日を優先して1日を抽選")
                   :(selT+" の保有チャートから、まだやっていない日を優先して1日を抽選"))
             ),
             ce("span",{style:{fontSize:12,fontWeight:700,color:"#fff",border:"1px solid #fdba74",borderRadius:8,padding:"7px 12px",flexShrink:0}},"スタート")
@@ -14659,7 +14691,7 @@ function CaSimPicker(props){
         ce("div",{style:{flex:1,overflowY:"auto",padding:14,display:"flex",flexWrap:"wrap",gap:10,alignContent:"flex-start"}},
           charts.length===0
             ?ce("div",{style:{width:"100%",textAlign:"center",color:"#888",fontSize:14,paddingTop:30}},
-              effM?(_caSimMonLabel(effM)+" のチャートがありません"):"この銘柄のチャートがありません")
+              effP?(_caSimPeriodLabel(effP)+" のチャートがありません"):"この銘柄のチャートがありません")
             :charts.map(function(m){
               var dd=_effDate(m)||'(日付不明)';
               return ce("div",{key:m.id,onClick:function(){onPick(m);},
@@ -14697,11 +14729,11 @@ function SimRevealModal(props){
           boxShadow:"0 24px 64px rgba(0,0,0,.8)",border:"1px solid #2a2a2a"}},
         ce("div",{style:{fontSize:13,color:"#888",marginBottom:6}},"📅 この日"),
         ce("div",{style:{fontSize:20,fontWeight:700,color:"#fff",marginBottom:4}},ans.ticker||''),
-        ce("div",{style:{fontSize:18,fontWeight:700,color:"#fed7aa",marginBottom:ans.month?6:18}},
+        ce("div",{style:{fontSize:18,fontWeight:700,color:"#fed7aa",marginBottom:ans.period?6:18}},
           dd+(ans.date?_dowLabel(ans.date):'')),
-        /* 2026-08-02: 月を絞って始めた練習は、リロールの抽選範囲を明示 */
-        ans.month&&ce("div",{style:{fontSize:11,color:"#888",marginBottom:16}},
-          "🎲 抽選範囲: "+_caSimMonLabel(ans.month)),
+        /* 2026-08-02: 年/年月を絞って始めた練習は、リロールの抽選範囲を明示 */
+        ans.period&&ce("div",{style:{fontSize:11,color:"#888",marginBottom:16}},
+          "🎲 抽選範囲: "+_caSimPeriodLabel(ans.period)),
         ce("div",{style:{display:"flex",flexDirection:"column",gap:8}},
           ce("button",{onClick:onRerollSame,
             style:{padding:"11px 0",fontSize:13,fontWeight:700,border:"none",borderRadius:10,
@@ -17806,8 +17838,8 @@ function DraftLibrary(props){
         initialTicker:selTicker||null,
         onPick:function(m){setSimPickerOpen(false);startSimulation(m);},
         /* 2026-06-29: 銘柄を選んでランダムな日でブラインド練習 (App側で抽選/起動)
-           2026-08-02: mo='YYYY-MM' (''=全期間) を渡して月内で抽選 */
-        onPickRandom:function(tk,mo){setSimPickerOpen(false);if(props.onStartBlindSim)props.onStartBlindSim(tk,mo);},
+           2026-08-02: pd='YYYY' / 'YYYY-MM' (''=全期間) を渡してその期間内で抽選 */
+        onPickRandom:function(tk,pd){setSimPickerOpen(false);if(props.onStartBlindSim)props.onStartBlindSim(tk,pd);},
         onClose:function(){setSimPickerOpen(false);}
       }),
       /* 2026-06-18: マルチ表示モーダル (似た形/手動・最大16分割) */
@@ -18014,13 +18046,14 @@ function App(){
   var fileRef=useRef(null);
   /* 2026-06-29: 指定銘柄の保有チャートから1日をランダム抽選し、ブラインド練習モードで起動。
      avoidId を渡すと直前の日を避ける(他に日がある場合)。保存は一切しない。
-     2026-08-02: month('YYYY-MM') を渡すとその月の中だけで抽選。'' / 未指定なら全期間(従来どおり)。 */
-  function launchBlindSim(ticker, avoidId, month){
+     2026-08-02: period を渡すとその期間の中だけで抽選。'YYYY'=その年 / 'YYYY-MM'=その年月
+     (年月キーの前方一致で判定)。'' / 未指定なら全期間(従来どおり)。 */
+  function launchBlindSim(ticker, avoidId, period){
     if(!ticker)return;
-    var mo=month||'';
+    var pd=period||'';
     var all=caLoadMeta().filter(function(m){return m.ticker===ticker;});
-    if(mo)all=all.filter(function(m){return _caSimMonthOf(m)===mo;});
-    if(!all.length){try{window.caToast&&window.caToast('「'+ticker+'」'+(mo?('の'+_caSimMonLabel(mo)):'')+'のチャートがありません','error');}catch(e){}return;}
+    if(pd)all=all.filter(function(m){var mo=_caSimMonthOf(m); return !!mo&&mo.indexOf(pd)===0;});
+    if(!all.length){try{window.caToast&&window.caToast('「'+ticker+'」'+(pd?('の'+_caSimPeriodLabel(pd)):'')+'のチャートがありません','error');}catch(e){}return;}
     var pool=all;
     if(avoidId&&all.length>1){var f=all.filter(function(x){return x.id!==avoidId;});if(f.length)pool=f;}
     /* 2026-07-03: まだシミュしていない日を優先。全部やり切っていたら通常ランダム(1セッション1回だけ通知)。 */
@@ -18030,15 +18063,15 @@ function App(){
     if(_fresh.length){ m=_fresh[Math.floor(Math.random()*_fresh.length)]; }
     else {
       m=pool[Math.floor(Math.random()*pool.length)];
-      var _exKey=ticker+'|'+mo;   /* 2026-08-02: 「やり切った」通知は銘柄×月ごと */
+      var _exKey=ticker+'|'+pd;   /* 2026-08-02: 「やり切った」通知は銘柄×期間ごと */
       if(!_caSimExhaustNotified[_exKey]){
         _caSimExhaustNotified[_exKey]=true;
-        try{window.caToast&&window.caToast('「'+ticker+'」'+(mo?('の'+_caSimMonLabel(mo)):'')+'は全'+all.length+'日をシミュ済み。以降はランダムに出します');}catch(e){}
+        try{window.caToast&&window.caToast('「'+ticker+'」'+(pd?('の'+_caSimPeriodLabel(pd)):'')+'は全'+all.length+'日をシミュ済み。以降はランダムに出します');}catch(e){}
       }
     }
     function launch(d){
       if(!(d&&d.analysisData)){try{window.caToast&&window.caToast('このチャートにはデータがありません','error');}catch(e){}return;}
-      var ans={ticker:ticker, date:(d.analysisData.date||''), name:m.name||'', id:m.id, month:mo};
+      var ans={ticker:ticker, date:(d.analysisData.date||''), name:m.name||'', id:m.id, period:pd};
       caMarkSimulated(m.id);   /* この日を「シミュ済み」に記録(Firebaseあれば同期) */
       setSimReveal(null);
       /* 2026-07-03: ブラインド廃止=名前も隠さず表示(_nameを実名に)。日付表示は hideDate=false 側で制御。 */
@@ -18250,7 +18283,7 @@ function App(){
       onOpenNotepad:function(){setShowNotepad(true);},
       onOpenTagManager:function(){setShowTagManager(true);},
       /* 2026-06-29: 銘柄を選んでランダムな日でブラインド練習 / 別銘柄リロール時のピッカー再オープン */
-      onStartBlindSim:function(tk,mo){launchBlindSim(tk,null,mo);},
+      onStartBlindSim:function(tk,pd){launchBlindSim(tk,null,pd);},
       autoOpenSimPicker:autoOpenSimPicker,
       onConsumeAutoOpenSimPicker:function(){setAutoOpenSimPicker(false);}
     }),
@@ -18269,8 +18302,8 @@ function App(){
     /* 2026-06-29: ブラインド練習の正解公開＋リロール */
     simReveal&&ce(SimRevealModal,{
       ans:simReveal,
-      /* 2026-08-02: 月を指定して始めた練習は、リロールも同じ月の中から出す */
-      onRerollSame:function(){var a=simReveal;setSimReveal(null);launchBlindSim(a.ticker,a.id,a.month);},
+      /* 2026-08-02: 年/年月を指定して始めた練習は、リロールも同じ期間の中から出す */
+      onRerollSame:function(){var a=simReveal;setSimReveal(null);launchBlindSim(a.ticker,a.id,a.period);},
       onPickAnother:function(){setSimReveal(null);setAutoOpenSimPicker(true);},
       /* 2026-07-03: この日の分析を始める → 実チャートを通常編集で開く */
       onStartAnalysis:function(){startDayAnalysis(simReveal);},
