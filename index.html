@@ -705,9 +705,11 @@ var CA_DRAW_DEFAULTS_KEY='ca_draw_defaults_v1';
 var CA_PEN_ONLY_KEY='ca_pen_only_v1';
 /* 2026-07-07: 価格軸グリッドの最小刻み (5 or 10円)。既定10=従来。5でグリッド線/ラベルを5円刻みで表示 */
 var CA_PRICE_GRID_STEP_KEY='ca_price_grid_step_v1';
+/* 2026-08-03: シミュ開始時に「寄り付きから何分ぶん」を開示済みにしておくか (分)。0=従来の0本から。既定15 */
+var CA_SIM_START_MIN_KEY='ca_sim_start_min_v1';
 var CA_SYNC_PREF_KEYS=[CA_PRICE_PX_KEY,CA_AUTO_PAN_KEY,CA_CHART_BG_KEY,CA_TICKER_CODES_KEY,
   CA_INDICATOR_VIS_KEY,CA_FIT_MODE_KEY,CA_DEFAULT_TF_KEY,CA_DRAW_DEFAULTS_KEY,CA_PEN_ONLY_KEY,
-  CA_PRICE_GRID_STEP_KEY,
+  CA_PRICE_GRID_STEP_KEY,CA_SIM_START_MIN_KEY,
   'ca_search_words_v1','scalping_annot_presets_v1','annot_quickcolors_v1'];
 var CA_PREF_EVENTS={};
 CA_PREF_EVENTS[CA_PRICE_PX_KEY]='ca_price_px_changed';
@@ -1019,6 +1021,24 @@ function caSaveDefaultTf(t){
   var s=(t==='5m'||t==='stack')?t:'1m';
   try{localStorage.setItem(CA_DEFAULT_TF_KEY,s);}catch(e){caStorageWarn();}
   caPrefPush(CA_DEFAULT_TF_KEY);
+}
+/* 2026-08-03: シミュ起動時、寄り付き(当日足の先頭)から何分ぶんを開示済みで始めるか。
+   0=従来どおり0本から。既定15(=寄り15分)。時計の絶対時刻ではなく先頭の足からの相対分。 */
+function caLoadSimStartMin(){
+  try{
+    var v=localStorage.getItem(CA_SIM_START_MIN_KEY);
+    if(v===null||v==='')return 15;
+    var n=parseInt(v,10);
+    if(isNaN(n)||n<0)return 15;
+    return n>360?360:n;
+  }catch(e){return 15;}
+}
+function caSaveSimStartMin(n){
+  var v=parseInt(n,10);
+  if(isNaN(v)||v<0)v=0; else if(v>360)v=360;
+  try{localStorage.setItem(CA_SIM_START_MIN_KEY,String(v));}catch(e){caStorageWarn();}
+  caPrefPush(CA_SIM_START_MIN_KEY);
+  return v;
 }
 /* 2026-06-29: 描画の既定値 (色/線幅/不透明度/フォント)。エディタ起動時の初期値に使う */
 function caLoadDrawDefaults(){
@@ -1541,6 +1561,9 @@ function DisplaySettingsModal(props){
   /* 2026-06-29 C4: 初期表示の足 */
   var sDT=useState(caLoadDefaultTf()); var defTf=sDT[0],setDefTf=sDT[1];
   function updateDefTf(t){var s=(t==='5m'||t==='stack')?t:'1m';setDefTf(s);caSaveDefaultTf(s);}
+  /* 2026-08-03: シミュ開始時の開示量 (寄り付きから何分ぶん) */
+  var sSS=useState(caLoadSimStartMin()); var simStartMin=sSS[0],setSimStartMin=sSS[1];
+  function updateSimStartMin(n){setSimStartMin(caSaveSimStartMin(n));}
   /* 2026-06-29 C2: 描画の既定値 */
   var sDD=useState(caLoadDrawDefaults()); var drawDef=sDD[0],setDrawDef=sDD[1];
   function updateDrawDef(patch){var next=Object.assign({},drawDef,patch);setDrawDef(next);caSaveDrawDefaults(next);}
@@ -1751,6 +1774,26 @@ function DisplaySettingsModal(props){
                     background:sel?"#26204d":"#2a2a2a",color:sel?"#c4b5fd":"#aaa"}},o.label+(sel?" ✓":""));
               })
             )
+          ),
+          /* 2026-08-03: シミュ開始時の開示量 (寄り付きから何分ぶん) */
+          ce("div",{style:CARD},
+            ce("div",{style:HEAD},"▶ シミュレーションの開始位置"),
+            ce("div",{style:DESC},
+              "練習モードを開いた直後に、寄り付きから何分ぶんの足を表示済みにしておくか。",ce("br",null),
+              "時計の絶対時刻ではなく当日足の先頭からの経過なので、寄りが9:00でない日でも同じだけ表示されます。"),
+            ce("div",{style:{display:"flex",gap:6,flexWrap:"wrap"}},
+              [{v:0,label:'0本'},{v:5,label:'5分'},{v:10,label:'10分'},{v:15,label:'15分'},{v:30,label:'30分'},{v:60,label:'60分'}].map(function(o){
+                var sel=simStartMin===o.v;
+                return ce("button",{key:o.v,onClick:function(){updateSimStartMin(o.v);},
+                  style:{flex:"1 1 62px",padding:"9px 6px",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer",
+                    borderRadius:8,border:"1px solid "+(sel?"#6366F1":"#3a3a3a"),
+                    background:sel?"#26204d":"#2a2a2a",color:sel?"#c4b5fd":"#aaa"}},o.label+(sel?" ✓":""));
+              })
+            ),
+            ce("div",{style:{fontSize:11,color:"#777",marginTop:8}},
+              simStartMin>0
+                ?("寄り付きから "+simStartMin+"分ぶん (1分足で"+simStartMin+"本) を表示した状態で始まります")
+                :"当日足0本 (前日チャートのみ) から始まります")
           )
         ),
 
@@ -6639,12 +6682,24 @@ function ImageAnnotator(props){
     window.addEventListener('touchmove',simCtrlDragMove,{passive:false});
     window.addEventListener('touchend',simCtrlDragEnd);
   }
+  /* 2026-08-03: 起動直後のカットオフ時刻。「寄り付き(当日足の先頭)から n 分ぶん」を開示済みにする。
+     時計の絶対時刻(9:15固定)ではなく先頭の足基準なので、寄りが9:00でない日でも寄りからの経過で揃う。
+     n分ぶん = 先頭から n 本目まで → cutoff = 先頭の時刻 + (n - 足の分数)。n=0 / 足なし は -1(0本)。 */
+  function simInitialCutoff(d){
+    var n=caLoadSimStartMin();
+    if(n<=0)return -1;
+    var use1m=!!(d&&d.bars_1m&&d.bars_1m.length);
+    var arr=use1m?d.bars_1m:((d&&d.bars_5m)||[]);
+    if(!arr.length)return -1;
+    var step=use1m?1:5;
+    return _simTmin(arr[0].t)+Math.max(0,n-step);
+  }
   /* 起動時: 直前営業日を自動で ref(前日チャート) に連結 (過去日のみ・silent) */
   var simInitRef=useRef(false);
   useEffect(function(){
     if(simMode&&analysisData&&!simInitRef.current){
       simInitRef.current=true;
-      setSimCutoffTm(-1);                 /* 最初は空(0本)から */
+      setSimCutoffTm(simInitialCutoff(analysisData));   /* 2026-08-03: 既定=寄りから15分ぶん開示済み (設定で変更可・0で従来の0本) */
       loadPrevChart(true,true);           /* strictOnly + silent */
     }
   },[simMode,analysisData]);
