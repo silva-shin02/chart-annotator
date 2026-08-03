@@ -1780,7 +1780,7 @@ function DisplaySettingsModal(props){
             ce("div",{style:HEAD},"▶ シミュレーションの開始位置"),
             ce("div",{style:DESC},
               "練習モードを開いた直後に、寄り付きから何分ぶんの足を表示済みにしておくか。",ce("br",null),
-              "時計の絶対時刻ではなく当日足の先頭からの経過なので、寄りが9:00でない日でも同じだけ表示されます。"),
+              "寄り付き = その日の最初に出来高が付いた足。特別気配で寄りが遅れた日も、実際に寄ってからの経過で揃います。"),
             ce("div",{style:{display:"flex",gap:6,flexWrap:"wrap"}},
               [{v:0,label:'0本'},{v:5,label:'5分'},{v:10,label:'10分'},{v:15,label:'15分'},{v:30,label:'30分'},{v:60,label:'60分'}].map(function(o){
                 var sel=simStartMin===o.v;
@@ -6682,17 +6682,21 @@ function ImageAnnotator(props){
     window.addEventListener('touchmove',simCtrlDragMove,{passive:false});
     window.addEventListener('touchend',simCtrlDragEnd);
   }
-  /* 2026-08-03: 起動直後のカットオフ時刻。「寄り付き(当日足の先頭)から n 分ぶん」を開示済みにする。
-     時計の絶対時刻(9:15固定)ではなく先頭の足基準なので、寄りが9:00でない日でも寄りからの経過で揃う。
-     n分ぶん = 先頭から n 本目まで → cutoff = 先頭の時刻 + (n - 足の分数)。n=0 / 足なし は -1(0本)。 */
+  /* 2026-08-03: 起動直後のカットオフ時刻。「その日の実際の寄り付きから n 分ぶん」を開示済みにする。
+     寄り付き = その日の最初の v>0 足。取り込み側は寄る前も 9:00 から v===0 のダミー足で埋めるため
+     (drawDataChart の _firstTradedTm / _isPreOpenFill と同じ判定)、配列の先頭で判定すると
+     特別気配で寄りが遅れた日まで 9:00 起点になってしまう。全て v=0/未設定なら先頭にフォールバック。
+     n分ぶん = 寄りから n 本目まで → cutoff = 寄りの時刻 + (n - 足の分数)。n=0 / 足なし は -1(0本)。 */
   function simInitialCutoff(d){
     var n=caLoadSimStartMin();
     if(n<=0)return -1;
     var use1m=!!(d&&d.bars_1m&&d.bars_1m.length);
     var arr=use1m?d.bars_1m:((d&&d.bars_5m)||[]);
     if(!arr.length)return -1;
+    var oi=0;
+    for(var i=0;i<arr.length;i++){ if(arr[i].v>0){oi=i;break;} }
     var step=use1m?1:5;
-    return _simTmin(arr[0].t)+Math.max(0,n-step);
+    return _simTmin(arr[oi].t)+Math.max(0,n-step);
   }
   /* 起動時: 直前営業日を自動で ref(前日チャート) に連結 (過去日のみ・silent) */
   var simInitRef=useRef(false);
