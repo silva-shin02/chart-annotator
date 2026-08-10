@@ -3852,6 +3852,18 @@ function DataChart(props){
           return;
         }
       }
+      /* 2026-08-06: 選択中(または選択からの矢印ハンドル表示中)に空白をタップしたら、
+         新規スタンプを置かずに「今の選択/編集状態を解くだけ」にする。
+         ptrPointerDown は phase='editing' かつ fromSelect の枠外タップで false を返すため、
+         従来はここまで落ちてきて別のスタンプが貼られていた。
+         ※新規配置フロー(placing / pickRoot / fromSelectでない editing)は ptrPointerDown が
+           true を返して onMouseDown 冒頭で return するので、ここには来ない=フローは不変。 */
+      var _peClr=ptrEditRef.current;
+      if(selectedIdx||(_peClr&&_peClr.fromSelect)){
+        if(_peClr)setPtrEdit(null);
+        if(selectedIdx)setSelectedIdx(null);
+        return;
+      }
       var snipObj=props.snippetObj;
       if(snipObj&&snipObj.text&&onStrokeAdd){
         /* 重複追加防止 (200msデバウンス) */
@@ -4800,13 +4812,28 @@ function DataChart(props){
         if(!isFinite(nv))return;
         onStrokeUpdate(selectedIdx.side,selectedIdx.idx,Object.assign({},ss,{fontSize:nv}),!!noHist);
       }
+      /* 2026-08-06: このバーは上端固定なので、画面上部のテキスト/スタンプを選ぶと文字に被る。
+         枠と重なるときだけ下端へ逃がす。バーは containerRef 直下の absolute で
+         minToX/pToY と同基準の CSS px。上帯と重なり かつ 下帯とは重ならない ときだけ下へ移動し、
+         両方に重なる(枠が縦に長い)場合は上のまま=従来位置。 */
+      var _barBottom=false;
+      if(_isTxtSel){
+        var _barH=80;                     /* 2段(色+サイズ)のおよその高さ + マージン */
+        var _cH=(dim&&dim.h)||0;
+        var _sb=getSnippetBoxCss(ss,selectedIdx.side);
+        if(_sb&&_cH>_barH*2+40){
+          var _hitTop=(_sb.y<8+_barH&&_sb.y+_sb.h>0);
+          var _hitBot=(_sb.y+_sb.h>_cH-8-_barH&&_sb.y<_cH);
+          if(_hitTop&&!_hitBot)_barBottom=true;
+        }
+      }
       return ce("div",{
         onMouseDown:function(ev){ev.stopPropagation();},
         onTouchStart:function(ev){ev.stopPropagation();},
-        style:{position:"absolute",top:8,left:"50%",transform:"translateX(-50%)",
+        style:Object.assign({position:"absolute",left:"50%",transform:"translateX(-50%)",
           display:"flex",flexDirection:"column",gap:6,padding:"6px 10px",background:"rgba(28,28,30,0.95)",
           borderRadius:10,border:"1px solid #6366F1",zIndex:100,
-          boxShadow:"0 4px 16px rgba(0,0,0,.5)"}
+          boxShadow:"0 4px 16px rgba(0,0,0,.5)"},_barBottom?{bottom:8}:{top:8})
       },
         ce("div",{style:{display:"flex",gap:4,alignItems:"center"}},
           ce("span",{style:{fontSize:11,color:"#a5b4fc",fontWeight:600,marginRight:2}},"色"),
