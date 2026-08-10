@@ -4788,40 +4788,78 @@ function DataChart(props){
         if(ss._snippet)ns._editedColor=true;
         onStrokeUpdate(selectedIdx.side,selectedIdx.idx,ns);
       }
+      /* 2026-08-06: テキスト/スタンプは選択状態のままサイズも変えられる (編集モードに入らなくてよい)。
+         fontSize はストローク自身の値でマスターのスタンプ定義に上書きされないため _edited* フラグは不要。
+         スライダーのドラッグ中は noHist=true で履歴を積まず、離した時に1回だけ確定する
+         (履歴は20件保持なので、毎フレーム commit すると undo が流れてしまう)。 */
+      var _isTxtSel=(ss.type||ss.tool)==='text';
+      var _fsSel=ss.fontSize||15;
+      function applyFontSize(v,noHist){
+        if(!onStrokeUpdate)return;
+        var nv=Math.min(200,Math.max(1,Math.round(v)));
+        if(!isFinite(nv))return;
+        onStrokeUpdate(selectedIdx.side,selectedIdx.idx,Object.assign({},ss,{fontSize:nv}),!!noHist);
+      }
       return ce("div",{
         onMouseDown:function(ev){ev.stopPropagation();},
         onTouchStart:function(ev){ev.stopPropagation();},
         style:{position:"absolute",top:8,left:"50%",transform:"translateX(-50%)",
-          display:"flex",gap:4,padding:"6px 10px",background:"rgba(28,28,30,0.95)",
-          borderRadius:10,border:"1px solid #6366F1",zIndex:100,alignItems:"center",
+          display:"flex",flexDirection:"column",gap:6,padding:"6px 10px",background:"rgba(28,28,30,0.95)",
+          borderRadius:10,border:"1px solid #6366F1",zIndex:100,
           boxShadow:"0 4px 16px rgba(0,0,0,.5)"}
       },
-        ce("span",{style:{fontSize:11,color:"#a5b4fc",fontWeight:600,marginRight:2}},"色"),
-        quickColors.map(function(c){
-          var isA=(ssColor===c);
-          return ce("div",{key:c,
-            onClick:function(ev){ev.stopPropagation();applyColor(c);},
-            style:{width:20,height:20,borderRadius:"50%",background:c,cursor:"pointer",flexShrink:0,
-              border:c==='#ffffff'?"1px solid #555":"1px solid transparent",
-              boxShadow:isA?"0 0 0 2px #1c1c1e,0 0 0 3.5px #6366F1":"none",
-              transform:isA?"scale(1.12)":"scale(1)"}
-          });
-        }),
-        ce("label",{
-          onMouseDown:function(ev){ev.stopPropagation();},
-          onTouchStart:function(ev){ev.stopPropagation();},
-          style:{cursor:"pointer",position:"relative",width:18,height:18,borderRadius:"50%",flexShrink:0,marginLeft:2,
-            background:"conic-gradient(red,yellow,lime,cyan,blue,magenta,red)",
-            border:"1px solid rgba(255,255,255,.3)"}},
-          ce("input",{type:"color",
-            value:(/^#([0-9a-fA-F]{6})$/.test(ssColor||'')?ssColor:"#ff3b30"),
-            onChange:function(ev){applyColor(ev.target.value);},
-            style:{position:"absolute",opacity:0,width:1,height:1,top:0,left:0}})
+        ce("div",{style:{display:"flex",gap:4,alignItems:"center"}},
+          ce("span",{style:{fontSize:11,color:"#a5b4fc",fontWeight:600,marginRight:2}},"色"),
+          quickColors.map(function(c){
+            var isA=(ssColor===c);
+            return ce("div",{key:c,
+              onClick:function(ev){ev.stopPropagation();applyColor(c);},
+              style:{width:20,height:20,borderRadius:"50%",background:c,cursor:"pointer",flexShrink:0,
+                border:c==='#ffffff'?"1px solid #555":"1px solid transparent",
+                boxShadow:isA?"0 0 0 2px #1c1c1e,0 0 0 3.5px #6366F1":"none",
+                transform:isA?"scale(1.12)":"scale(1)"}
+            });
+          }),
+          ce("label",{
+            onMouseDown:function(ev){ev.stopPropagation();},
+            onTouchStart:function(ev){ev.stopPropagation();},
+            style:{cursor:"pointer",position:"relative",width:18,height:18,borderRadius:"50%",flexShrink:0,marginLeft:2,
+              background:"conic-gradient(red,yellow,lime,cyan,blue,magenta,red)",
+              border:"1px solid rgba(255,255,255,.3)"}},
+            ce("input",{type:"color",
+              value:(/^#([0-9a-fA-F]{6})$/.test(ssColor||'')?ssColor:"#ff3b30"),
+              onChange:function(ev){applyColor(ev.target.value);},
+              style:{position:"absolute",opacity:0,width:1,height:1,top:0,left:0}})
+          ),
+          ce("div",{
+            onClick:function(ev){ev.stopPropagation();setSelectedIdx(null);},
+            style:{marginLeft:2,fontSize:11,cursor:"pointer",color:"#888",fontWeight:600,padding:"2px 6px"}
+          },"✕")
         ),
-        ce("div",{
-          onClick:function(ev){ev.stopPropagation();setSelectedIdx(null);},
-          style:{marginLeft:2,fontSize:11,cursor:"pointer",color:"#888",fontWeight:600,padding:"2px 6px"}
-        },"✕")
+        /* 2026-08-06: サイズ行 (テキスト/スタンプのみ)。スライダーの可動域は編集中ツールバーと同じ
+           実用域 8〜72、域外は −/＋ で 1〜200 まで到達できる */
+        _isTxtSel&&ce("div",{style:{display:"flex",gap:5,alignItems:"center",
+            borderTop:"1px solid #2a2a2a",paddingTop:6}},
+          ce("span",{style:{fontSize:11,color:"#a5b4fc",fontWeight:600,flexShrink:0}},"サイズ"),
+          ce("span",{
+            onMouseDown:function(ev){ev.preventDefault();ev.stopPropagation();},
+            onClick:function(ev){ev.stopPropagation();applyFontSize(_fsSel-1);},
+            style:{padding:"2px 7px",borderRadius:4,cursor:"pointer",fontSize:12,fontWeight:700,background:"#2a2a2a",color:"#fff",userSelect:"none",flexShrink:0}},"−"),
+          ce("input",{type:"range",min:FS_SLIDER_MIN,max:FS_SLIDER_MAX,step:1,
+            value:fsSliderVal(_fsSel),
+            onMouseDown:function(ev){ev.stopPropagation();},
+            onTouchStart:function(ev){ev.stopPropagation();},
+            onChange:function(ev){applyFontSize(parseInt(ev.target.value,10),true);},
+            /* 離した時に1回だけ履歴へ確定 (ドラッグ中は noHist) */
+            onMouseUp:function(ev){ev.stopPropagation();applyFontSize(parseInt(ev.target.value,10));},
+            onTouchEnd:function(ev){ev.stopPropagation();applyFontSize(parseInt(ev.target.value,10));},
+            style:{width:IS_TOUCH?150:140,accentColor:"#6366F1",flexShrink:0,margin:"0 2px"}}),
+          ce("span",{style:{fontSize:12,color:"#ccc",minWidth:22,textAlign:"center",flexShrink:0}},_fsSel),
+          ce("span",{
+            onMouseDown:function(ev){ev.preventDefault();ev.stopPropagation();},
+            onClick:function(ev){ev.stopPropagation();applyFontSize(_fsSel+1);},
+            style:{padding:"2px 7px",borderRadius:4,cursor:"pointer",fontSize:12,fontWeight:700,background:"#2a2a2a",color:"#fff",userSelect:"none",flexShrink:0}},"＋")
+        )
       );
     })(),
     /* ── スタンプ矢印: ステージ別 枠表示 + 直上バナー ──
@@ -8966,8 +9004,11 @@ function ImageAnnotator(props){
               nextRef||(refAnalysisRef.current?refAnalysisRef.current.analysisStrokes:null)
             );
           },
-          /* C6: onStrokeUpdate(side, idx, newStroke) */
-          onStrokeUpdate:function(side,idx,newStroke){
+          /* C6: onStrokeUpdate(side, idx, newStroke, noHist)
+             2026-08-06: noHist=true は undo履歴を積まない。サイズスライダーのドラッグ中など
+             連続更新で履歴(20件保持)を流さないため。保存は analysisStrokes の
+             useEffect(debounce 1500ms)が拾うので noHist でも永続化される。 */
+          onStrokeUpdate:function(side,idx,newStroke,noHist){
             if(side==='ref'){
               var ra=refAnalysisRef.current;
               if(!ra)return;
@@ -8978,14 +9019,14 @@ function ImageAnnotator(props){
               var nextRef=Object.assign({},rObj,(function(){var o={};o[analysisTf]=rArr;return o;})());
               setRefAnalysis(Object.assign({},ra,{analysisStrokes:nextRef}));
               triggerRefAutoSave();
-              analysisCommit(analysisStrokesRef.current, nextRef);
+              if(!noHist)analysisCommit(analysisStrokesRef.current, nextRef);
             }else{
               var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
               var curArr=(curObj[analysisTf]||[]).slice();
               curArr[idx]=Object.assign({},newStroke,{side:'cur'});
               var next=Object.assign({},curObj,(function(){var o={};o[analysisTf]=curArr;return o;})());
               setAnalysisStrokes(next);
-              analysisCommit(next);
+              if(!noHist)analysisCommit(next);
             }
           },
           /* 2026-04-23: onStrokeUpdateMany — 一括色変更等、複数ストロークを1回のstate更新で処理 */
@@ -9225,7 +9266,8 @@ function ImageAnnotator(props){
                   nextRef||(refAnalysisRef.current?refAnalysisRef.current.analysisStrokes:null)
                 );
               },
-              onStrokeUpdate:function(side,idx,newStroke){
+              /* 2026-08-06: 第4引数 noHist=true で undo履歴を積まない (上の主チャート側と同仕様) */
+              onStrokeUpdate:function(side,idx,newStroke,noHist){
                 if(side==='ref'){
                   var ra=refAnalysisRef.current;
                   if(!ra)return;
@@ -9235,14 +9277,14 @@ function ImageAnnotator(props){
                   var nextRef=Object.assign({},rObj,(function(){var o={};o[analysisTf]=rArr;return o;})());
                   setRefAnalysis(Object.assign({},ra,{analysisStrokes:nextRef}));
                   triggerRefAutoSave();
-                  analysisCommit(analysisStrokesRef.current, nextRef);
+                  if(!noHist)analysisCommit(analysisStrokesRef.current, nextRef);
                 }else{
                   var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
                   var curArr=(curObj[analysisTf]||[]).slice();
                   curArr[idx]=Object.assign({},newStroke,{side:'cur'});
                   var next=Object.assign({},curObj,(function(){var o={};o[analysisTf]=curArr;return o;})());
                   setAnalysisStrokes(next);
-                  analysisCommit(next);
+                  if(!noHist)analysisCommit(next);
                 }
               },
               onStrokeUpdateMany:function(items){
