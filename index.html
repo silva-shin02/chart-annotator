@@ -5261,8 +5261,9 @@ function caVpTickStep(bars1m){
   if(!allInt)return 0.5;
   return all10?10:all5?5:1;
 }
-/* 帯の刻みの候補 (日本株で読み慣れた単位だけ。2円・20円などは使わない) */
-var CA_VP_BIN_CANDS=[0.1,0.5,1,5,10,50,100,500,1000];
+/* 帯の刻みの候補 (日本株で読み慣れた単位だけ。2円・20円などは使わない)。
+   2026-09-17: 帯は最大10円 (ユーザー指定)。縮小しすぎて10円でも高さが足りないときは細いまま隙間なしで描く */
+var CA_VP_BIN_CANDS=[0.1,0.5,1,5,10];
 var CA_VP_AUTO_MIN_PX=8;   /* 自動: 帯の高さがこれ以上になる最小の刻み (等倍3.5px/円→5円、2.3倍拡大で1円) */
 var CA_VP_READABLE_PX=3;   /* 固定: これ未満(読めない)のときだけ自動で太くする */
 /* 帯の刻みを決める。binPref='auto'|'1'|'5'|'10'。呼値(step)より細かくはしない */
@@ -5275,7 +5276,8 @@ function caVpPickBin(step, pxPerYen, binPref){
     if(c[i]+1e-9<floor)continue;
     if(c[i]*pxPerYen>=minPx)return c[i];
   }
-  return c[c.length-1];
+  /* どれも高さが足りない → 上限の10円。ただし呼値がそれより粗い銘柄(呼値50円など)は呼値にする */
+  return Math.max(c[c.length-1], floor);
 }
 /* bars1m のうち時刻 [fromTm, toTm] の足の vp を合算し、刻み(caVpPickBin)ごとの帯にまとめる。約定0なら null。
    戻り値 {step, bin, levels:[{lo, v}], maxV, bandLo, pocP, pocV, total}
