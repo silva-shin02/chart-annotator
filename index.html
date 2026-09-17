@@ -2278,6 +2278,59 @@ function DataChart(props){
     if(!props.onVpHover||props.vpHoverTm===tm)return;
     props.onVpHover(tm);
   }
+  /* 2026-09-17: 縦線の上のつまみ「← HH:MM →」(DOM)。
+     位置と時刻は描画のたびに drawDataChart が layoutRef に書き(vpHandleX/vpHandleTm)、描画直後にここで反映する。
+     時刻部分=左右ドラッグ(足単位で吸着) / ←→=1分ずつ。どちらも親の onVpSetTime へ
+     (表示範囲なら仮固定、指定時刻までならスライダーと同じ値)。つまみ上の左ボタン操作はチャートへ伝えない */
+  var vpHandleRef=useRef(null), vpHandleTimeRef=useRef(null);
+  var vpPropsRef=useRef(props); vpPropsRef.current=props;   /* ドラッグ中(window listener)でも最新の親関数を呼ぶ */
+  var vpDragRef=useRef(null);
+  /* ドラッグ用: 描画域の外へ出ても端に留める。前日側は当日の寄り(9:00)扱い */
+  function vpTmAtLocalXClamped(xLocal){
+    var L=layoutRef.current; if(!L)return null;
+    var st=xToSideTm(Math.max(L.padL+1,Math.min(L.padL+L.chartW-1,xLocal)));
+    if(!st||st.tm==null)return null;
+    if(st.side!=='cur')return 540;
+    if(tf==='5m')return 5*Math.round(st.tm/5)+4;
+    return Math.round(st.tm);
+  }
+  function vpSetTime(tm){ var p=vpPropsRef.current; if(tm!=null&&p.onVpSetTime)p.onVpSetTime(tm); }
+  function vpStep(d){
+    var L=layoutRef.current;
+    if(L&&L.vpHandleTm!=null)vpSetTime(L.vpHandleTm+d);
+  }
+  function vpDragStart(e){
+    if(e.button!=null&&e.button!==0)return;
+    e.stopPropagation(); if(e.cancelable)e.preventDefault();
+    var st={last:null};
+    st.move=function(ev){
+      var pt=ev.touches?ev.touches[0]:ev; if(!pt)return;
+      if(ev.cancelable)ev.preventDefault();
+      var tm=vpTmAtLocalXClamped(pt.clientX-getCanvasRect().left);
+      if(tm!=null&&tm!==st.last){ st.last=tm; vpSetTime(tm); }
+    };
+    st.end=function(){
+      window.removeEventListener('mousemove',st.move); window.removeEventListener('mouseup',st.end);
+      window.removeEventListener('touchmove',st.move); window.removeEventListener('touchend',st.end);
+      window.removeEventListener('touchcancel',st.end);
+      if(vpDragRef.current===st)vpDragRef.current=null;
+    };
+    vpDragRef.current=st;
+    window.addEventListener('mousemove',st.move); window.addEventListener('mouseup',st.end);
+    window.addEventListener('touchmove',st.move,{passive:false}); window.addEventListener('touchend',st.end);
+    window.addEventListener('touchcancel',st.end);
+  }
+  useEffect(function(){ return function(){ if(vpDragRef.current)vpDragRef.current.end(); }; },[]);
+  /* 描画直後に呼ぶ: つまみを縦線の位置へ (はみ出す分は内側へ寄せる) */
+  function vpSyncHandle(){
+    var el=vpHandleRef.current, L=layoutRef.current; if(!el)return;
+    if(!L||L.vpHandleX==null||L.vpHandleTm==null){ el.style.display='none'; return; }
+    el.style.display='flex';
+    var hw=el.offsetWidth||96;
+    el.style.left=Math.max(L.padL+hw/2,Math.min(L.padL+L.chartW-hw/2,L.vpHandleX))+'px';
+    el.style.top=(L.priceTop+2)+'px';
+    if(vpHandleTimeRef.current){ var t=L.vpHandleTm; vpHandleTimeRef.current.textContent=Math.floor(t/60)+':'+('0'+(t%60)).slice(-2); }
+  }
 
   /* 2026-04-20: 座標計算用の rect 取得 — container rect を返す (分離モード廃止で単純化) */
   function getCanvasRect(){
@@ -2507,6 +2560,7 @@ function DataChart(props){
           try{Object.defineProperty(window,'devicePixelRatio',{value:origDPR,configurable:true});}catch(e){}
         }
       }
+      vpSyncHandle();   /* 2026-09-17: 価格帯別出来高のつまみを縦線の位置へ */
       drawCrosshair();
     });
     return function(){cancelAnimationFrame(rafId);};
@@ -4968,6 +5022,31 @@ function DataChart(props){
         )
       );
     })(),
+    /* 2026-09-17: 価格帯別出来高のつまみ「← HH:MM →」。表示/位置/時刻は描画直後に vpSyncHandle が設定。
+       左ボタン/タッチはチャートへ伝えない (描画ツール選択中でもつまみ操作を優先)。
+       右ボタンは素通し = つまみの上で右クリックすると同じ足の右クリック扱い(固定の解除) */
+    props.vpOpt&&props.vpOpt.on&&ce("div",{
+      ref:vpHandleRef,
+      onMouseDown:function(ev){ if(ev.button!==2)ev.stopPropagation(); },
+      onClick:function(ev){ ev.stopPropagation(); },
+      onTouchStart:function(ev){ ev.stopPropagation(); },
+      onTouchMove:function(ev){ ev.stopPropagation(); },
+      onTouchEnd:function(ev){ ev.stopPropagation(); },
+      style:{position:"absolute",top:12,left:0,transform:"translateX(-50%)",display:"none",zIndex:90,
+        alignItems:"stretch",background:"#534AB7",border:"1px solid #7F77DD",borderRadius:11,overflow:"hidden",
+        boxShadow:"0 2px 8px rgba(0,0,0,.55)",userSelect:"none",WebkitUserSelect:"none",touchAction:"none"}
+    },
+      ce("button",{onClick:function(ev){ev.stopPropagation();vpStep(-1);},title:"1分前へ",
+        style:{border:"none",background:"transparent",color:"#EEEDFE",fontSize:12,fontWeight:700,
+          padding:IS_TOUCH?"4px 10px":"1px 7px",cursor:"pointer",fontFamily:"inherit",lineHeight:1.4}},"←"),
+      ce("span",{ref:vpHandleTimeRef,onMouseDown:vpDragStart,onTouchStart:vpDragStart,title:"左右にドラッグして時刻を変更",
+        style:{display:"flex",alignItems:"center",padding:IS_TOUCH?"4px 6px":"1px 5px",fontSize:12,fontWeight:700,
+          color:"#ffffff",cursor:"ew-resize",minWidth:34,justifyContent:"center",
+          borderLeft:"1px solid rgba(238,237,254,.25)",borderRight:"1px solid rgba(238,237,254,.25)"}},"--:--"),
+      ce("button",{onClick:function(ev){ev.stopPropagation();vpStep(1);},title:"1分後へ",
+        style:{border:"none",background:"transparent",color:"#EEEDFE",fontSize:12,fontWeight:700,
+          padding:IS_TOUCH?"4px 10px":"1px 7px",cursor:"pointer",fontFamily:"inherit",lineHeight:1.4}},"→")
+    ),
     /* ── スタンプ矢印: ステージ別 枠表示 + 直上バナー ──
        placing=配置調整 / pickRoot=根元選択 / editing=矢先調整。
        選択ツールからの再編集(fromSelect)時はバナー/枠を出さず、矢印ハンドル(オーバーレイ)のみ */
@@ -5747,24 +5826,29 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   /* 2026-09-17: 価格帯別出来高 — ローソクの背面に左寄せ・半透明の横棒 (右端の最新足を隠さない)。
      vpOpt={on, mode:'visible'|'until', untilTm}。表示範囲=このペインに見えている当日足の時間帯 /
      指定時刻まで=当日の寄り〜untilTm。どちらも1分足の vp から集計(5分足ペインも同じ)。 */
-  var _vp=null, _vpCutX=null, _vpDimCol=null, _vpCutTm=null, _vpPinnedLbl=false;
+  var _vp=null, _vpCutX=null, _vpDimCol=null, _vpCutTm=null;
+  var _vpLineOn=true;    /* 集計の境目の縦線を描くか (カーソル追従中は十字線があるので描かない) */
+  var _vpHandle=false;   /* 縦線の上につまみ(DOM)を出すか。出すときはキャンバスのラベルは描かない */
   if(vpOpt&&vpOpt.on&&!isThumbnail&&caVpHasData(data)){
-    var _vpFrom=null, _vpTo=null, _vpDimOn=false;
+    var _vpFrom=null, _vpTo=null, _vpDimAlpha=0;
+    /* 暗さ: 未固定(カーソル追従/表示範囲の中央)=薄く0.35 / 仮固定・指定時刻まで=濃く0.62 */
     if(vpOpt.mode==='until'){
       _vpFrom=0; _vpTo=(vpOpt.untilTm!=null)?vpOpt.untilTm:1e9;
-      if(vpOpt.untilTm!=null){ _vpCutTm=vpOpt.untilTm; _vpDimOn=true; }
+      if(vpOpt.untilTm!=null){ _vpCutTm=vpOpt.untilTm; _vpDimAlpha=0.62; _vpHandle=true; }
     }else{
       /* 2026-09-17: 表示範囲 = 当日の寄り〜「仮固定 > カーソルの足 > このペインの表示範囲の中央」の時刻。
-         仮固定中は縦線+「HH:MM まで（固定）」+右側を暗く / カーソル追従中は十字線があるので何も足さない /
-         カーソル無し(中央)は縦線+ラベルだけ。中央が前日側なら当日分は0=表示なし */
+         仮固定中は縦線+つまみ+濃く暗く / カーソル追従中は薄く暗くだけ /
+         カーソル無し(中央)は縦線+薄く暗く (ホバーの無いiPad等はここにつまみを出し、ドラッグで固定できる)。
+         中央が前日側なら当日分は0=表示なし */
       _vpFrom=0;
       if(vpOpt.untilTm!=null){
-        _vpTo=vpOpt.untilTm;
-        if(vpOpt.pinned){ _vpCutTm=vpOpt.untilTm; _vpDimOn=true; _vpPinnedLbl=true; }
+        _vpTo=vpOpt.untilTm; _vpCutTm=vpOpt.untilTm;
+        if(vpOpt.pinned){ _vpDimAlpha=0.62; _vpHandle=true; }
+        else { _vpDimAlpha=0.35; _vpLineOn=false; }
       }else{
         var _uc=(uS+uE)/2, _tv=hasRef?(_uc-tmVisSpan-gapVis):_uc;
         _vpTo=(_tv<0)?-1:Math.round(visToTm(_tv+tmVisStart));
-        if(_vpTo>=0)_vpCutTm=_vpTo;
+        if(_vpTo>=0){ _vpCutTm=_vpTo; _vpDimAlpha=0.35; if(!HAS_HOVER)_vpHandle=true; }
       }
     }
     if(_vpFrom!=null)_vp=caVpAggregate(data.bars_1m,_vpFrom,_vpTo,pxPerYen,vpOpt.bin);
@@ -5787,8 +5871,13 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     if(_vpCutTm!=null){
       /* 縦線 = その時刻の足の右端 (1分足: 中心+0.5本 / 5分足: 目盛りと同じく半本左へずらした枠の右端) */
       _vpCutX=uToX(tmSideToU(_vpCutTm,'cur')+(tf==='5m'?1-bar5TimeOff(tf):0.5));
-      if(_vpDimOn&&_vpCutX<padL+chartW)_vpDimCol=_caHexToRgba(caLoadChartBg(),0.62);
+      if(_vpDimAlpha>0&&_vpCutX<padL+chartW)_vpDimCol=_caHexToRgba(caLoadChartBg(),_vpDimAlpha);
     }
+  }
+  /* つまみ(DOM)の位置と時刻を DataChart へ渡す (描画のたびに layoutRef は作り直されるので、出さないときは未設定=非表示) */
+  if(layoutRef&&layoutRef.current&&_vpHandle&&_vpCutX!=null&&_vpCutX>=padL-1&&_vpCutX<=padL+chartW+1){
+    layoutRef.current.vpHandleX=_vpCutX;
+    layoutRef.current.vpHandleTm=_vpCutTm;
   }
   drawBarSet(visibleBars,'cur');
   if(hasRef)drawBarSet(visibleRefBars,'ref');
@@ -5946,13 +6035,19 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   ctx.lineTo(padL+chartW, divY);
   ctx.stroke();
 
-  /* 2026-09-17: 価格帯別出来高「指定時刻まで」— 集計の境目の縦線 + 「HH:MM まで」ラベル (最前面) */
-  if(_vpCutX!=null&&_vpCutX>=padL-1&&_vpCutX<=padL+chartW+1){
+  /* 2026-09-17: 価格帯別出来高 — 集計の境目の縦線 (最前面)。
+     つまみ(DOM)を出すとき(仮固定/指定時刻まで/ホバー無し端末の中央)はラベルをキャンバスに描かない。
+     PCでカーソルが外れたとき(表示範囲の中央)だけ「HH:MM まで」ラベルを描く */
+  if(_vpLineOn&&_vpCutX!=null&&_vpCutX>=padL-1&&_vpCutX<=padL+chartW+1){
     ctx.save();
     ctx.strokeStyle='rgba(167,139,250,0.95)'; ctx.lineWidth=1.5; ctx.setLineDash([4,3]);
     ctx.beginPath(); ctx.moveTo(Math.round(_vpCutX)+0.5,priceTop); ctx.lineTo(Math.round(_vpCutX)+0.5,volBot); ctx.stroke();
     ctx.setLineDash([]);
-    var _ut=_vpCutTm, _ul=Math.floor(_ut/60)+':'+('0'+(_ut%60)).slice(-2)+(_vpPinnedLbl?' まで（固定）':' まで');
+    ctx.restore();
+  }
+  if(_vpLineOn&&!_vpHandle&&_vpCutX!=null&&_vpCutX>=padL-1&&_vpCutX<=padL+chartW+1){
+    ctx.save();
+    var _ut=_vpCutTm, _ul=Math.floor(_ut/60)+':'+('0'+(_ut%60)).slice(-2)+' まで';
     ctx.font='bold 10px -apple-system,Helvetica,sans-serif';
     var _uw=ctx.measureText(_ul).width+10;
     var _ux=Math.max(padL,Math.min(_vpCutX+4,padL+chartW-_uw));   /* 右端で切れないよう内側へ */
@@ -6840,6 +6935,14 @@ function ImageAnnotator(props){
     if(r.hi==null)return {on:true, mode:'until', untilTm:null, bin:vpBin};
     var u=(vpUntil==null)?r.hi:Math.max(r.lo,Math.min(r.hi,vpUntil));
     return {on:true, mode:'until', untilTm:u, bin:vpBin};
+  }
+  /* 2026-09-17: つまみ(ドラッグ/←→)からの時刻変更。範囲 [初約定の足, 最後の約定の足] に収める。
+     表示範囲モード=その時刻で仮固定 / 指定時刻までモード=スライダーと同じ値 (右端=最新に追従) */
+  function vpSetTime(tm){
+    var r=vpRange(); if(r.hi==null||tm==null)return;
+    var v=Math.max(r.lo,Math.min(r.hi,tm));
+    if(vpMode==='until')setVpUntil(v>=r.hi?null:v);
+    else setVpPinTm(v);
   }
   function simBarsForTf(){
     if(!analysisData)return [];
@@ -9168,9 +9271,11 @@ function ImageAnnotator(props){
                     tail=ce("span",{style:{fontSize:11,color:"#9ca3af",flexShrink:0}},"約定のある足がまだありません");
                   }else if(vpPinTm!=null){
                     tail=ce("span",{style:{fontSize:11,color:"#c4b5fd",fontWeight:700,flexShrink:0}},
-                      "寄り〜"+Math.floor(vpPinTm/60)+':'+('0'+(vpPinTm%60)).slice(-2)+"（固定中・同じ足を右クリックで解除）");
+                      "寄り〜"+Math.floor(vpPinTm/60)+':'+('0'+(vpPinTm%60)).slice(-2)
+                        +(HAS_HOVER?"（固定中・つまみで調整／同じ足を右クリックで解除）":"（固定中・つまみで調整）"));
                   }else{
-                    tail=ce("span",{style:{fontSize:11,color:"#8b8b9a",flexShrink:0}},"寄り〜カーソルの足（右クリックで固定）");
+                    tail=ce("span",{style:{fontSize:11,color:"#8b8b9a",flexShrink:0}},
+                      HAS_HOVER?"寄り〜カーソルの足（右クリックで固定）":"寄り〜つまみの時刻（つまみを動かすと固定）");
                   }
                   return ce(Fragment,null,
                     seg([['visible','表示範囲'],['until','指定時刻まで']],vpMode,function(k){setVpMode(k);caSaveVpMode(k);}),
@@ -9206,7 +9311,7 @@ function ImageAnnotator(props){
             (function(analysisTf){return ce(DataChart,{
               data:simMode?simDisplayData:emaContinuedData, tf:topTf, showCrosshair:showCrosshair,
               vpOpt:vpOptNow(),   /* 2026-09-17: 価格帯別出来高 */
-              vpPinTm:vpPinTm, onVpPin:setVpPinTm, vpHoverTm:vpHoverTm, onVpHover:setVpHoverTm,
+              vpPinTm:vpPinTm, onVpPin:setVpPinTm, vpHoverTm:vpHoverTm, onVpHover:setVpHoverTm, onVpSetTime:vpSetTime,
               /* C1+: 過去chartデータを渡して同一キャンバスに連結描画 */
               refData:refAnalysis?refAnalysis.analysisData:null,
               /* C3+: 過去chart側ストロークも連結描画 (C6で書込対応) */
@@ -9503,7 +9608,7 @@ function ImageAnnotator(props){
             (function(analysisTf){return ce(DataChart,{
               data:simMode?simDisplayData:emaContinuedData, tf:'5m', showCrosshair:showCrosshair,
               vpOpt:vpOptNow(),   /* 2026-09-17: 価格帯別出来高 (5分足ペインも1分足の vp から集計) */
-              vpPinTm:vpPinTm, onVpPin:setVpPinTm, vpHoverTm:vpHoverTm, onVpHover:setVpHoverTm,
+              vpPinTm:vpPinTm, onVpPin:setVpPinTm, vpHoverTm:vpHoverTm, onVpHover:setVpHoverTm, onVpSetTime:vpSetTime,
               /* 2026-06-25: stackMode 1m⇔5m カーソル連動 (この下段は常にstack時のみrender) */
               linkCursorRef:linkCursorRef, linkCursorBump:cursorBump, onLinkCursorChange:notifyLinkCursor,
               /* 2026-06-18: controlled view/zoom/pShift (uncontrolled再フィットによる倍率縮小を防止) */
