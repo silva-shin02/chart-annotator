@@ -707,9 +707,12 @@ var CA_PEN_ONLY_KEY='ca_pen_only_v1';
 var CA_PRICE_GRID_STEP_KEY='ca_price_grid_step_v1';
 /* 2026-08-03: シミュ開始時に「寄り付きから何分ぶん」を開示済みにしておくか (分)。0=従来の0本から。既定15 */
 var CA_SIM_START_MIN_KEY='ca_sim_start_min_v1';
+/* 2026-09-17: 価格帯別出来高の表示ON/OFF・集計モード ('visible'=表示範囲 / 'until'=寄り〜指定時刻)。全チャート共通 */
+var CA_VP_ON_KEY='ca_vp_on_v1';
+var CA_VP_MODE_KEY='ca_vp_mode_v1';
 var CA_SYNC_PREF_KEYS=[CA_PRICE_PX_KEY,CA_AUTO_PAN_KEY,CA_CHART_BG_KEY,CA_TICKER_CODES_KEY,
   CA_INDICATOR_VIS_KEY,CA_FIT_MODE_KEY,CA_DEFAULT_TF_KEY,CA_DRAW_DEFAULTS_KEY,CA_PEN_ONLY_KEY,
-  CA_PRICE_GRID_STEP_KEY,CA_SIM_START_MIN_KEY,
+  CA_PRICE_GRID_STEP_KEY,CA_SIM_START_MIN_KEY,CA_VP_ON_KEY,CA_VP_MODE_KEY,
   'ca_search_words_v1','scalping_annot_presets_v1','annot_quickcolors_v1'];
 var CA_PREF_EVENTS={};
 CA_PREF_EVENTS[CA_PRICE_PX_KEY]='ca_price_px_changed';
@@ -1039,6 +1042,22 @@ function caSaveSimStartMin(n){
   try{localStorage.setItem(CA_SIM_START_MIN_KEY,String(v));}catch(e){caStorageWarn();}
   caPrefPush(CA_SIM_START_MIN_KEY);
   return v;
+}
+/* 2026-09-17: 価格帯別出来高 表示ON/OFF (既定OFF) / 集計モード (既定=表示範囲) */
+function caLoadVpOn(){
+  try{return localStorage.getItem(CA_VP_ON_KEY)==='1';}catch(e){return false;}
+}
+function caSaveVpOn(b){
+  try{localStorage.setItem(CA_VP_ON_KEY,b?'1':'0');}catch(e){caStorageWarn();}
+  caPrefPush(CA_VP_ON_KEY);
+}
+function caLoadVpMode(){
+  try{return localStorage.getItem(CA_VP_MODE_KEY)==='until'?'until':'visible';}catch(e){return 'visible';}
+}
+function caSaveVpMode(m){
+  var s=(m==='until')?'until':'visible';
+  try{localStorage.setItem(CA_VP_MODE_KEY,s);}catch(e){caStorageWarn();}
+  caPrefPush(CA_VP_MODE_KEY);
 }
 /* 2026-06-29: 描画の既定値 (色/線幅/不透明度/フォント)。エディタ起動時の初期値に使う */
 function caLoadDrawDefaults(){
@@ -2430,6 +2449,9 @@ function DataChart(props){
     };
   },[]);
 
+  /* 2026-09-17: 価格帯別出来高の表示条件 (オブジェクトは毎レンダー作り直されるので値でキー化して再描画判定) */
+  var vpOpt=props.vpOpt||null;
+  var vpKey=vpOpt?((vpOpt.on?1:0)+'|'+vpOpt.mode+'|'+vpOpt.untilTm):'';
   // メインチャート描画
   useEffect(function(){
     if((!bars.length&&!hasRef)||!priceRange)return;
@@ -2450,7 +2472,7 @@ function DataChart(props){
         }catch(e){}
       }
       try{
-        drawDataChart(canvas,bars,data,dimWithPx,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx,refBars,refData,getCandleGap(tf),refStrokes,moveHint,lassoSel,props.snippetsById);
+        drawDataChart(canvas,bars,data,dimWithPx,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx,refBars,refData,getCandleGap(tf),refStrokes,moveHint,lassoSel,props.snippetsById,vpOpt);
       } finally {
         if(dprOverridden){
           try{Object.defineProperty(window,'devicePixelRatio',{value:origDPR,configurable:true});}catch(e){}
@@ -2459,7 +2481,7 @@ function DataChart(props){
       drawCrosshair();
     });
     return function(){cancelAnimationFrame(rafId);};
-  },[data,bars,dim,tf,view,pShift,zoom,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes,moveHint,pricePx,chartBg,lassoSel,indVis,priceGridStep]);
+  },[data,bars,dim,tf,view,pShift,zoom,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes,moveHint,pricePx,chartBg,lassoSel,indVis,priceGridStep,vpKey]);
 
   // showCrosshair 切替時: OFFなら消す、ONなら再描画
   useEffect(function(){
@@ -5203,6 +5225,69 @@ function DataChart(props){
    refData がある場合、当日 bars の ema9/22/50/200 を refBars 最終EMA値から連続計算して上書き。
    VWAP は Python 側値そのまま (Hyper SBI 2 と同じ当日リセット挙動)。
    非破壊: bars/refBars は変更せず新配列を返す。 */
+/* ─── 2026-09-17: 価格帯別出来高 (ボリュームプロファイル) ───────────────────────
+   データ: 取込Python(tick_to_ohlcv.py)がティックから「1分×価格→出来高」を作り、
+     1分足の各足に vp=[価格,出来高,価格,出来高,...] (価格昇順) を付け、JSON先頭に vp_ver を立てる。
+     足の出来高 v と sum(vp の出来高) は一致する (Python側で検算済み)。
+   方針(ユーザー決定): vp_ver の無い旧取込チャートは表示しない(1分足からの概算はしない)。
+     集計は常に1分足から (5分足ペインでも bars_1m を時刻で絞る)。前日(ref)は含めず当日分のみ。
+     vp は足オブジェクトに乗っているので、シミュの切り出し(simCutBars)で未来分は自動的に消える。 */
+function caVpHasData(d){ return !!(d&&d.vp_ver&&Array.isArray(d.bars_1m)); }
+function _caVpTm(t){ var s=String(t).split(':'); return (+s[0])*60+(+s[1]); }
+/* 当日の約定価格から呼値の刻みを推定 (10 / 5 / 1 / 0.5 / 0.1)。棒の刻みはこれ未満にしない */
+function caVpTickStep(bars1m){
+  var any=false, allHalf=true, allInt=true, all5=true, all10=true;
+  for(var i=0;i<bars1m.length;i++){
+    var a=bars1m[i]&&bars1m[i].vp; if(!a)continue;
+    for(var j=0;j<a.length;j+=2){
+      var p=a[j]; any=true;
+      if(Math.abs(p*2-Math.round(p*2))>1e-6)allHalf=false;
+      if(Math.abs(p-Math.round(p))>1e-6)allInt=false;
+      else { var r=Math.round(p); if(r%5!==0)all5=false; if(r%10!==0)all10=false; }
+    }
+  }
+  if(!any)return 1;
+  if(!allHalf)return 0.1;
+  if(!allInt)return 0.5;
+  return all10?10:all5?5:1;
+}
+/* bars1m のうち時刻 [fromTm, toTm] の足の vp を合算し、pxPerYen に応じた刻みで棒にまとめる。
+   刻み: 呼値以上で、棒1本の高さが3px以上になる最小の候補。約定0なら null。
+   戻り値 {step, bin, levels:[{lo, v}], maxV, pocLo, total}  (lo=その棒の最安価格) */
+function caVpAggregate(bars1m, fromTm, toTm, pxPerYen){
+  var step=caVpTickStep(bars1m);
+  var map={}, total=0;
+  for(var i=0;i<bars1m.length;i++){
+    var b=bars1m[i], a=b&&b.vp; if(!a)continue;
+    var m=_caVpTm(b.t); if(m<fromTm||m>toTm)continue;
+    for(var j=0;j<a.length;j+=2){ map[a[j]]=(map[a[j]]||0)+a[j+1]; total+=a[j+1]; }
+  }
+  if(total<=0)return null;
+  var cands=[0.1,0.5,1,2,5,10,20,50,100,200,500,1000], bin=cands[cands.length-1];
+  for(var c=0;c<cands.length;c++){
+    if(cands[c]+1e-9<step)continue;
+    if(cands[c]*pxPerYen>=3){ bin=cands[c]; break; }
+  }
+  var bins={};
+  Object.keys(map).forEach(function(k){
+    var idx=Math.floor((+k+step*0.01)/bin);   /* 小数価格の境界誤差よけ */
+    bins[idx]=(bins[idx]||0)+map[k];
+  });
+  var levels=[], maxV=0, pocLo=null;
+  Object.keys(bins).forEach(function(k){
+    var v=bins[k], lo=Math.round((+k)*bin*10)/10;
+    levels.push({lo:lo, v:v});
+    if(v>maxV){ maxV=v; pocLo=lo; }
+  });
+  return {step:step, bin:bin, levels:levels, maxV:maxV, pocLo:pocLo, total:total};
+}
+/* '#rrggbb' → 'rgba(r,g,b,a)' (チャート背景色で「集計外」を暗くする用) */
+function _caHexToRgba(hex, a){
+  var m=/^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(String(hex||''));
+  if(!m)return 'rgba(0,0,0,'+a+')';
+  return 'rgba('+parseInt(m[1],16)+','+parseInt(m[2],16)+','+parseInt(m[3],16)+','+a+')';
+}
+
 function computeEnhancedBars(bars, refBars){
   if(!bars||!bars.length) return bars||[];
   if(!refBars||!refBars.length) return bars;
@@ -5241,7 +5326,7 @@ function computeEnhancedBars(bars, refBars){
    2026-04-21: 地図モデルズーム化 — dim.zoom で X/Y 同倍率
                barW = Z_BASE_BAR_PX * zoom, pxPerYen = (Z_BASE_PRICE_PX/10) * zoom
                uSpan は zoom と chartW から派生 (view.uE は setView で同期されている前提) */
-function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,editingTextIdx,refBars,refData,gapVis,refStrokes,hideHint,lassoSel,snippetsById){
+function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,editingTextIdx,refBars,refData,gapVis,refStrokes,hideHint,lassoSel,snippetsById,vpOpt){
   // B完全版: EMA 前日連続化 (refData ありなら bars の EMA を上書き)
   bars=computeEnhancedBars(bars, refBars);
   var dpr=window.devicePixelRatio||1;
@@ -5586,8 +5671,47 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     });
     ctx.restore();
   }
+  /* 2026-09-17: 価格帯別出来高 — ローソクの背面に左寄せ・半透明の横棒 (右端の最新足を隠さない)。
+     vpOpt={on, mode:'visible'|'until', untilTm}。表示範囲=このペインに見えている当日足の時間帯 /
+     指定時刻まで=当日の寄り〜untilTm。どちらも1分足の vp から集計(5分足ペインも同じ)。 */
+  var _vp=null, _vpCutX=null, _vpDimCol=null;
+  if(vpOpt&&vpOpt.on&&!isThumbnail&&caVpHasData(data)){
+    var _vpFrom=null, _vpTo=null;
+    if(vpOpt.mode==='until'){
+      _vpFrom=0; _vpTo=(vpOpt.untilTm!=null)?vpOpt.untilTm:1e9;
+    }else if(visibleBars.length){
+      _vpFrom=tToMin(visibleBars[0].t);
+      _vpTo=tToMin(visibleBars[visibleBars.length-1].t)+(tf==='5m'?4:0);  /* 5分足は枠[start,start+5) */
+    }
+    if(_vpFrom!=null)_vp=caVpAggregate(data.bars_1m,_vpFrom,_vpTo,pxPerYen);
+    if(_vp){
+      var _vpMaxW=chartW*0.25;
+      ctx.save();
+      ctx.beginPath(); ctx.rect(padL,priceTop,chartW,priceH); ctx.clip();
+      _vp.levels.forEach(function(lv){
+        var cp=lv.lo+(_vp.bin-_vp.step)/2;               /* 棒の中心価格 (刻み内の価格の中央) */
+        var yT=pToY(cp+_vp.bin/2), yB=pToY(cp-_vp.bin/2);
+        if(yB<priceTop||yT>priceBot)return;
+        var h=yB-yT; if(h>=3){ yT+=0.5; h-=1; }          /* 棒どうしに1pxの隙間 */
+        var w=Math.max(1,lv.v/_vp.maxV*_vpMaxW);
+        ctx.fillStyle=(lv.lo===_vp.pocLo)?'rgba(167,139,250,0.55)':'rgba(167,139,250,0.28)';
+        ctx.fillRect(padL,yT,w,Math.max(1,h));
+      });
+      ctx.restore();
+    }
+    if(vpOpt.mode==='until'&&vpOpt.untilTm!=null){
+      /* 縦線 = untilTm の足の右端 (1分足: 中心+0.5本 / 5分足: 目盛りと同じく半本左へずらした枠の右端) */
+      _vpCutX=uToX(tmSideToU(vpOpt.untilTm,'cur')+(tf==='5m'?1-bar5TimeOff(tf):0.5));
+      if(_vpCutX<padL+chartW)_vpDimCol=_caHexToRgba(caLoadChartBg(),0.62);
+    }
+  }
   drawBarSet(visibleBars,'cur');
   if(hasRef)drawBarSet(visibleRefBars,'ref');
+  /* 2026-09-17: 指定時刻より右(集計外)を暗くする — 出来高エリア分 (価格エリア分は指標線のあと・書き込みの前) */
+  if(_vpDimCol){
+    var _vdx=Math.max(padL,_vpCutX);
+    ctx.fillStyle=_vpDimCol; ctx.fillRect(_vdx,volTop,padL+chartW-_vdx,volBot-volTop);
+  }
 
   // EMA + VWAP ライン (price エリア内のみ — clip)
   ctx.save();
@@ -5652,6 +5776,29 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     }
   });
 
+  /* 2026-09-17: 価格帯別出来高 — 集計外(指定時刻より右)の暗転(価格エリア) と POC 線。
+     書き込みより前に描くので、スタンプ等は暗くならず POC 線より手前に出る。 */
+  if(_vpDimCol){
+    var _pdx=Math.max(padL,_vpCutX);
+    ctx.fillStyle=_vpDimCol; ctx.fillRect(_pdx,priceTop,padL+chartW-_pdx,priceH);
+  }
+  if(_vp&&_vp.pocLo!=null){
+    var _pocC=_vp.pocLo+(_vp.bin-_vp.step)/2, _pocY=pToY(_pocC);
+    if(_pocY>=priceTop&&_pocY<=priceBot){
+      ctx.save();
+      ctx.strokeStyle='rgba(196,181,253,0.9)'; ctx.lineWidth=1; ctx.setLineDash([5,3]);
+      ctx.beginPath(); ctx.moveTo(padL,Math.round(_pocY)+0.5); ctx.lineTo(padL+chartW,Math.round(_pocY)+0.5); ctx.stroke();
+      ctx.setLineDash([]);
+      var _fmtP=function(p){return _vp.step<1?p.toFixed(1):String(Math.round(p));};
+      var _pocHi=_vp.pocLo+_vp.bin-_vp.step;
+      var _pocTxt='POC '+(_vp.bin>_vp.step?(_fmtP(_vp.pocLo)+'〜'+_fmtP(_pocHi)):_fmtP(_vp.pocLo));
+      ctx.font='bold 10px -apple-system,Helvetica,sans-serif';
+      ctx.textAlign='left'; ctx.textBaseline='bottom';
+      ctx.fillStyle='#c4b5fd'; ctx.fillText(_pocTxt,padL+chartW*0.25+6,_pocY-2);
+      ctx.restore();
+    }
+  }
+
   /* B-drawing: 時刻+価格座標ストローク描画 (ズーム・パンに追従)
      C3+: cur(現在chart側) と ref(過去chart側) を分けて描画。minToXをside別に渡す。
      2026-04-21: 地図モデルズーム化 — ctx._strokeZoom に zoom を設定、
@@ -5714,6 +5861,22 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   ctx.moveTo(padL, divY);
   ctx.lineTo(padL+chartW, divY);
   ctx.stroke();
+
+  /* 2026-09-17: 価格帯別出来高「指定時刻まで」— 集計の境目の縦線 + 「HH:MM まで」ラベル (最前面) */
+  if(_vpCutX!=null&&_vpCutX>=padL-1&&_vpCutX<=padL+chartW+1){
+    ctx.save();
+    ctx.strokeStyle='rgba(167,139,250,0.95)'; ctx.lineWidth=1.5; ctx.setLineDash([4,3]);
+    ctx.beginPath(); ctx.moveTo(Math.round(_vpCutX)+0.5,priceTop); ctx.lineTo(Math.round(_vpCutX)+0.5,volBot); ctx.stroke();
+    ctx.setLineDash([]);
+    var _ut=vpOpt.untilTm, _ul=Math.floor(_ut/60)+':'+('0'+(_ut%60)).slice(-2)+' まで';
+    ctx.font='bold 10px -apple-system,Helvetica,sans-serif';
+    var _uw=ctx.measureText(_ul).width+10;
+    var _ux=Math.max(padL,Math.min(_vpCutX+4,padL+chartW-_uw));   /* 右端で切れないよう内側へ */
+    ctx.fillStyle='rgba(83,74,183,0.92)'; ctx.fillRect(_ux,priceTop+2,_uw,16);
+    ctx.fillStyle='#ffffff'; ctx.textAlign='left'; ctx.textBaseline='middle';
+    ctx.fillText(_ul,_ux+5,priceTop+10);
+    ctx.restore();
+  }
 
   // ヘッダー描画は廃止（ticker+date は panel 上部の HTML メタ行に表示済み）
   // 直近終値の水平ライン+ラベル: 2026-04-20 削除
@@ -6395,6 +6558,13 @@ function ImageAnnotator(props){
   /* 2026-06-29: シミュレーターは常に 1分+5分 同時表示(stackMode)で開始する(ユーザー要望)。
      通常編集は「初期表示の足」設定に従う。 */
   var sStk=useState(function(){return simMode?true:(caLoadDefaultTf()==='stack');}); var stackMode=sStk[0],setStackMode=sStk[1];
+  /* 2026-09-17: 価格帯別出来高。ON/OFF と集計モードは全チャート共通(localStorage)。
+     指定時刻 vpUntil は null=「最新の足に追従」(シミュでは開示が進むと一緒に伸びる)。数値=スライダーで固定した時刻(分) */
+  var sVpOn=useState(caLoadVpOn); var vpOn=sVpOn[0],setVpOn=sVpOn[1];
+  var sVpMode=useState(caLoadVpMode); var vpMode=sVpMode[0],setVpMode=sVpMode[1];
+  var sVpUntil=useState(null); var vpUntil=sVpUntil[0],setVpUntil=sVpUntil[1];
+  /* 別チャート(銘柄/日付)に切り替わったら指定時刻は「最新に追従」へ戻す */
+  useEffect(function(){ setVpUntil(null); },[analysisData?analysisData.ticker:null, analysisData?analysisData.date:null]);
   /* ジョイスティック表示状態 (タッチのみ) */
   var sJH=useState(function(){return localStorage.getItem('ca_js_hidden')==='1';});
   var jsHidden=sJH[0],setJsHidden=sJH[1];
@@ -6561,6 +6731,23 @@ function ImageAnnotator(props){
 
   /* ───────── シミュレーション(練習)モード ───────── */
   function _simTmin(t){var p=String(t).split(':');return (+p[0])*60+(+p[1]);}
+  /* 2026-09-17: 価格帯別出来高 — チャートに渡しているデータ(シミュ中は開示済みの足だけ)から、
+     データの有無と「指定時刻まで」スライダーの範囲 [初約定の足, 最後の約定の足] を求める */
+  function vpRange(){
+    var d=simMode?simDisplayData:emaContinuedData;
+    var b=(d&&d.bars_1m)||[], lo=null, hi=null;
+    for(var i=0;i<b.length;i++){ if(b[i].v>0){ var m=_simTmin(b[i].t); if(lo==null)lo=m; hi=m; } }
+    return {has:caVpHasData(d), lo:lo, hi:hi};
+  }
+  /* DataChart へ渡す表示条件。指定時刻は範囲内にクランプ (null=最新=hi) */
+  function vpOptNow(){
+    if(!vpOn)return null;
+    if(vpMode!=='until')return {on:true, mode:'visible', untilTm:null};
+    var r=vpRange();
+    if(r.hi==null)return {on:true, mode:'until', untilTm:null};
+    var u=(vpUntil==null)?r.hi:Math.max(r.lo,Math.min(r.hi,vpUntil));
+    return {on:true, mode:'until', untilTm:u};
+  }
   function simBarsForTf(){
     if(!analysisData)return [];
     /* 2026-06-29: 1分足+5分足の同時表示(stackMode)中は、5分足をメインにしていても
@@ -8845,8 +9032,53 @@ function ImageAnnotator(props){
                       borderRadius:5,cursor:"pointer",fontFamily:"inherit"}},
                     "タグ"
                   )
-                )
+                ),
+                /* 2026-09-17: 価格帯別出来高 ON/OFF (タグの右)。保存とは無関係なのでチャートID条件の外に置く=シミュでも出る */
+                ce("button",{
+                  onClick:function(){var nv=!vpOn;setVpOn(nv);caSaveVpOn(nv);},
+                  title:"価格帯別出来高の表示を切り替え",
+                  style:{padding:"3px 7px",fontSize:11,fontWeight:700,flexShrink:0,
+                    background:vpOn?"#1e1b4b":"transparent",
+                    color:vpOn?"#c4b5fd":"#555",
+                    border:vpOn?"1px solid #7c3aed":"1px solid transparent",
+                    borderRadius:5,cursor:"pointer",fontFamily:"inherit"}},
+                  "価格帯別出来高")
               ),
+              /* 2026-09-17: 価格帯別出来高の集計モード切替 + 「指定時刻まで」のスライダー (ONのときだけ) */
+              vpOn&&(function(){
+                var r=vpRange();
+                function segBtn(key,label){
+                  var on=(vpMode===key);
+                  return ce("button",{key:key,
+                    onClick:function(){setVpMode(key);caSaveVpMode(key);},
+                    style:{padding:"3px 10px",fontSize:11,fontWeight:700,border:"none",borderRadius:5,
+                      cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap",
+                      background:on?"#5b21b6":"transparent",color:on?"#ffffff":"#8b8b9a"}},label);
+                }
+                var u=null;
+                if(vpMode==='until'&&r.hi!=null)u=(vpUntil==null)?r.hi:Math.max(r.lo,Math.min(r.hi,vpUntil));
+                var body;
+                if(!r.has){
+                  body=ce("span",{style:{fontSize:11,color:"#9ca3af"}},
+                    "このチャートには価格帯別出来高のデータがありません（ティックCSVから取り込み直すと表示されます）");
+                }else if(vpMode==='until'&&u!=null){
+                  body=ce("div",{style:{display:"flex",alignItems:"center",gap:8,flex:1,minWidth:180}},
+                    ce("input",{type:"range",min:r.lo,max:r.hi,step:1,value:u,
+                      onChange:function(e){var v=parseInt(e.target.value,10); setVpUntil(v>=r.hi?null:v);},
+                      style:{flex:1,minWidth:100,accentColor:"#8b5cf6"}}),
+                    ce("span",{style:{fontSize:12,fontWeight:700,color:"#c4b5fd",minWidth:64,flexShrink:0,textAlign:"right"}},
+                      Math.floor(u/60)+':'+('0'+(u%60)).slice(-2)+' まで'));
+                }else if(vpMode==='until'){
+                  body=ce("span",{style:{fontSize:11,color:"#9ca3af"}},"約定のある足がまだありません");
+                }else{
+                  body=ce("span",{style:{fontSize:11,color:"#8b8b9a"}},"画面に表示中の足（当日分）で集計");
+                }
+                return ce("div",{style:{display:"flex",alignItems:"center",gap:10,padding:"5px 12px",
+                    borderTop:"1px solid #222",background:"#0d0b1a",flexWrap:"wrap"}},
+                  ce("div",{style:{display:"flex",gap:2,background:"#1a1a2e",borderRadius:6,padding:2,flexShrink:0}},
+                    segBtn('visible','表示範囲'),segBtn('until','指定時刻まで')),
+                  body);
+              })(),
               /* タグセレクターパネル */
               edTagOpen&&ce("div",{style:{padding:"8px 12px",borderTop:"1px solid #222",background:"#0a0a0a"}},
                 ce(CaTagSelector,{
@@ -8874,6 +9106,7 @@ function ImageAnnotator(props){
                引数渡しで外側値を捕捉(var巻き上げ回避)。 */
             (function(analysisTf){return ce(DataChart,{
               data:simMode?simDisplayData:emaContinuedData, tf:topTf, showCrosshair:showCrosshair,
+              vpOpt:vpOptNow(),   /* 2026-09-17: 価格帯別出来高 */
               /* C1+: 過去chartデータを渡して同一キャンバスに連結描画 */
               refData:refAnalysis?refAnalysis.analysisData:null,
               /* C3+: 過去chart側ストロークも連結描画 (C6で書込対応) */
@@ -9169,6 +9402,7 @@ function ImageAnnotator(props){
                非シミュは外側analysisTfのまま(tap-to-focus維持)。引数渡しで外側値を捕捉。 */
             (function(analysisTf){return ce(DataChart,{
               data:simMode?simDisplayData:emaContinuedData, tf:'5m', showCrosshair:showCrosshair,
+              vpOpt:vpOptNow(),   /* 2026-09-17: 価格帯別出来高 (5分足ペインも1分足の vp から集計) */
               /* 2026-06-25: stackMode 1m⇔5m カーソル連動 (この下段は常にstack時のみrender) */
               linkCursorRef:linkCursorRef, linkCursorBump:cursorBump, onLinkCursorChange:notifyLinkCursor,
               /* 2026-06-18: controlled view/zoom/pShift (uncontrolled再フィットによる倍率縮小を防止) */
@@ -16100,6 +16334,75 @@ function DraftLibrary(props){
 
   /* 2026-04-20: JSON歩み値ファイルから新フォーマットdraft作成 (画像なし、Phase 2)
      data = {analysisData, analysisStrokes:{1m:[],5m:[]}, name, _v} */
+  /* 2026-09-17: 価格帯別出来高のマージ取込。
+     vp_ver 付きJSONで「同じ銘柄・同じ日付」の既存チャートがあれば、新規追加せず既存チャートの
+     1分足へ vp だけ書き足す (OHLC/EMA/書き込み/メモ/タグは触らない)。同日の重複チャートが複数あれば全部に足す。
+     他端末で追加した書き込みを古い版で上書きしないよう、ローカル(IDB)と Firebase の両方を読んで _v が新しい方に足す。
+     保存は自動保存(triggerAutoSave)と同じ3点: メタPATCH(savedAt) / データPUT(_v) / タイムスタンプPUT。
+     done(mergedCount, missingBars): mergedCount=0 は該当なし → 呼び出し側で従来どおり新規追加する */
+  function tryMergeVp(ticker, j, done){
+    if(!(j&&j.vp_ver&&Array.isArray(j.bars_1m)&&j.date)){done(0,0);return;}
+    var targets=caLoadMeta().filter(function(m){return m.ticker===ticker&&_caResolveMetaDate(m)===j.date;});
+    if(!targets.length){done(0,0);return;}
+    var vpByT={}, vpBars=0;
+    j.bars_1m.forEach(function(b){ if(b&&b.vp){ vpByT[b.t]=b.vp; vpBars++; } });
+    var left=targets.length, merged=0, missing=0;
+    targets.forEach(function(m){
+      var local=null, remote=null, pending=2;
+      function settle(){
+        if(--pending>0)return;
+        var useRemote=!!(remote&&(remote._v||0)>((local&&local._v)||0));
+        apply(useRemote?remote:(local||remote));
+      }
+      function apply(d){
+        if(d&&d.analysisData&&Array.isArray(d.analysisData.bars_1m)){
+          var ad=d.analysisData, hit=0;
+          var nb=ad.bars_1m.map(function(b){
+            var vp=vpByT[b.t];
+            if(vp){ hit++; return Object.assign({},b,{vp:vp}); }
+            if(b.vp){ var o=Object.assign({},b); delete o.vp; return o; }   /* 再マージで古い vp を残さない */
+            return b;
+          });
+          missing+=Math.max(0,vpBars-hit);   /* 既存チャート側に同じ時刻の足が無く反映できなかった本数 */
+          var savedAt=Date.now();
+          var nd=Object.assign({},d,{analysisData:Object.assign({},ad,{vp_ver:j.vp_ver,bars_1m:nb}),_v:savedAt});
+          caSaveData(m.id,nd);
+          var stored=caLoadMeta().map(function(x){return x.id===m.id?Object.assign({},x,{savedAt:savedAt}):x;});
+          caSaveMeta(stored);
+          setMeta(function(prev){return prev.map(function(x){return x.id===m.id?Object.assign({},x,{savedAt:savedAt}):x;});});
+          fbPutVpMerge(m,nd,savedAt);
+          merged++;
+        }
+        if(--left===0)done(merged,missing);
+      }
+      caLoadDataAsync(m.id,function(d){ local=(d&&d.analysisData)?d:null; settle(); });
+      var dataBase=makeDraftsDataBase();
+      if(dataBase&&!_fbIsPaused(fbCfg)){
+        fetch(dataBase+'/'+m.id+'.json'+auth).then(function(r){return r.ok?r.json():null;})
+          .then(function(fb){ remote=(fb&&fb.analysisData)?fb:null; settle(); })
+          ["catch"](function(){ settle(); });
+      }else{ settle(); }
+    });
+  }
+  function fbPutVpMerge(m, nd, savedAt){
+    var base=makeDraftsBase(), dataBase=makeDraftsDataBase();
+    if(!base||_fbIsPaused(fbCfg))return;
+    var patch={savedAt:savedAt}; var ad=_caResolveMetaDate(m); if(ad)patch.analysisDate=ad;
+    fetch(base+'/'+m.id+'.json'+auth,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(patch)})
+      ["catch"](function(e){console.error('vp merge meta:',e);});
+    fetch(dataBase+'/'+m.id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(nd)})
+      ["catch"](function(e){console.error('vp merge data:',e);});
+    var tsBase=fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-ts';
+    fetch(tsBase+'/'+m.id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({t:savedAt})})
+      ["catch"](function(){});
+    fbWriteV();
+  }
+  function vpMergeMsg(ticker, j, merged, missing){
+    return '価格帯別出来高を既存チャートに追加: '+ticker+' '+j.date
+      +(merged>1?'（'+merged+'件）':'')
+      +(missing>0?'／同じ時刻の足が無く未反映 '+missing+'本':'');
+  }
+
   function addJsonDirect(file){
     if(!file){return;}
     if(!selTicker){window.caToast('銘柄を選択してください','info');return;}
@@ -16115,6 +16418,12 @@ function DraftLibrary(props){
       if(!j||!Array.isArray(j.bars_1m)){
         window.caToast('形式が不正: bars_1m が配列ではありません','error');return;
       }
+      /* 2026-09-17: 同じ銘柄・日付の既存チャートがあれば価格帯別出来高だけマージ (新規追加しない) */
+      tryMergeVp(selTicker, j, function(merged, missing){
+        if(merged){ window.caToast(vpMergeMsg(selTicker,j,merged,missing),'success'); return; }
+        createNewChart();
+      });
+      function createNewChart(){
       var id=caGenId();
       var savedAt=Date.now();
       var chartName=(file.name||'chart').replace(/\.[^.]+$/,'')||'chart';
@@ -16136,6 +16445,7 @@ function DraftLibrary(props){
         fbSaveDraft(id,metaItem,data);
         window.caToast('JSONを読み込みました: '+chartName,'success');
       });
+      } /* createNewChart */
     };
     fr.onerror=function(){window.caToast('ファイル読込エラー','error');};
     fr.readAsText(file);
@@ -16195,6 +16505,19 @@ function DraftLibrary(props){
         var ticker=_resolveTickerByCode(file.name)||_resolveTickerByJson(j)||j.ticker||'未分類';
         ticker=_addTickerIfNeeded(ticker);
         if(!firstTicker)firstTicker=ticker;
+        /* 2026-09-17: 同じ銘柄・日付の既存チャートがあれば価格帯別出来高だけマージ (新規追加しない) */
+        tryMergeVp(ticker, j, function(merged, missing){
+          if(merged){
+            processed++;
+            window.caToast(vpMergeMsg(ticker,j,merged,missing),'success');
+            _log({file:(file.name||'chart').replace(/\.[^.]+$/,''),
+              msg:'→ '+ticker+' 既存チャートに価格帯別出来高を追加'+(missing>0?'（未反映 '+missing+'本）':''),ok:true});
+            if(processed===total&&firstTicker){setSelTicker(firstTicker);}
+            return;
+          }
+          createNewChart();
+        });
+        function createNewChart(){
         var id=caGenId();
         var savedAt=Date.now();
         var chartName=(file.name||'chart').replace(/\.[^.]+$/,'')||'chart';
@@ -16218,6 +16541,7 @@ function DraftLibrary(props){
           /* 全ファイル完了後、最初のファイルの銘柄を自動選択 */
           if(processed===total&&firstTicker){setSelTicker(firstTicker);}
         });
+        } /* createNewChart */
       };
       fr.onerror=function(){window.caToast('読込エラー: '+file.name,'error'); processed++;};
       fr.readAsText(file);
