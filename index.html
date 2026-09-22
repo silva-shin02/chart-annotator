@@ -8785,7 +8785,7 @@ function ImageAnnotator(props){
         )
       ),
       /* Row 3: スニペットパレット (snippetツール選択時のみ表示) */
-      (analysisData && tool==='snippet') && ce("div",{
+      (analysisData && tool==='snippet') && ce("div",{ref:caWheelToX,
         style: snipCats.length===0
           ?{display:"flex",gap:4,alignItems:"center",padding:"5px 8px",
             flexWrap:"nowrap",overflowX:"auto",overflowY:"hidden",WebkitOverflowScrolling:"touch",
@@ -8807,7 +8807,7 @@ function ImageAnnotator(props){
                   ce("span",null,g.cat?g.cat.name:'未分類'),
                   ce("span",{style:{fontSize:10,color:"#7c6f9c",fontWeight:400}},'('+g.items.length+')')
                 ),
-                open&&ce("div",{style:{display:"flex",flexWrap:"nowrap",gap:4,flex:"1 1 auto",minWidth:0,
+                open&&ce("div",{ref:caWheelToX,style:{display:"flex",flexWrap:"nowrap",gap:4,flex:"1 1 auto",minWidth:0,
                   overflowX:"auto",overflowY:"hidden",WebkitOverflowScrolling:"touch",touchAction:"pan-x",
                   padding:"1px 0 2px 0"}},
                   g.items.map(renderPaletteChip))
@@ -11695,6 +11695,21 @@ function caNewSnipCatId(){
 }
 function caSnipBucket(s, cats){ return caTagBucket(s, cats); }
 function caGroupSnipsByCat(snips, cats){ return caGroupDefsByCat(snips, cats); }
+/* 2026-09-22: 縦ホイール → 横スクロール (スタンプパレットのチップ行用。ref に渡す)
+   React の onWheel は passive 登録で preventDefault が効かず、外側の縦スクロール(maxHeight:200)まで
+   一緒に動いてしまうため、要素に直接 {passive:false} で付ける。
+   はみ出していない行・端まで来た行・内側で処理済み・Ctrl+ホイール(ズーム) は素通しして外側へ譲る */
+function caWheelToX(el){
+  if(!el||el._caWheelX)return;
+  el._caWheelX=true;
+  el.addEventListener('wheel',function(e){
+    if(e.defaultPrevented||e.ctrlKey)return;
+    var d=e.deltaY, max=el.scrollWidth-el.clientWidth;
+    if(!d||max<=0||Math.abs(d)<Math.abs(e.deltaX))return;             /* 横方向の入力はブラウザ標準のまま */
+    if((d<0&&el.scrollLeft<=0)||(d>0&&el.scrollLeft>=max-1))return;  /* 端まで来たら外側の縦スクロールへ */
+    e.preventDefault(); el.scrollLeft+=d;
+  },{passive:false});
+}
 
 /* 画像ファイル → {base64, mt} */
 function caFileToImg(file){
