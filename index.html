@@ -5405,23 +5405,35 @@ function caVpPickBin(step, pxPerYen, binPref){
   /* どれも高さが足りない → 上限の10円。ただし呼値がそれより粗い銘柄(呼値50円など)は呼値にする */
   return Math.max(c[c.length-1], floor);
 }
+/* 2026-09-28: POC の集計から外す足 (板寄せ)。前引け(11:30=690)は単一価格に出来高が集中するので、
+   入れると POC がそこに貼り付いて動かなくなる。帯(levels)と total は従来どおり全部入り。
+   後場寄り(750)・大引け を足すならここに追加する */
+var CA_VP_POC_SKIP_TM={690:1};
 /* bars1m のうち時刻 [fromTm, toTm] の足の vp を合算し、刻み(caVpPickBin)ごとの帯にまとめる。約定0なら null。
    戻り値 {step, bin, levels:[{lo, v}], maxV, bandLo, pocP, pocV, total}
-     lo=その帯の最安価格 / bandLo=一番出来高の多い帯 / pocP=刻みに関係なく1円(呼値)単位で一番出来た価格 */
+     lo=その帯の最安価格 / bandLo=一番出来高の多い帯
+     pocP=刻みに関係なく1円(呼値)単位で一番出来た価格 (CA_VP_POC_SKIP_TM の足は除く) */
 function caVpAggregate(bars1m, fromTm, toTm, pxPerYen, binPref){
   var step=caVpTickStep(bars1m);
-  var map={}, total=0;
+  var map={}, pocMap={}, total=0;
   for(var i=0;i<bars1m.length;i++){
     var b=bars1m[i], a=b&&b.vp; if(!a)continue;
     var m=_caVpTm(b.t); if(m<fromTm||m>toTm)continue;
-    for(var j=0;j<a.length;j+=2){ map[a[j]]=(map[a[j]]||0)+a[j+1]; total+=a[j+1]; }
+    var skipPoc=!!CA_VP_POC_SKIP_TM[m];
+    for(var j=0;j<a.length;j+=2){
+      map[a[j]]=(map[a[j]]||0)+a[j+1]; total+=a[j+1];
+      if(!skipPoc)pocMap[a[j]]=(pocMap[a[j]]||0)+a[j+1];
+    }
   }
   if(total<=0)return null;
   var bin=caVpPickBin(step, pxPerYen, binPref);
   var bins={}, pocP=null, pocV=0;
+  Object.keys(pocMap).forEach(function(k){
+    var v=pocMap[k];
+    if(v>pocV){ pocV=v; pocP=+k; }
+  });
   Object.keys(map).forEach(function(k){
     var p=+k, v=map[k];
-    if(v>pocV){ pocV=v; pocP=p; }
     var idx=Math.floor((p+step*0.01)/bin);   /* 小数価格の境界誤差よけ */
     bins[idx]=(bins[idx]||0)+v;
   });
