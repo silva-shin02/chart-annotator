@@ -717,6 +717,9 @@ var CA_VP_BIN_KEY='ca_vp_bin_v1';
            場中は HyperSBI2 しか見ないので、振り返りも同じ見え方になるよう既定にする
    tick  = ティックの価格別出来高(vp)をそのまま使う = 実際に約定した価格の分布 */
 var CA_VP_SRC_KEY='ca_vp_src_v1';
+/* 2026-09-29: 集計元の切替UIを出すか。当面ティックは使わないので false = 1分終値に固定。
+   復活させるときはここを true に戻すだけ (集計・保存・同期の実装はそのまま残してある) */
+var CA_VP_SRC_UI=false;
 var CA_SYNC_PREF_KEYS=[CA_PRICE_PX_KEY,CA_AUTO_PAN_KEY,CA_CHART_BG_KEY,CA_TICKER_CODES_KEY,
   CA_INDICATOR_VIS_KEY,CA_FIT_MODE_KEY,CA_DEFAULT_TF_KEY,CA_DRAW_DEFAULTS_KEY,CA_PEN_ONLY_KEY,
   CA_PRICE_GRID_STEP_KEY,CA_SIM_START_MIN_KEY,CA_VP_ON_KEY,CA_VP_MODE_KEY,CA_VP_BIN_KEY,CA_VP_SRC_KEY,
@@ -1075,6 +1078,9 @@ function caSaveVpBin(b){
   caPrefPush(CA_VP_BIN_KEY);
 }
 function caLoadVpSrc(){
+  /* UI非表示中は保存値によらず close 固定。過去に tick を保存した端末が
+     切替ボタンの無いまま取り残されるのを防ぐ */
+  if(!CA_VP_SRC_UI)return 'close';
   try{return localStorage.getItem(CA_VP_SRC_KEY)==='tick'?'tick':'close';}catch(e){return 'close';}
 }
 function caSaveVpSrc(v){
@@ -9334,8 +9340,9 @@ function ImageAnnotator(props){
                   return ce(Fragment,null,
                     seg([['visible','表示範囲'],['until','指定時刻まで']],vpMode,function(k){setVpMode(k);caSaveVpMode(k);}),
                     seg([['auto','自動'],['1','1円'],['5','5円'],['10','10円']],vpBin,function(k){setVpBin(k);caSaveVpBin(k);}),
-                    /* 2026-09-29: 集計元。ティック=実際に約定した価格の分布 / 1分終値=HyperSBI2 と同じ積み方 */
-                    seg([['tick','ティック'],['close','1分終値']],vpSrc,function(k){setVpSrc(k);caSaveVpSrc(k);}),
+                    /* 2026-09-29: 集計元。ティック=実際に約定した価格の分布 / 1分終値=HyperSBI2 と同じ積み方。
+                       CA_VP_SRC_UI=false の間は出さない (1分終値に固定) */
+                    CA_VP_SRC_UI&&seg([['tick','ティック'],['close','1分終値']],vpSrc,function(k){setVpSrc(k);caSaveVpSrc(k);}),
                     tail);
                 })()
               ),
