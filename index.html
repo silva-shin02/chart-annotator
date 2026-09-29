@@ -5391,19 +5391,21 @@ function caVpTickStep(bars1m){
    2026-09-17: 帯は最大10円 (ユーザー指定)。縮小しすぎて10円でも高さが足りないときは細いまま隙間なしで描く */
 var CA_VP_BIN_CANDS=[0.1,0.5,1,5,10];
 var CA_VP_AUTO_MIN_PX=8;   /* 自動: 帯の高さがこれ以上になる最小の刻み (等倍3.5px/円→5円、2.3倍拡大で1円) */
-var CA_VP_READABLE_PX=3;   /* 固定: これ未満(読めない)のときだけ自動で太くする */
 /* 帯の刻みを決める。binPref='auto'|'1'|'5'|'10'。呼値(step)より細かくはしない */
 function caVpPickBin(step, pxPerYen, binPref){
   var c=CA_VP_BIN_CANDS, i;
   var fixed=(binPref==='1'||binPref==='5'||binPref==='10')?(+binPref):null;
-  var minPx=fixed?CA_VP_READABLE_PX:CA_VP_AUTO_MIN_PX;
-  var floor=Math.max(step, fixed||0);
+  /* 2026-09-29: 1円/5円/10円 を選んだらその刻みで固定する (HyperSBI2 の「価格幅」と同じ)。
+     以前は薄すぎると読めないので自動で太らせていたが、縮小時に勝手に刻みが変わって
+     HyperSBI2 と一致しなくなるため撤去。呼値(step)より細かくしない制限だけ残す。
+     縮小しすぎて帯の高さが 1px を切る場合は、描画側が 1px 下限で隙間なしに描く */
+  if(fixed!=null)return Math.max(step, fixed);
   for(i=0;i<c.length;i++){
-    if(c[i]+1e-9<floor)continue;
-    if(c[i]*pxPerYen>=minPx)return c[i];
+    if(c[i]+1e-9<step)continue;
+    if(c[i]*pxPerYen>=CA_VP_AUTO_MIN_PX)return c[i];
   }
-  /* どれも高さが足りない → 上限の10円。ただし呼値がそれより粗い銘柄(呼値50円など)は呼値にする */
-  return Math.max(c[c.length-1], floor);
+  /* 自動でどれも高さが足りない → 上限の10円。ただし呼値がそれより粗い銘柄(呼値50円など)は呼値にする */
+  return Math.max(c[c.length-1], step);
 }
 /* 2026-09-28: POC の集計から外す足 (板寄せ)。前引け(11:30=690)は単一価格に出来高が集中するので、
    入れると POC がそこに貼り付いて動かなくなる。帯(levels)と total は従来どおり全部入り。
