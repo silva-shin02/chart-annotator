@@ -712,9 +712,10 @@ var CA_VP_ON_KEY='ca_vp_on_v1';
 var CA_VP_MODE_KEY='ca_vp_mode_v1';
 /* 2026-09-17: 価格帯別出来高の帯の刻み 'auto'(既定) | '1' | '5' | '10' (円)。全チャート共通 */
 var CA_VP_BIN_KEY='ca_vp_bin_v1';
-/* 2026-09-29: 集計の元データ 'tick'(既定) | 'close'。全チャート共通
-   tick  = ティックの価格別出来高(vp)をそのまま使う = 実際に約定した価格の分布
-   close = 1分足の出来高まるごとをその足の終値1円に積む = HyperSBI2 と同じ積み方 */
+/* 2026-09-29: 集計の元データ 'close'(既定) | 'tick'。全チャート共通
+   close = 1分足の出来高まるごとをその足の終値1円に積む = HyperSBI2 と同じ積み方。
+           場中は HyperSBI2 しか見ないので、振り返りも同じ見え方になるよう既定にする
+   tick  = ティックの価格別出来高(vp)をそのまま使う = 実際に約定した価格の分布 */
 var CA_VP_SRC_KEY='ca_vp_src_v1';
 var CA_SYNC_PREF_KEYS=[CA_PRICE_PX_KEY,CA_AUTO_PAN_KEY,CA_CHART_BG_KEY,CA_TICKER_CODES_KEY,
   CA_INDICATOR_VIS_KEY,CA_FIT_MODE_KEY,CA_DEFAULT_TF_KEY,CA_DRAW_DEFAULTS_KEY,CA_PEN_ONLY_KEY,
@@ -1074,7 +1075,7 @@ function caSaveVpBin(b){
   caPrefPush(CA_VP_BIN_KEY);
 }
 function caLoadVpSrc(){
-  try{return localStorage.getItem(CA_VP_SRC_KEY)==='close'?'close':'tick';}catch(e){return 'tick';}
+  try{return localStorage.getItem(CA_VP_SRC_KEY)==='tick'?'tick':'close';}catch(e){return 'close';}
 }
 function caSaveVpSrc(v){
   var s=(v==='close')?'close':'tick';
