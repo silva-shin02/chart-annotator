@@ -5874,11 +5874,8 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
          軒並み潰れ、比例計算(1px下限なし)では消えてしまう。HyperSBI2 も見えている範囲で正規化している。 */
       var _vpVis=[], _vpVisMax=0;
       _vp.levels.forEach(function(lv){
-        /* 2026-09-29: 帯が占める範囲は [lo, lo+bin) (HyperSBI2 の「価格幅」と同じ)。
-           例: 1円刻みなら 3550 の帯は 3550〜3551 を占め、中心は 3550.5。
-           以前は価格を帯の中心に置いていた (3550 の帯が 3549.5〜3550.5) ので、
-           HyperSBI2 と呼値の半分 (step/2) だけ下にずれていた */
-        var yT=pToY(lv.lo+_vp.bin), yB=pToY(lv.lo);
+        var cp=lv.lo+(_vp.bin-_vp.step)/2;               /* 帯の中心価格 (刻み内の価格の中央) */
+        var yT=pToY(cp+_vp.bin/2), yB=pToY(cp-_vp.bin/2);
         if(yB<priceTop||yT>priceBot)return;
         _vpVis.push({lo:lv.lo, v:lv.v, yT:yT, yB:yB});
         if(lv.v>_vpVisMax)_vpVisMax=lv.v;
