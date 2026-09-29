@@ -9342,7 +9342,7 @@ function ImageAnnotator(props){
                     seg([['auto','自動'],['1','1円'],['5','5円'],['10','10円']],vpBin,function(k){setVpBin(k);caSaveVpBin(k);}),
                     /* 2026-09-29: 集計元。ティック=実際に約定した価格の分布 / 1分終値=HyperSBI2 と同じ積み方。
                        CA_VP_SRC_UI=false の間は出さない (1分終値に固定) */
-                    CA_VP_SRC_UI&&seg([['tick','ティック'],['close','1分終値']],vpSrc,function(k){setVpSrc(k);caSaveVpSrc(k);}),
+                    CA_VP_SRC_UI&&seg([['close','1分終値'],['tick','ティック']],vpSrc,function(k){setVpSrc(k);caSaveVpSrc(k);}),
                     tail);
                 })()
               ),
