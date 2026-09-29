@@ -5874,7 +5874,9 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
         if(yB<priceTop||yT>priceBot)return;
         /* 帯が十分太いときだけ1pxの隙間。細いときに隙間を入れると縞模様になり山の形が読めない */
         var h=yB-yT; if(h>=CA_VP_AUTO_MIN_PX){ yT+=0.5; h-=1; }
-        var w=Math.max(1,lv.v/_vp.maxV*_vpMaxW);
+        /* 2026-09-29: 比例計算 (HyperSBI2 と同じ)。1px の下限を置かないので、
+           出来高の薄い価格帯は 1px 未満になって自然に消える */
+        var w=lv.v/_vp.maxV*_vpMaxW;
         ctx.fillStyle=(lv.lo===_vp.bandLo)?'rgba(167,139,250,0.55)':'rgba(167,139,250,0.28)';   /* 一番厚い帯を濃く */
         ctx.fillRect(padL,yT,w,Math.max(1,h));
       });
