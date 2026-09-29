@@ -5866,17 +5866,27 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     if(_vpFrom!=null)_vp=caVpAggregate(data.bars_1m,_vpFrom,_vpTo,pxPerYen,vpOpt.bin);
     if(_vp){
       var _vpMaxW=chartW*0.25;
-      ctx.save();
-      ctx.beginPath(); ctx.rect(padL,priceTop,chartW,priceH); ctx.clip();
+      /* 2026-09-29: 棒の長さは「画面に見えている価格帯の中での最大値」を基準にする。
+         集計は寄りからなので、寄り付近の厚い帯が画面外(上)にあることが多い。
+         全体の最大値(_vp.maxV)で割ると、その画面外の帯に引っ張られて画面内の棒が
+         軒並み潰れ、比例計算(1px下限なし)では消えてしまう。HyperSBI2 も見えている範囲で正規化している。 */
+      var _vpVis=[], _vpVisMax=0;
       _vp.levels.forEach(function(lv){
         var cp=lv.lo+(_vp.bin-_vp.step)/2;               /* 帯の中心価格 (刻み内の価格の中央) */
         var yT=pToY(cp+_vp.bin/2), yB=pToY(cp-_vp.bin/2);
         if(yB<priceTop||yT>priceBot)return;
+        _vpVis.push({lo:lv.lo, v:lv.v, yT:yT, yB:yB});
+        if(lv.v>_vpVisMax)_vpVisMax=lv.v;
+      });
+      ctx.save();
+      ctx.beginPath(); ctx.rect(padL,priceTop,chartW,priceH); ctx.clip();
+      _vpVis.forEach(function(lv){
+        var yT=lv.yT;
         /* 帯が十分太いときだけ1pxの隙間。細いときに隙間を入れると縞模様になり山の形が読めない */
-        var h=yB-yT; if(h>=CA_VP_AUTO_MIN_PX){ yT+=0.5; h-=1; }
-        /* 2026-09-29: 比例計算 (HyperSBI2 と同じ)。1px の下限を置かないので、
+        var h=lv.yB-yT; if(h>=CA_VP_AUTO_MIN_PX){ yT+=0.5; h-=1; }
+        /* 比例計算 (HyperSBI2 と同じ)。1px の下限を置かないので、
            出来高の薄い価格帯は 1px 未満になって自然に消える */
-        var w=lv.v/_vp.maxV*_vpMaxW;
+        var w=lv.v/_vpVisMax*_vpMaxW;
         ctx.fillStyle=(lv.lo===_vp.bandLo)?'rgba(167,139,250,0.55)':'rgba(167,139,250,0.28)';   /* 一番厚い帯を濃く */
         ctx.fillRect(padL,yT,w,Math.max(1,h));
       });
