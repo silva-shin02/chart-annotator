@@ -5876,10 +5876,15 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
         if(yB<priceTop||yT>priceBot)return;
         /* 帯が十分太いときだけ1pxの隙間。細いときに隙間を入れると縞模様になり山の形が読めない */
         var h=yB-yT; if(h>=CA_VP_AUTO_MIN_PX){ yT+=0.5; h-=1; }
-        /* 2026-09-29: 比例計算 (HyperSBI2 と同じ)。1px の下限を置かないので、
-           出来高の薄い価格帯は 1px 未満になって自然に消える */
+        /* 比例計算 (HyperSBI2 と同じ)。集計範囲全体の最大値で正規化するので、
+           寄りの板寄せが画面外にあると薄い価格帯は 1px 未満まで縮む */
         var w=lv.v/_vp.maxV*_vpMaxW;
-        ctx.fillStyle=(lv.lo===_vp.bandLo)?'rgba(167,139,250,0.55)':'rgba(167,139,250,0.28)';   /* 一番厚い帯を濃く */
+        /* 2026-09-29: 1px 未満の帯 = HyperSBI2 では描かれず、場中には見えていない帯。
+           場中の見え方を再現しつつ情報も残すため、幅は 1px に留めたうえで薄く描き主役と区別する。
+           1px という境目は HyperSBI2 の実際の閾値ではなく「サブピクセル=描かれない」の近似 */
+        var faint=(w<1); if(faint)w=1;
+        ctx.fillStyle=faint?'rgba(167,139,250,0.12)'
+          :(lv.lo===_vp.bandLo)?'rgba(167,139,250,0.55)':'rgba(167,139,250,0.28)';   /* 一番厚い帯を濃く */
         ctx.fillRect(padL,yT,w,Math.max(1,h));
       });
       ctx.restore();
