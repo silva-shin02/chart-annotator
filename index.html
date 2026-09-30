@@ -720,11 +720,9 @@ var CA_VP_SRC_KEY='ca_vp_src_v1';
 /* 2026-09-29: 集計元の切替UIを出すか。true = 出す (ティック/1分終値を切替) / false = 1分終値に固定。
    復活させるときはここを true に戻すだけ (集計・保存・同期の実装はそのまま残してある) */
 var CA_VP_SRC_UI=true;
-/* 2026-09-30: POC (1円単位で一番出来た価格の点線+ラベル / 一番厚い帯の強調) を出すか。既定OFF。全チャート共通 */
-var CA_VP_POC_KEY='ca_vp_poc_v1';
 var CA_SYNC_PREF_KEYS=[CA_PRICE_PX_KEY,CA_AUTO_PAN_KEY,CA_CHART_BG_KEY,CA_TICKER_CODES_KEY,
   CA_INDICATOR_VIS_KEY,CA_FIT_MODE_KEY,CA_DEFAULT_TF_KEY,CA_DRAW_DEFAULTS_KEY,CA_PEN_ONLY_KEY,
-  CA_PRICE_GRID_STEP_KEY,CA_SIM_START_MIN_KEY,CA_VP_ON_KEY,CA_VP_MODE_KEY,CA_VP_BIN_KEY,CA_VP_SRC_KEY,CA_VP_POC_KEY,
+  CA_PRICE_GRID_STEP_KEY,CA_SIM_START_MIN_KEY,CA_VP_ON_KEY,CA_VP_MODE_KEY,CA_VP_BIN_KEY,CA_VP_SRC_KEY,
   'ca_search_words_v1','scalping_annot_presets_v1','annot_quickcolors_v1'];
 var CA_PREF_EVENTS={};
 CA_PREF_EVENTS[CA_PRICE_PX_KEY]='ca_price_px_changed';
@@ -1089,13 +1087,6 @@ function caSaveVpSrc(v){
   var s=(v==='close')?'close':'tick';
   try{localStorage.setItem(CA_VP_SRC_KEY,s);}catch(e){caStorageWarn();}
   caPrefPush(CA_VP_SRC_KEY);
-}
-function caLoadVpPoc(){
-  try{return localStorage.getItem(CA_VP_POC_KEY)==='1';}catch(e){return false;}
-}
-function caSaveVpPoc(on){
-  try{localStorage.setItem(CA_VP_POC_KEY,on?'1':'0');}catch(e){caStorageWarn();}
-  caPrefPush(CA_VP_POC_KEY);
 }
 /* 2026-06-29: 描画の既定値 (色/線幅/不透明度/フォント)。エディタ起動時の初期値に使う */
 function caLoadDrawDefaults(){
@@ -2561,7 +2552,7 @@ function DataChart(props){
 
   /* 2026-09-17: 価格帯別出来高の表示条件 (オブジェクトは毎レンダー作り直されるので値でキー化して再描画判定) */
   var vpOpt=props.vpOpt||null;
-  var vpKey=vpOpt?((vpOpt.on?1:0)+'|'+vpOpt.mode+'|'+vpOpt.untilTm+'|'+vpOpt.bin+'|'+(vpOpt.pinned?1:0)+'|'+vpOpt.src+'|'+(vpOpt.poc?1:0)):'';
+  var vpKey=vpOpt?((vpOpt.on?1:0)+'|'+vpOpt.mode+'|'+vpOpt.untilTm+'|'+vpOpt.bin+'|'+(vpOpt.pinned?1:0)+'|'+vpOpt.src):'';
   // メインチャート描画
   useEffect(function(){
     if((!bars.length&&!hasRef)||!priceRange)return;
@@ -5931,7 +5922,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
            1px という境目は HyperSBI2 の実際の閾値ではなく「サブピクセル=描かれない」の近似 */
         var faint=(w<1); if(faint)w=1;
         ctx.fillStyle=faint?'rgba(167,139,250,0.12)'
-          :(vpOpt.poc&&lv.lo===_vp.bandLo)?'rgba(167,139,250,0.55)':'rgba(167,139,250,0.28)';   /* POC表示ON時は一番厚い帯を濃く */
+          :(lv.lo===_vp.bandLo)?'rgba(167,139,250,0.55)':'rgba(167,139,250,0.28)';   /* 一番厚い帯を濃く */
         ctx.fillRect(padL,yT,w,Math.max(1,h));
       });
       ctx.restore();
@@ -6024,7 +6015,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     var _pdx=Math.max(padL,_vpCutX);
     ctx.fillStyle=_vpDimCol; ctx.fillRect(_pdx,priceTop,padL+chartW-_pdx,priceH);
   }
-  if(_vp&&vpOpt.poc&&_vp.pocP!=null){
+  if(_vp&&_vp.pocP!=null){
     /* POC線は帯の刻みに関係なく「1円(呼値)単位で一番出来た価格」に引く。帯を太くしても価格は正確 */
     var _pocY=pToY(_vp.pocP);
     if(_pocY>=priceTop&&_pocY<=priceBot){
@@ -6811,7 +6802,6 @@ function ImageAnnotator(props){
   var sVpMode=useState(caLoadVpMode); var vpMode=sVpMode[0],setVpMode=sVpMode[1];
   var sVpBin=useState(caLoadVpBin); var vpBin=sVpBin[0],setVpBin=sVpBin[1];   /* 帯の刻み 'auto'|'1'|'5'|'10' */
   var sVpSrc=useState(caLoadVpSrc); var vpSrc=sVpSrc[0],setVpSrc=sVpSrc[1];   /* 集計元 'tick'|'close' */
-  var sVpPoc=useState(caLoadVpPoc); var vpPoc=sVpPoc[0],setVpPoc=sVpPoc[1];   /* POC 表示 (既定OFF) */
   var sVpUntil=useState(null); var vpUntil=sVpUntil[0],setVpUntil=sVpUntil[1];
   /* 2026-09-17: 表示範囲モード — 右クリックで仮固定した時刻 / カーソルの足の時刻 (どちらも null=なし)。
      1分足・5分足ペインで共有 (どちらのペインで指しても両方がその時刻までで集計) */
@@ -6999,12 +6989,12 @@ function ImageAnnotator(props){
     if(vpMode!=='until'){
       /* 表示範囲: 寄り〜(仮固定 > カーソルの足)。どちらも無ければ untilTm=null → 各ペインが自分の表示範囲の中央を使う */
       var cut=(vpPinTm!=null)?vpPinTm:vpHoverTm;
-      return {on:true, mode:'visible', untilTm:(cut!=null?cut:null), pinned:(vpPinTm!=null), bin:vpBin, src:vpSrc, poc:vpPoc};
+      return {on:true, mode:'visible', untilTm:(cut!=null?cut:null), pinned:(vpPinTm!=null), bin:vpBin, src:vpSrc};
     }
     var r=vpRange();
-    if(r.hi==null)return {on:true, mode:'until', untilTm:null, bin:vpBin, src:vpSrc, poc:vpPoc};
+    if(r.hi==null)return {on:true, mode:'until', untilTm:null, bin:vpBin, src:vpSrc};
     var u=(vpUntil==null)?r.hi:Math.max(r.lo,Math.min(r.hi,vpUntil));
-    return {on:true, mode:'until', untilTm:u, bin:vpBin, src:vpSrc, poc:vpPoc};
+    return {on:true, mode:'until', untilTm:u, bin:vpBin, src:vpSrc};
   }
   /* 2026-09-17: つまみ(ドラッグ/←→)からの時刻変更。範囲 [初約定の足, 最後の約定の足] に収める。
      表示範囲モード=その時刻で仮固定 / 指定時刻までモード=スライダーと同じ値 (右端=最新に追従) */
@@ -9353,8 +9343,6 @@ function ImageAnnotator(props){
                     /* 2026-09-29: 集計元。ティック=実際に約定した価格の分布 / 1分終値=HyperSBI2 と同じ積み方。
                        CA_VP_SRC_UI=false の間は出さない (1分終値に固定) */
                     CA_VP_SRC_UI&&seg([['close','1分終値'],['tick','ティック']],vpSrc,function(k){setVpSrc(k);caSaveVpSrc(k);}),
-                    /* 2026-09-30: POC の表示ON/OFF (既定OFF)。押すたびに切替 */
-                    seg([['1','POC']],vpPoc?'1':'0',function(){var n=!vpPoc;setVpPoc(n);caSaveVpPoc(n);}),
                     tail);
                 })()
               ),
