@@ -5465,10 +5465,10 @@ function caVpAggregate(bars1m, fromTm, toTm, pxPerYen, binPref, src){
   });
   Object.keys(map).forEach(function(k){
     var p=+k, v=map[k];
-    /* 2026-09-29: tick は価格を含む左閉じの帯 [lo, lo+bin)。
-       close は HyperSBI2 と同じ右閉じ (lo, lo+bin] にする = 終値が帯の上端に来る。
-       1円刻みなら終値 C の帯は [C-1, C]。実データ(5016 2026-09-29)で9本とも一致を確認済み */
-    var idx=byClose?(Math.ceil((p-step*0.01)/bin)-1):Math.floor((p+step*0.01)/bin);   /* 小数価格の境界誤差よけ */
+    /* 2026-09-29: HyperSBI2 と同じ右閉じ (lo, lo+bin] = 価格が帯の上端に来る。
+       1円刻みなら価格 C の帯は [C-1, C]。実データ(5016 2026-09-29)で9本とも一致を確認済み (close)。
+       2026-09-30: tick も同じ切り方にする (切替えても帯の境目が動かない) */
+    var idx=Math.ceil((p-step*0.01)/bin)-1;   /* 小数価格の境界誤差よけ */
     bins[idx]=(bins[idx]||0)+v;
   });
   var levels=[], maxV=0, bandLo=null;
@@ -5903,14 +5903,9 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
       ctx.save();
       ctx.beginPath(); ctx.rect(padL,priceTop,chartW,priceH); ctx.clip();
       _vp.levels.forEach(function(lv){
-        var yT,yB;
-        if(_vp.byClose){
-          /* 2026-09-29: HyperSBI2 は終値 C の帯を [C-刻み, C] に描く (終値が帯の上端) */
-          yT=pToY(lv.lo+_vp.bin); yB=pToY(lv.lo);
-        }else{
-          var cp=lv.lo+(_vp.bin-_vp.step)/2;             /* 帯の中心価格 (刻み内の価格の中央) */
-          yT=pToY(cp+_vp.bin/2); yB=pToY(cp-_vp.bin/2);
-        }
+        /* 2026-09-29: HyperSBI2 は価格 C の帯を [C-刻み, C] に描く (価格が帯の上端)。
+           2026-09-30: tick も同じ位置に揃える */
+        var yT=pToY(lv.lo+_vp.bin), yB=pToY(lv.lo);
         if(yB<priceTop||yT>priceBot)return;
         /* 帯が十分太いときだけ1pxの隙間。細いときに隙間を入れると縞模様になり山の形が読めない */
         var h=yB-yT; if(h>=CA_VP_AUTO_MIN_PX){ yT+=0.5; h-=1; }
