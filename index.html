@@ -5873,6 +5873,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
      vpOpt={on, mode:'visible'|'until', untilTm}。表示範囲=このペインに見えている当日足の時間帯 /
      指定時刻まで=当日の寄り〜untilTm。どちらも1分足の vp から集計(5分足ペインも同じ)。 */
   var _vp=null, _vpCutX=null, _vpDimCol=null, _vpCutTm=null;
+  var _vpRects=[];       /* 描いた帯 [x,y,w,h,色] (暗転のあと、縦線より右の部分だけ描き直す用) */
   var _vpLineOn=true;    /* 集計の境目の縦線を描くか (カーソル追従中は十字線があるので描かない) */
   var _vpHandle=false;   /* 縦線の上につまみ(DOM)を出すか。出すときはキャンバスのラベルは描かない */
   if(vpOpt&&vpOpt.on&&!isThumbnail&&caVpHasData(data)){
@@ -5919,6 +5920,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
         ctx.fillStyle=faint?'rgba(167,139,250,0.12)'
           :(lv.lo===_vp.bandLo)?'rgba(167,139,250,0.55)':'rgba(167,139,250,0.28)';   /* 一番厚い帯を濃く */
         ctx.fillRect(padL,yT,w,Math.max(1,h));
+        _vpRects.push([padL,yT,w,Math.max(1,h),ctx.fillStyle]);
       });
       ctx.restore();
     }
@@ -6009,6 +6011,14 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   if(_vpDimCol){
     var _pdx=Math.max(padL,_vpCutX);
     ctx.fillStyle=_vpDimCol; ctx.fillRect(_pdx,priceTop,padL+chartW-_pdx,priceH);
+    /* 2026-10-04: 暗転は足・指標線のためのもの。帯まで一緒に暗くならないよう、
+       縦線より右にはみ出した帯だけ暗転の上に描き直す */
+    if(_vpRects.length&&_pdx<padL+chartW){
+      ctx.save();
+      ctx.beginPath(); ctx.rect(_pdx,priceTop,padL+chartW-_pdx,priceH); ctx.clip();
+      _vpRects.forEach(function(r){ ctx.fillStyle=r[4]; ctx.fillRect(r[0],r[1],r[2],r[3]); });
+      ctx.restore();
+    }
   }
   if(_vp&&_vp.pocP!=null){
     /* POC線は帯の刻みに関係なく「1円(呼値)単位で一番出来た価格」に引く。帯を太くしても価格は正確 */
