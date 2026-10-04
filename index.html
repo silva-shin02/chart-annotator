@@ -6018,10 +6018,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
       ctx.strokeStyle='rgba(196,181,253,0.9)'; ctx.lineWidth=1; ctx.setLineDash([5,3]);
       ctx.beginPath(); ctx.moveTo(padL,Math.round(_pocY)+0.5); ctx.lineTo(padL+chartW,Math.round(_pocY)+0.5); ctx.stroke();
       ctx.setLineDash([]);
-      var _pocTxt='POC '+(_vp.step<1?_vp.pocP.toFixed(1):String(Math.round(_vp.pocP)));
-      ctx.font='bold 10px -apple-system,Helvetica,sans-serif';
-      ctx.textAlign='left'; ctx.textBaseline='bottom';
-      ctx.fillStyle='#c4b5fd'; ctx.fillText(_pocTxt,padL+chartW*0.25+6,_pocY-2);
+      /* 2026-10-04: 「POC 価格」のラベルは出さない (点線だけ) */
       ctx.restore();
     }
   }
