@@ -5898,19 +5898,10 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
       }
     }
     if(_vpFrom!=null)_vp=caVpAggregate(data.bars_1m,_vpFrom,_vpTo,pxPerYen,vpOpt.bin,vpOpt.src);
-    if(_vpCutTm!=null){
-      /* 縦線 = その時刻の足の右端 (1分足: 中心+0.5本 / 5分足: 目盛りと同じく半本左へずらした枠の右端) */
-      _vpCutX=uToX(tmSideToU(_vpCutTm,'cur')+(tf==='5m'?1-bar5TimeOff(tf):0.5));
-      if(_vpDimAlpha>0&&_vpCutX<padL+chartW)_vpDimCol=_caHexToRgba(caLoadChartBg(),_vpDimAlpha);
-    }
     if(_vp){
       var _vpMaxW=chartW*0.25;
-      /* 2026-10-04: 帯は集計の境目(縦線)で切る。縦線より右は集計外の暗転に重なって帯が暗く見えるので描かない
-         (カーソル/つまみを右へ動かすとそのぶん見えてくる)。足・指標線の暗転はそのまま */
-      var _vpClipW=chartW;
-      if(_vpCutX!=null)_vpClipW=Math.max(0,Math.min(chartW,_vpCutX-padL));
       ctx.save();
-      ctx.beginPath(); ctx.rect(padL,priceTop,_vpClipW,priceH); ctx.clip();
+      ctx.beginPath(); ctx.rect(padL,priceTop,chartW,priceH); ctx.clip();
       _vp.levels.forEach(function(lv){
         /* 2026-09-29: HyperSBI2 は価格 C の帯を [C-刻み, C] に描く (価格が帯の上端)。
            2026-09-30: tick も同じ位置に揃える */
@@ -5930,6 +5921,11 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
         ctx.fillRect(padL,yT,w,Math.max(1,h));
       });
       ctx.restore();
+    }
+    if(_vpCutTm!=null){
+      /* 縦線 = その時刻の足の右端 (1分足: 中心+0.5本 / 5分足: 目盛りと同じく半本左へずらした枠の右端) */
+      _vpCutX=uToX(tmSideToU(_vpCutTm,'cur')+(tf==='5m'?1-bar5TimeOff(tf):0.5));
+      if(_vpDimAlpha>0&&_vpCutX<padL+chartW)_vpDimCol=_caHexToRgba(caLoadChartBg(),_vpDimAlpha);
     }
   }
   /* つまみ(DOM)の位置と時刻を DataChart へ渡す (描画のたびに layoutRef は作り直されるので、出さないときは未設定=非表示) */
@@ -6022,7 +6018,10 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
       ctx.strokeStyle='rgba(196,181,253,0.9)'; ctx.lineWidth=1; ctx.setLineDash([5,3]);
       ctx.beginPath(); ctx.moveTo(padL,Math.round(_pocY)+0.5); ctx.lineTo(padL+chartW,Math.round(_pocY)+0.5); ctx.stroke();
       ctx.setLineDash([]);
-      /* 2026-10-04: 「POC 価格」のラベルは出さない (点線だけ) */
+      var _pocTxt='POC '+(_vp.step<1?_vp.pocP.toFixed(1):String(Math.round(_vp.pocP)));
+      ctx.font='bold 10px -apple-system,Helvetica,sans-serif';
+      ctx.textAlign='left'; ctx.textBaseline='bottom';
+      ctx.fillStyle='#c4b5fd'; ctx.fillText(_pocTxt,padL+chartW*0.25+6,_pocY-2);
       ctx.restore();
     }
   }
