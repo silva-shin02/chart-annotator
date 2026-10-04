@@ -5479,6 +5479,12 @@ function caVpAggregate(bars1m, fromTm, toTm, pxPerYen, binPref, src){
   });
   return {step:step, bin:bin, levels:levels, maxV:maxV, bandLo:bandLo, pocP:pocP, pocV:pocV, total:total, byClose:byClose};
 }
+/* '#rrggbb' → 'rgba(r,g,b,a)' (チャート背景色で「集計外」を暗くする用) */
+function _caHexToRgba(hex, a){
+  var m=/^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(String(hex||''));
+  if(!m)return 'rgba(0,0,0,'+a+')';
+  return 'rgba('+parseInt(m[1],16)+','+parseInt(m[2],16)+','+parseInt(m[3],16)+','+a+')';
+}
 
 function computeEnhancedBars(bars, refBars){
   if(!bars||!bars.length) return bars||[];
@@ -5866,28 +5872,29 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   /* 2026-09-17: 価格帯別出来高 — ローソクの背面に左寄せ・半透明の横棒 (右端の最新足を隠さない)。
      vpOpt={on, mode:'visible'|'until', untilTm}。表示範囲=このペインに見えている当日足の時間帯 /
      指定時刻まで=当日の寄り〜untilTm。どちらも1分足の vp から集計(5分足ペインも同じ)。 */
-  var _vp=null, _vpCutX=null, _vpCutTm=null;
+  var _vp=null, _vpCutX=null, _vpDimCol=null, _vpCutTm=null;
   var _vpLineOn=true;    /* 集計の境目の縦線を描くか (カーソル追従中は十字線があるので描かない) */
   var _vpHandle=false;   /* 縦線の上につまみ(DOM)を出すか。出すときはキャンバスのラベルは描かない */
   if(vpOpt&&vpOpt.on&&!isThumbnail&&caVpHasData(data)){
-    var _vpFrom=null, _vpTo=null;
+    var _vpFrom=null, _vpTo=null, _vpDimAlpha=0;
+    /* 暗さ: 未固定(カーソル追従/表示範囲の中央)=薄く0.35 / 仮固定・指定時刻まで=濃く0.62 */
     if(vpOpt.mode==='until'){
       _vpFrom=0; _vpTo=(vpOpt.untilTm!=null)?vpOpt.untilTm:1e9;
-      if(vpOpt.untilTm!=null){ _vpCutTm=vpOpt.untilTm; _vpHandle=true; }
+      if(vpOpt.untilTm!=null){ _vpCutTm=vpOpt.untilTm; _vpDimAlpha=0.62; _vpHandle=true; }
     }else{
       /* 2026-09-17: 表示範囲 = 当日の寄り〜「仮固定 > カーソルの足 > このペインの表示範囲の中央」の時刻。
-         仮固定中は縦線+つまみ / カーソル追従中は十字線のみ /
-         カーソル無し(中央)は縦線 (ホバーの無いiPad等はここにつまみを出し、ドラッグで固定できる)。
+         仮固定中は縦線+つまみ+濃く暗く / カーソル追従中は薄く暗くだけ /
+         カーソル無し(中央)は縦線+薄く暗く (ホバーの無いiPad等はここにつまみを出し、ドラッグで固定できる)。
          中央が前日側なら当日分は0=表示なし */
       _vpFrom=0;
       if(vpOpt.untilTm!=null){
         _vpTo=vpOpt.untilTm; _vpCutTm=vpOpt.untilTm;
-        if(vpOpt.pinned){ _vpHandle=true; }
-        else { _vpLineOn=false; }
+        if(vpOpt.pinned){ _vpDimAlpha=0.62; _vpHandle=true; }
+        else { _vpDimAlpha=0.35; _vpLineOn=false; }
       }else{
         var _uc=(uS+uE)/2, _tv=hasRef?(_uc-tmVisSpan-gapVis):_uc;
         _vpTo=(_tv<0)?-1:Math.round(visToTm(_tv+tmVisStart));
-        if(_vpTo>=0){ _vpCutTm=_vpTo; if(!HAS_HOVER)_vpHandle=true; }
+        if(_vpTo>=0){ _vpCutTm=_vpTo; _vpDimAlpha=0.35; if(!HAS_HOVER)_vpHandle=true; }
       }
     }
     if(_vpFrom!=null)_vp=caVpAggregate(data.bars_1m,_vpFrom,_vpTo,pxPerYen,vpOpt.bin,vpOpt.src);
@@ -5918,6 +5925,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     if(_vpCutTm!=null){
       /* 縦線 = その時刻の足の右端 (1分足: 中心+0.5本 / 5分足: 目盛りと同じく半本左へずらした枠の右端) */
       _vpCutX=uToX(tmSideToU(_vpCutTm,'cur')+(tf==='5m'?1-bar5TimeOff(tf):0.5));
+      if(_vpDimAlpha>0&&_vpCutX<padL+chartW)_vpDimCol=_caHexToRgba(caLoadChartBg(),_vpDimAlpha);
     }
   }
   /* つまみ(DOM)の位置と時刻を DataChart へ渡す (描画のたびに layoutRef は作り直されるので、出さないときは未設定=非表示) */
@@ -5925,12 +5933,13 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     layoutRef.current.vpHandleX=_vpCutX;
     layoutRef.current.vpHandleTm=_vpCutTm;
   }
-  /* 2026-10-04: 集計の境目より右(集計外)の当日足は暗くせず、描かない (ローソク/出来高/指標線)。
-     カーソル(つまみ)をその時間帯へ動かすと現れる。価格軸・出来高軸のフィットは全足のまま (上で計算済み)
-     なので、カーソルを動かしてもチャートの縮尺は変わらない。書き込みは隠さない */
-  if(_vpCutTm!=null)visibleBars=visibleBars.filter(function(b){return tToMin(b.t)<=_vpCutTm;});
   drawBarSet(visibleBars,'cur');
   if(hasRef)drawBarSet(visibleRefBars,'ref');
+  /* 2026-09-17: 指定時刻より右(集計外)を暗くする — 出来高エリア分 (価格エリア分は指標線のあと・書き込みの前) */
+  if(_vpDimCol){
+    var _vdx=Math.max(padL,_vpCutX);
+    ctx.fillStyle=_vpDimCol; ctx.fillRect(_vdx,volTop,padL+chartW-_vdx,volBot-volTop);
+  }
 
   // EMA + VWAP ライン (price エリア内のみ — clip)
   ctx.save();
@@ -5995,7 +6004,12 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     }
   });
 
-  /* 2026-09-17: 価格帯別出来高 — POC 線。書き込みより前に描くので、スタンプ等は POC 線より手前に出る。 */
+  /* 2026-09-17: 価格帯別出来高 — 集計外(指定時刻より右)の暗転(価格エリア) と POC 線。
+     書き込みより前に描くので、スタンプ等は暗くならず POC 線より手前に出る。 */
+  if(_vpDimCol){
+    var _pdx=Math.max(padL,_vpCutX);
+    ctx.fillStyle=_vpDimCol; ctx.fillRect(_pdx,priceTop,padL+chartW-_pdx,priceH);
+  }
   if(_vp&&_vp.pocP!=null){
     /* POC線は帯の刻みに関係なく「1円(呼値)単位で一番出来た価格」に引く。帯を太くしても価格は正確 */
     var _pocY=pToY(_vp.pocP);
