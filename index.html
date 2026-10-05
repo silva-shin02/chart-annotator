@@ -2322,10 +2322,19 @@ function DataChart(props){
     if(e.button!=null&&e.button!==0)return;
     e.stopPropagation(); if(e.cancelable)e.preventDefault();
     var st={last:null};
+    /* 2026-10-05: 相対ドラッグ。触れた位置は使わず「触れた時点の縦線x + 指の移動量」で時刻を決める
+       (指が縦線/つまみを隠していても、触れた瞬間に縦線が指の位置へ飛ばない)。縦線位置が不明なときだけ絶対位置 */
+    var _p0=e.touches?e.touches[0]:e, _L0=layoutRef.current;
+    var _x0=_p0?_p0.clientX:0;
+    var _cutX0=(_L0&&_L0.vpHandleX!=null&&_L0.vpHandleTm!=null)?_L0.vpHandleX:null;
+    /* x→時刻の丸めと縦線の時刻がずれていても(5分足など)、動かす前は必ず今の時刻のまま */
+    var _tmOff=0;
+    if(_cutX0!=null){ var _tmB=vpTmAtLocalXClamped(_cutX0); _tmOff=(_tmB!=null)?(_L0.vpHandleTm-_tmB):0; }
     st.move=function(ev){
       var pt=ev.touches?ev.touches[0]:ev; if(!pt)return;
       if(ev.cancelable)ev.preventDefault();
-      var tm=vpTmAtLocalXClamped(pt.clientX-getCanvasRect().left);
+      var tm=vpTmAtLocalXClamped(_cutX0!=null?_cutX0+(pt.clientX-_x0):pt.clientX-getCanvasRect().left);
+      if(tm!=null&&_cutX0!=null)tm+=_tmOff;
       if(tm!=null&&tm!==st.last){ st.last=tm; vpSetTime(tm); }
     };
     st.end=function(){
@@ -2400,6 +2409,13 @@ function DataChart(props){
   var sPR=useState(null); var priceRange=sPR[0],setPriceRange=sPR[1];
   /* 選択ストロークの index (lasso用) */
   var sSI=useState(null); var selectedIdx=sSI[0],setSelectedIdx=sSI[1];
+  /* 2026-10-05: タッチ端末の端点ナッジ(←→↑↓で1足/1円ずつ)。対象の端点id(未指定=終点/右下)と、
+     連続タップを1回の履歴にまとめるための保留 {id,side,idx,stroke,timer}。strokesは確定時の取り違え防止ガード用 */
+  var sNH=useState(null); var nudgeHandle=sNH[0],setNudgeHandle=sNH[1];
+  var nudgeRef=useRef(null);
+  var nudgeSrcRef=useRef(null); nudgeSrcRef.current={strokes:props.strokes,refStrokes:props.refStrokes};
+  useEffect(function(){setNudgeHandle(null);},[selectedIdx]);
+  useEffect(function(){return function(){var n=nudgeRef.current; if(n&&n.timer)clearTimeout(n.timer);};},[]);
   /* 2026-04-23: 投げ縄マルチ選択 */
   var sLS=useState(null); var lassoSel=sLS[0],setLassoSel=sLS[1]; // [{side,idx}, ...]
   var lassoPathRef=useRef(null);  // 描画中の投げ縄パス [{x,y}, ...]
@@ -3871,6 +3887,7 @@ function DataChart(props){
       /* 2026-04-21: 選択中ストロークのハンドルhitを最優先 */
       var hHit=hitTestSelectedHandle(e.clientX,e.clientY);
       if(hHit){
+        setNudgeHandle(hHit.handleId);
         moveRef.current={
           side:hHit.side, idx:hHit.idx,
           startTM:tp.tm, startP:tp.p, dtm:0, dp:0,
@@ -4964,6 +4981,44 @@ function DataChart(props){
         if(!isFinite(nv))return;
         onStrokeUpdate(selectedIdx.side,selectedIdx.idx,Object.assign({},ss,{fontSize:nv}),!!noHist);
       }
+      /* 2026-10-05: 端点ナッジ行 (タッチ端末のみ・線/矢印/四角/円)。指で隠れて狙えない端点を1足(5分足は5分)/1円ずつ動かす。
+         対象は画面の端点をタップで切替 or 「⇄」。連続タップは700ms後に1回だけ履歴へ確定 (サイズスライダーと同じ考え方) */
+      var _nhs=(IS_TOUCH&&onStrokeUpdate&&!_isTxtSel)?getHandleAnchors(ss):[];
+      var _nhId=null;
+      if(_nhs.length){
+        _nhId=nudgeHandle;
+        if(!_nhs.some(function(h){return h.id===_nhId;}))_nhId=_nhs[_nhs.length>2?7:1].id;
+      }
+      var NH_LABEL={p1:"始点",p2:"終点",tl:"左上",tm:"上",tr:"右上",ml:"左",mr:"右",bl:"左下",bm:"下",br:"右下"};
+      function nudgeCycle(){
+        var i=0; _nhs.forEach(function(h,k){if(h.id===_nhId)i=k;});
+        setNudgeHandle(_nhs[(i+1)%_nhs.length].id);
+      }
+      function nudge(dtm,dp){
+        var sd=selectedIdx.side, ix=selectedIdx.idx;
+        var pend=nudgeRef.current;
+        var base=(pend&&pend.id===ss.id&&pend.side===sd&&pend.idx===ix)?pend.stroke:ss;
+        var ns=applyHandleTransform(base,_nhId,dtm,dp);
+        if(ns===base)return;
+        onStrokeUpdate(sd,ix,ns,true);
+        if(pend&&pend.timer)clearTimeout(pend.timer);
+        var rec={id:ss.id,side:sd,idx:ix,stroke:ns,timer:null};
+        rec.timer=setTimeout(function(){
+          if(nudgeRef.current===rec)nudgeRef.current=null;
+          var src=nudgeSrcRef.current||{};
+          var cur=((sd==='ref')?(src.refStrokes||[]):(src.strokes||[]))[ix];
+          if(cur&&cur.id===rec.id&&onStrokeUpdate)onStrokeUpdate(sd,ix,rec.stroke,false);
+        },700);
+        nudgeRef.current=rec;
+      }
+      var _nhBtn={padding:"6px 14px",borderRadius:6,cursor:"pointer",fontSize:15,fontWeight:700,background:"#2a2a2a",color:"#fff",userSelect:"none",flexShrink:0};
+      var _nhStep=(tf==='5m'?5:1);
+      function nhB(label,dtm,dp,title){
+        return ce("span",{key:label,title:title,
+          onMouseDown:function(ev){ev.preventDefault();ev.stopPropagation();},
+          onClick:function(ev){ev.stopPropagation();nudge(dtm,dp);},
+          style:_nhBtn},label);
+      }
       /* 2026-08-06: このバーは上端固定なので、画面上部のテキスト/スタンプを選ぶと文字に被る。
          枠と重なるときだけ下端へ逃がす。バーは containerRef 直下の absolute で
          minToX/pToY と同基準の CSS px。上帯と重なり かつ 下帯とは重ならない ときだけ下へ移動し、
@@ -5014,6 +5069,17 @@ function DataChart(props){
             onClick:function(ev){ev.stopPropagation();setSelectedIdx(null);},
             style:{marginLeft:2,fontSize:11,cursor:"pointer",color:"#888",fontWeight:600,padding:"2px 6px"}
           },"✕")
+        ),
+        _nhs.length>0&&ce("div",{style:{display:"flex",gap:5,alignItems:"center",
+            borderTop:"1px solid #2a2a2a",paddingTop:6}},
+          ce("span",{style:{fontSize:11,color:"#a5b4fc",fontWeight:600,flexShrink:0}},"端点"),
+          ce("span",{
+            onMouseDown:function(ev){ev.preventDefault();ev.stopPropagation();},
+            onClick:function(ev){ev.stopPropagation();nudgeCycle();},
+            title:"動かす端点を切り替え (画面の端点をタップでも可)",
+            style:Object.assign({},_nhBtn,{fontSize:12,minWidth:58,textAlign:"center"})},(NH_LABEL[_nhId]||_nhId)+" ⇄"),
+          nhB("←",-_nhStep,0,"1足左へ"),nhB("→",_nhStep,0,"1足右へ"),
+          nhB("↑",0,1,"1円上へ"),nhB("↓",0,-1,"1円下へ")
         ),
         /* 2026-08-06: サイズ行 (テキスト/スタンプのみ)。スライダーの可動域は編集中ツールバーと同じ
            実用域 8〜72、域外は −/＋ で 1〜200 まで到達できる */
