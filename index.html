@@ -2349,6 +2349,49 @@ function DataChart(props){
     window.addEventListener('touchcancel',st.end);
   }
   useEffect(function(){ return function(){ if(vpDragRef.current)vpDragRef.current.end(); }; },[]);
+  /* 2026-10-05: 指の長押しで価格帯別出来高の縦線を置く/動かす (表示範囲モードのみ・指のみ。ペンはホバーで足りる)。
+     同じ場所に450ms触れたまま(10px未満)で発動 → 縦線を指のx位置の足へ → 指を動かすと追従、離すと確定。
+     指で縦線が隠れるので、指の上に時刻の吹き出し(vpBubRef)を出す。発動時は押下で始まっていた描画/移動等を取り消す。
+     素早いタップ/ドラッグは従来どおり(長押しタイマーは動いた/離した時点で破棄) */
+  var vpLpRef=useRef(null), vpBubRef=useRef(null);
+  function vpLpCancel(){
+    var lp=vpLpRef.current; if(!lp)return;
+    if(lp.timer)clearTimeout(lp.timer);
+    if(lp.active&&vpBubRef.current)vpBubRef.current.style.display='none';
+    vpLpRef.current=null;
+  }
+  function vpLpApply(lp,cx,cy){
+    var rect=getCanvasRect();
+    var tm=vpTmAtLocalXClamped(cx-rect.left);
+    if(tm!=null&&tm!==lp.last){ lp.last=tm; vpSetTime(tm); }
+    var el=vpBubRef.current; if(!el)return;
+    var t=(lp.last!=null)?lp.last:0;
+    el.textContent=Math.floor(t/60)+':'+('0'+(t%60)).slice(-2);
+    el.style.display='block';
+    el.style.left=Math.max(34,Math.min(rect.width-34,cx-rect.left))+'px';
+    el.style.top=Math.max(4,cy-rect.top-76)+'px';
+  }
+  function vpLpArm(t){
+    vpLpCancel();
+    if(!vpVisibleActive()||t.touchType==='stylus'||ptrEditRef.current)return;
+    if(hitTestStroke(t.clientX,t.clientY)!=null)return;   /* 書き込みの上は選択/移動を優先 */
+    var lp={x0:t.clientX,y0:t.clientY,x:t.clientX,y:t.clientY,active:false,last:null,timer:null};
+    lp.timer=setTimeout(function(){
+      lp.timer=null;
+      if(vpLpRef.current!==lp)return;
+      lp.active=true;
+      /* 押下で始まっていた描画/パン/移動/計測/投げ縄を取り消す (左右同時押しパンと同じ後始末) */
+      drawRef.current={on:false}; panStartRef.current=null; moveRef.current=null;
+      pendingTextReqRef.current=null; pendingSnipRef.current=null;
+      measureDragRef.current=null; lassoPathRef.current=null; lassoMoveRef.current=null;
+      setMoveHint(null);
+      try{ if(navigator.vibrate)navigator.vibrate(15); }catch(_){}
+      vpLpApply(lp,lp.x,lp.y);
+      drawCrosshair();
+    },450);
+    vpLpRef.current=lp;
+  }
+  useEffect(function(){ return function(){ vpLpCancel(); }; },[]);
   /* 描画直後に呼ぶ: つまみを縦線の位置へ (はみ出す分は内側へ寄せる) */
   function vpSyncHandle(){
     var el=vpHandleRef.current, L=layoutRef.current; if(!el)return;
@@ -4545,6 +4588,7 @@ function DataChart(props){
   // タッチ (iPad/スマホ) - 1本指: 描画、2本指: ピンチズーム＋パン
   function onTouchStart(e){
     if(props.textInputActive)return;
+    if(e.touches.length>=2)vpLpCancel();
     /* 2026-04-30: 3本指トリプルタップで移動(pan)ツール切替 (旧ダブル→トリプルに変更、誤発火低減)
        - 3本指タッチstart が 600ms以内に3回発生したら発火
        - 同一シーケンス内の連続触りは50ms以内フィルタで除外 */
@@ -4614,6 +4658,7 @@ function DataChart(props){
     }
     if(e.touches.length!==1)return;
     var t=e.touches[0];
+    vpLpArm(t);
     /* 2026-06-29: ペンのみ描画 — Apple Pencil以外の単一タッチは描画ツール選択時パン扱い(指=移動)。
        touchType未対応端末では touchType が undefined となり従来通り(=この分岐は無効)。 */
     var _penPan=false;
@@ -4681,9 +4726,20 @@ function DataChart(props){
     }
     if(!e.touches.length)return;
     var t=e.touches[0];
+    var _lp=vpLpRef.current;
+    if(_lp){
+      if(_lp.active){ _lp.x=t.clientX; _lp.y=t.clientY; vpLpApply(_lp,t.clientX,t.clientY); return; }
+      if(Math.hypot(t.clientX-_lp.x0,t.clientY-_lp.y0)>=10)vpLpCancel();   /* 動かした=長押しではない */
+    }
     onMouseMove({clientX:t.clientX,clientY:t.clientY});
   }
   function onTouchEnd(e){
+    var _lpE=vpLpRef.current;
+    if(_lpE){
+      var _was=_lpE.active;
+      vpLpCancel();
+      if(_was){ drawCrosshair(); return; }   /* 長押し中の指を離した = 時刻は確定済み。通常のタッチ終了処理はしない */
+    }
     if(pinchRef.current){
       if(!e.touches||e.touches.length<2){pinchRef.current=null;panStartRef.current=null;}
       return;
@@ -5107,6 +5163,11 @@ function DataChart(props){
         )
       );
     })(),
+    /* 2026-10-05: 長押し中の時刻吹き出し (指の上)。表示/位置/文字は vpLpApply が直接設定 */
+    props.vpOpt&&props.vpOpt.on&&ce("div",{ref:vpBubRef,
+      style:{position:"absolute",left:0,top:0,transform:"translateX(-50%)",display:"none",zIndex:95,pointerEvents:"none",
+        padding:"6px 14px",borderRadius:12,background:"#534AB7",border:"1px solid #7F77DD",color:"#fff",
+        fontSize:20,fontWeight:700,boxShadow:"0 2px 10px rgba(0,0,0,.6)",userSelect:"none",WebkitUserSelect:"none"}},"--:--"),
     /* 2026-09-17: 価格帯別出来高のつまみ「← HH:MM →」。表示/位置/時刻は描画直後に vpSyncHandle が設定。
        左ボタン/タッチはチャートへ伝えない (描画ツール選択中でもつまみ操作を優先)。
        右ボタンは素通し = つまみの上で右クリックすると同じ足の右クリック扱い(固定の解除) */
