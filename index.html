@@ -5561,12 +5561,15 @@ var CA_VP_POC_SKIP_TM={690:1};
    戻り値 {step, bin, levels:[{lo, v}], maxV, bandLo, pocP, pocV, total}
      lo=その帯の最安価格 / bandLo=一番出来高の多い帯
      pocP=刻みに関係なく1円(呼値)単位で一番出来た価格 (CA_VP_POC_SKIP_TM の足は除く) */
-function caVpAggregate(bars1m, fromTm, toTm, pxPerYen, binPref, src){
+function caVpAggregate(bars1m, fromTm, toTm, pxPerYen, binPref, src, closeBars){
   var step=caVpTickStep(bars1m);
   var byClose=(src==='close');
+  /* 2026-10-06: 終値ベースは、渡された足(5分足チャートなら5分足)の終値に、その足の出来高まるごとを積む。
+     刻み(step)は約定価格を持つ1分足から求める。ティックは従来どおり1分足の vp を使う */
+  var srcBars=(byClose&&closeBars&&closeBars.length)?closeBars:bars1m;
   var map={}, pocMap={}, total=0;
-  for(var i=0;i<bars1m.length;i++){
-    var b=bars1m[i], a=b&&b.vp; if(!byClose&&!a)continue;
+  for(var i=0;i<srcBars.length;i++){
+    var b=srcBars[i], a=b&&b.vp; if(!byClose&&!a)continue;
     var m=_caVpTm(b.t); if(m<fromTm||m>toTm)continue;
     var skipPoc=!!CA_VP_POC_SKIP_TM[m];
     if(byClose){
@@ -6025,7 +6028,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
         if(_vpTo>=0){ _vpCutTm=_vpTo; _vpDimAlpha=0.35; if(!HAS_HOVER)_vpHandle=true; }
       }
     }
-    if(_vpFrom!=null)_vp=caVpAggregate(data.bars_1m,_vpFrom,_vpTo,pxPerYen,vpOpt.bin,vpOpt.src);
+    if(_vpFrom!=null)_vp=caVpAggregate(data.bars_1m,_vpFrom,_vpTo,pxPerYen,vpOpt.bin,vpOpt.src,(tf==='5m'?data.bars_5m:null));
     if(_vp){
       var _vpMaxW=chartW*0.25;
       ctx.save();
