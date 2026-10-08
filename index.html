@@ -717,12 +717,14 @@ var CA_VP_BIN_KEY='ca_vp_bin_v1';
            場中は HyperSBI2 しか見ないので、振り返りも同じ見え方になるよう既定にする
    tick  = ティックの価格別出来高(vp)をそのまま使う = 実際に約定した価格の分布 */
 var CA_VP_SRC_KEY='ca_vp_src_v1';
+/* 2026-10-08: 帯の長さの平均線 ON/OFF (既定OFF)。全チャート共通 */
+var CA_VP_AVG_KEY='ca_vp_avg_v1';
 /* 2026-09-29: 集計元の切替UIを出すか。true = 出す (ティック/1分終値を切替) / false = 1分終値に固定。
    復活させるときはここを true に戻すだけ (集計・保存・同期の実装はそのまま残してある) */
 var CA_VP_SRC_UI=true;
 var CA_SYNC_PREF_KEYS=[CA_PRICE_PX_KEY,CA_AUTO_PAN_KEY,CA_CHART_BG_KEY,CA_TICKER_CODES_KEY,
   CA_INDICATOR_VIS_KEY,CA_FIT_MODE_KEY,CA_DEFAULT_TF_KEY,CA_DRAW_DEFAULTS_KEY,CA_PEN_ONLY_KEY,
-  CA_PRICE_GRID_STEP_KEY,CA_SIM_START_MIN_KEY,CA_VP_ON_KEY,CA_VP_MODE_KEY,CA_VP_BIN_KEY,CA_VP_SRC_KEY,
+  CA_PRICE_GRID_STEP_KEY,CA_SIM_START_MIN_KEY,CA_VP_ON_KEY,CA_VP_MODE_KEY,CA_VP_BIN_KEY,CA_VP_SRC_KEY,CA_VP_AVG_KEY,
   'ca_search_words_v1','scalping_annot_presets_v1','annot_quickcolors_v1'];
 var CA_PREF_EVENTS={};
 CA_PREF_EVENTS[CA_PRICE_PX_KEY]='ca_price_px_changed';
@@ -1082,6 +1084,13 @@ function caLoadVpSrc(){
      切替ボタンの無いまま取り残されるのを防ぐ */
   if(!CA_VP_SRC_UI)return 'close';
   try{return localStorage.getItem(CA_VP_SRC_KEY)==='tick'?'tick':'close';}catch(e){return 'close';}
+}
+function caLoadVpAvg(){
+  try{return localStorage.getItem(CA_VP_AVG_KEY)==='1';}catch(e){return false;}
+}
+function caSaveVpAvg(b){
+  try{localStorage.setItem(CA_VP_AVG_KEY,b?'1':'0');}catch(e){caStorageWarn();}
+  caPrefPush(CA_VP_AVG_KEY);
 }
 function caSaveVpSrc(v){
   var s=(v==='close')?'close':'tick';
@@ -2611,7 +2620,7 @@ function DataChart(props){
 
   /* 2026-09-17: 価格帯別出来高の表示条件 (オブジェクトは毎レンダー作り直されるので値でキー化して再描画判定) */
   var vpOpt=props.vpOpt||null;
-  var vpKey=vpOpt?((vpOpt.on?1:0)+'|'+vpOpt.mode+'|'+vpOpt.untilTm+'|'+vpOpt.bin+'|'+(vpOpt.pinned?1:0)+'|'+vpOpt.src):'';
+  var vpKey=vpOpt?((vpOpt.on?1:0)+'|'+vpOpt.mode+'|'+vpOpt.untilTm+'|'+vpOpt.bin+'|'+(vpOpt.pinned?1:0)+'|'+vpOpt.src+'|'+(vpOpt.avg?1:0)):'';
   // メインチャート描画
   useEffect(function(){
     if((!bars.length&&!hasRef)||!priceRange)return;
@@ -6165,6 +6174,30 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
       ctx.restore();
     }
   }
+  /* 2026-10-08: 帯の長さの平均線。平均 = 出来高のある帯の出来高の合計 ÷ 帯の本数 (空の帯は数えない)。
+     帯と同じ縮尺 (最大の帯=描画域の25%) の位置に縦の点線を引く = これより長い帯は平均より多い。
+     縦の範囲は一番高い帯〜一番低い帯。縦線(集計の境目)より右の暗転の上にも出す */
+  if(vpOpt&&vpOpt.avg&&_vp&&_vp.levels.length&&_vp.maxV>0){
+    var _avgV=_vp.total/_vp.levels.length;
+    var _avgX=Math.round(padL+Math.max(1,_avgV/_vp.maxV*chartW*0.25))+0.5;
+    var _loP=Infinity, _hiP=-Infinity;
+    _vp.levels.forEach(function(lv){ if(lv.lo<_loP)_loP=lv.lo; if(lv.lo+_vp.bin>_hiP)_hiP=lv.lo+_vp.bin; });
+    var _avgYt=Math.max(priceTop,pToY(_hiP)), _avgYb=Math.min(priceBot,pToY(_loP));
+    if(_avgYb>_avgYt){
+      ctx.save();
+      ctx.beginPath(); ctx.rect(padL,priceTop,chartW,priceH); ctx.clip();
+      ctx.strokeStyle='rgba(251,191,36,0.95)'; ctx.lineWidth=1; ctx.setLineDash([4,3]);
+      ctx.beginPath(); ctx.moveTo(_avgX,_avgYt); ctx.lineTo(_avgX,_avgYb); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.font='bold 10px -apple-system,Helvetica,sans-serif';
+      ctx.textAlign='left'; ctx.fillStyle='#fbbf24';
+      var _avgTxt='平均 '+Math.round(_avgV).toLocaleString()+'株';
+      /* ラベルは線の上端の少し上。描画域の上に近いときは下端の下へ */
+      if(_avgYt-priceTop>=13){ ctx.textBaseline='bottom'; ctx.fillText(_avgTxt,_avgX+3,_avgYt-2); }
+      else { ctx.textBaseline='top'; ctx.fillText(_avgTxt,_avgX+3,Math.min(_avgYb+2,priceBot-12)); }
+      ctx.restore();
+    }
+  }
 
   /* B-drawing: 時刻+価格座標ストローク描画 (ズーム・パンに追従)
      C3+: cur(現在chart側) と ref(過去chart側) を分けて描画。minToXをside別に渡す。
@@ -6937,6 +6970,7 @@ function ImageAnnotator(props){
   var sVpMode=useState(caLoadVpMode); var vpMode=sVpMode[0],setVpMode=sVpMode[1];
   var sVpBin=useState(caLoadVpBin); var vpBin=sVpBin[0],setVpBin=sVpBin[1];   /* 帯の刻み 'auto'|'1'|'5'|'10' */
   var sVpSrc=useState(caLoadVpSrc); var vpSrc=sVpSrc[0],setVpSrc=sVpSrc[1];   /* 集計元 'tick'|'close' */
+  var sVpAvg=useState(caLoadVpAvg); var vpAvg=sVpAvg[0],setVpAvg=sVpAvg[1];   /* 帯の長さの平均線 */
   var sVpUntil=useState(null); var vpUntil=sVpUntil[0],setVpUntil=sVpUntil[1];
   /* 2026-09-17: 表示範囲モード — 右クリックで仮固定した時刻 / カーソルの足の時刻 (どちらも null=なし)。
      1分足・5分足ペインで共有 (どちらのペインで指しても両方がその時刻までで集計) */
@@ -7124,12 +7158,12 @@ function ImageAnnotator(props){
     if(vpMode!=='until'){
       /* 表示範囲: 寄り〜(仮固定 > カーソルの足)。どちらも無ければ untilTm=null → 各ペインが自分の表示範囲の中央を使う */
       var cut=(vpPinTm!=null)?vpPinTm:vpHoverTm;
-      return {on:true, mode:'visible', untilTm:(cut!=null?cut:null), pinned:(vpPinTm!=null), bin:vpBin, src:vpSrc};
+      return {on:true, mode:'visible', untilTm:(cut!=null?cut:null), pinned:(vpPinTm!=null), bin:vpBin, src:vpSrc, avg:vpAvg};
     }
     var r=vpRange();
-    if(r.hi==null)return {on:true, mode:'until', untilTm:null, bin:vpBin, src:vpSrc};
+    if(r.hi==null)return {on:true, mode:'until', untilTm:null, bin:vpBin, src:vpSrc, avg:vpAvg};
     var u=(vpUntil==null)?r.hi:Math.max(r.lo,Math.min(r.hi,vpUntil));
-    return {on:true, mode:'until', untilTm:u, bin:vpBin, src:vpSrc};
+    return {on:true, mode:'until', untilTm:u, bin:vpBin, src:vpSrc, avg:vpAvg};
   }
   /* 2026-09-17: つまみ(ドラッグ/←→)からの時刻変更。範囲 [初約定の足, 最後の約定の足] に収める。
      表示範囲モード=その時刻で仮固定 / 指定時刻までモード=スライダーと同じ値 (右端=最新に追従) */
@@ -9478,6 +9512,8 @@ function ImageAnnotator(props){
                     /* 2026-09-29: 集計元。ティック=実際に約定した価格の分布 / 1分終値=HyperSBI2 と同じ積み方。
                        CA_VP_SRC_UI=false の間は出さない (1分終値に固定) */
                     CA_VP_SRC_UI&&seg([['close','1分終値'],['tick','ティック']],vpSrc,function(k){setVpSrc(k);caSaveVpSrc(k);}),
+                    /* 2026-10-08: 帯の長さの平均線 (出来高のある帯の平均の長さに縦の点線+「平均 ◯◯株」) */
+                    seg([['0','平均 OFF'],['1','平均 ON']],vpAvg?'1':'0',function(k){var nv=(k==='1');setVpAvg(nv);caSaveVpAvg(nv);}),
                     tail);
                 })()
               ),
