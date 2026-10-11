@@ -12569,6 +12569,7 @@ function CaTagSelector(props){
   var sCats=useState(function(){return caLoadTagCats();});
   var cats=sCats[0],setCats=sCats[1];
   var sNC=useState(''); var newCatName=sNC[0],setNewCatName=sNC[1];
+  var sNTC=useState('__uncat'); var newTagCat=sNTC[0],setNewTagCat=sNTC[1];   /* 新規タグの追加先カテゴリ ('__uncat'=未分類) */
   var sMan=useState(false); var manage=sMan[0],setManage=sMan[1];
   var sNN=useState(''); var newName=sNN[0],setNewName=sNN[1];
   var sRen=useState(null); var renId=sRen[0],setRenId=sRen[1];
@@ -12593,7 +12594,8 @@ function CaTagSelector(props){
   function createTag(){
     var n=newName.trim(); if(!n)return;
     var color=CA_TAG_COLORS[defs.length%CA_TAG_COLORS.length];
-    saveDefs(defs.concat([{id:caNewTagId(),name:n,color:color,catId:null}]));
+    var cid=(newTagCat!=='__uncat'&&cats.some(function(c){return c.id===newTagCat;}))?newTagCat:null;
+    saveDefs(defs.concat([{id:caNewTagId(),name:n,color:color,catId:cid}]));
     setNewName('');
   }
   function commitRename(id){
@@ -12745,8 +12747,15 @@ function CaTagSelector(props){
               });
             })()
         ),
-    /* 追加 (管理モードのみ。新しいタグは末尾=未分類に入る。色/カテゴリは追加後に行のボタンで) */
+    /* 追加 (管理モードのみ。追加先カテゴリはセレクトで選ぶ(カテゴリがあるとき)。色は追加後に行の丸で) */
     manage&&ce('div',{style:{display:'flex',gap:6,marginTop:8,paddingTop:8,borderTop:'1px solid #2a2a2a'}},
+      /* 追加先カテゴリ (カテゴリがあるときのみ。選んだ値は続けて追加できるよう保持) */
+      cats.length>0&&ce('select',{value:(cats.some(function(c){return c.id===newTagCat;})?newTagCat:'__uncat'),title:'追加先のカテゴリ',
+        onChange:function(e){setNewTagCat(e.target.value);},
+        style:{flexShrink:0,background:'#222',color:'#bbb',border:'1px solid #333',borderRadius:6,
+          fontSize:IS_TOUCH?12:11,padding:IS_TOUCH?'6px 3px':'3px 3px',outline:'none',maxWidth:96,fontFamily:'inherit'}},
+        cats.map(function(c){return ce('option',{key:c.id,value:c.id},c.name);})
+          .concat([ce('option',{key:'__uncat',value:'__uncat'},'未分類')])),
       ce('input',{type:'text',placeholder:'新しいタグ名…',value:newName,
         onChange:function(e){setNewName(e.target.value);},
         onKeyDown:function(e){if(e.key==='Enter')createTag();},
