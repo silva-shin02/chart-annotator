@@ -12707,6 +12707,14 @@ function CaTagSelector(props){
   }
 
   var BS3={border:'none',background:'none',cursor:'pointer',fontFamily:'inherit',padding:0};
+  /* 2026-10-11: タグ行の並べ方。通常(選択)モードは2列 (縦に長くなりすぎるため。左列を上から下→右列の順)。
+     管理モードは1行にボタンが並ぶので1列のまま */
+  function renderItems(items){
+    if(manage||items.length<2)return items.map(function(d,i,arr){return renderTagRow(d,i,arr);});
+    return ce('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',columnGap:12,
+        gridTemplateRows:'repeat('+Math.ceil(items.length/2)+',auto)',gridAutoFlow:'column'}},
+      items.map(function(d,i,arr){return renderTagRow(d,i,arr);}));
+  }
 
   return ce('div',{style:{background:'#1a1a1a',borderRadius:6},
       onClick:function(e){e.stopPropagation();}},
@@ -12729,7 +12737,7 @@ function CaTagSelector(props){
       ?ce('div',{style:{fontSize:11,color:'#555',padding:'4px 0'}},
           'タグなし。右上の「✎ 管理」から追加できます。')
       :(cats.length===0
-          ?defs.map(function(d,i,arr){return renderTagRow(d,i,arr);})
+          ?renderItems(defs)
           :(function(){
               /* 管理中は空のカテゴリも見出しを出す (追加した直後に見えなくならないように) */
               var groups=manage
@@ -12742,7 +12750,7 @@ function CaTagSelector(props){
                   ce('div',{style:{fontSize:10,fontWeight:700,color:'#666',margin:'7px 0 4px',
                     letterSpacing:0.3}},g.cat?g.cat.name:'未分類'),
                   g.items.length===0&&ce('div',{style:{fontSize:10,color:'#555',margin:'0 0 6px 2px'}},'（タグなし）'),
-                  g.items.map(function(d,i,arr){return renderTagRow(d,i,arr);})
+                  renderItems(g.items)
                 );
               });
             })()
