@@ -12648,7 +12648,7 @@ function CaTagSelector(props){
     var sel=selectedIds.indexOf(d.id)>=0;
     if(manage){
       var BM={border:'1px solid #333',background:'#222',cursor:'pointer',fontFamily:'inherit',color:'#bbb',
-        borderRadius:5,padding:IS_TOUCH?'4px 9px':'1px 6px',fontSize:IS_TOUCH?14:12,lineHeight:1.3,flexShrink:0};
+        borderRadius:5,padding:'1px 6px',fontSize:12,lineHeight:1.3,flexShrink:0};
       var isRen=(renId===d.id);
       var isEdCol=(editColorId===d.id);
       return ce('div',{key:d.id,style:{marginBottom:6}},
@@ -12656,7 +12656,7 @@ function CaTagSelector(props){
         ce('button',{title:'色を変更',
           onMouseDown:function(e){e.preventDefault();},
           onClick:function(){setEditColorId(isEdCol?null:d.id);},
-          style:{width:IS_TOUCH?22:16,height:IS_TOUCH?22:16,borderRadius:'50%',flexShrink:0,padding:0,cursor:'pointer',
+          style:{width:14,height:14,borderRadius:'50%',flexShrink:0,padding:0,cursor:'pointer',
             border:'none',background:d.color,outline:isEdCol?'2px solid #fff':'none',outlineOffset:'2px',
             boxShadow:'0 1px 3px rgba(0,0,0,.5)'}}),
         isRen
@@ -12680,7 +12680,7 @@ function CaTagSelector(props){
           onChange:function(e){moveTagToCategory(d.id,e.target.value);},
           onClick:function(e){e.stopPropagation();},
           style:{flexShrink:0,background:'#222',color:'#bbb',border:'1px solid #333',borderRadius:5,
-            fontSize:IS_TOUCH?12:11,padding:IS_TOUCH?'5px 3px':'2px 3px',outline:'none',maxWidth:84,fontFamily:'inherit'}},
+            fontSize:11,padding:'2px 3px',outline:'none',maxWidth:84,fontFamily:'inherit'}},
           cats.map(function(c){return ce('option',{key:c.id,value:c.id},c.name);})
             .concat([ce('option',{key:'__uncat',value:'__uncat'},'未分類')])),
         ce('button',{style:Object.assign({},BM,{color:'#f87171'}),title:'削除',
@@ -12727,7 +12727,7 @@ function CaTagSelector(props){
       ce('div',{style:{display:'flex',alignItems:'center',gap:10}},
         ce('button',{title:manage?'管理を終わる':'タグの追加・名前変更・削除・並べ替え',
           onClick:function(){setManage(function(m){return !m;});setRenId(null);setRenTxt('');setEditColorId(null);},
-          style:Object.assign({},BS3,{fontSize:11,fontWeight:700,padding:IS_TOUCH?'4px 9px':'2px 7px',borderRadius:5,
+          style:Object.assign({},BS3,{fontSize:11,fontWeight:700,padding:'2px 7px',borderRadius:5,
             border:'1px solid '+(manage?'#22c55e':'#444'),color:manage?'#86efac':'#999',
             background:manage?'#1a2e1a':'transparent'})},manage?'✓ 完了':'✎ 管理'),
         ce('button',{style:Object.assign({},BS3,{fontSize:13,color:'#555',lineHeight:1}),
@@ -12763,16 +12763,16 @@ function CaTagSelector(props){
       cats.length>0&&ce('select',{value:(cats.some(function(c){return c.id===newTagCat;})?newTagCat:'__uncat'),title:'追加先のカテゴリ',
         onChange:function(e){setNewTagCat(e.target.value);},
         style:{flexShrink:0,background:'#222',color:'#bbb',border:'1px solid #333',borderRadius:6,
-          fontSize:IS_TOUCH?12:11,padding:IS_TOUCH?'6px 3px':'3px 3px',outline:'none',maxWidth:96,fontFamily:'inherit'}},
+          fontSize:11,padding:'3px 3px',outline:'none',maxWidth:96,fontFamily:'inherit'}},
         cats.map(function(c){return ce('option',{key:c.id,value:c.id},c.name);})
           .concat([ce('option',{key:'__uncat',value:'__uncat'},'未分類')])),
       ce('input',{type:'text',placeholder:'新しいタグ名…',value:newName,
         onChange:function(e){setNewName(e.target.value);},
         onKeyDown:function(e){if(e.key==='Enter')createTag();},
         style:{flex:1,minWidth:0,background:'#222',border:'1px solid #333',color:'#ddd',fontSize:12,
-          borderRadius:6,padding:IS_TOUCH?'8px 10px':'5px 8px',outline:'none'}}),
+          borderRadius:6,padding:'5px 8px',outline:'none'}}),
       ce('button',{onClick:createTag,
-        style:{padding:IS_TOUCH?'8px 16px':'5px 12px',fontSize:12,fontWeight:700,background:'#2563eb',border:'none',
+        style:{padding:'5px 12px',fontSize:12,fontWeight:700,background:'#2563eb',border:'none',
           borderRadius:6,color:'#fff',cursor:'pointer',flexShrink:0,fontFamily:'inherit'}},'追加')
     ),
     /* カテゴリ追加 (改名・削除・並べ替えはタグ管理ページ)。追加後は各タグ行のセレクトで移動する */
@@ -12781,9 +12781,9 @@ function CaTagSelector(props){
         onChange:function(e){setNewCatName(e.target.value);},
         onKeyDown:function(e){if(e.key==='Enter')addCategory();},
         style:{flex:1,minWidth:0,background:'#222',border:'1px solid #333',color:'#ddd',fontSize:12,
-          borderRadius:6,padding:IS_TOUCH?'8px 10px':'5px 8px',outline:'none'}}),
+          borderRadius:6,padding:'5px 8px',outline:'none'}}),
       ce('button',{onClick:addCategory,
-        style:{padding:IS_TOUCH?'8px 12px':'5px 10px',fontSize:12,fontWeight:700,background:'#374151',border:'none',
+        style:{padding:'5px 10px',fontSize:12,fontWeight:700,background:'#374151',border:'none',
           borderRadius:6,color:'#fff',cursor:'pointer',flexShrink:0,fontFamily:'inherit',whiteSpace:'nowrap'}},'カテゴリ追加')
     )
   );
