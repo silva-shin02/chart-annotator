@@ -12648,15 +12648,15 @@ function CaTagSelector(props){
     var sel=selectedIds.indexOf(d.id)>=0;
     if(manage){
       var BM={border:'1px solid #333',background:'#222',cursor:'pointer',fontFamily:'inherit',color:'#bbb',
-        borderRadius:5,padding:'1px 6px',fontSize:12,lineHeight:1.3,flexShrink:0};
+        borderRadius:4,padding:'0 6px',fontSize:11,lineHeight:1.5,flexShrink:0};
       var isRen=(renId===d.id);
       var isEdCol=(editColorId===d.id);
-      return ce('div',{key:d.id,style:{marginBottom:6}},
-      ce('div',{style:{display:'flex',alignItems:'center',gap:6}},
+      return ce('div',{key:d.id,style:{marginBottom:4,breakInside:'avoid'}},
+      ce('div',{style:{display:'flex',alignItems:'center',gap:5}},
         ce('button',{title:'色を変更',
           onMouseDown:function(e){e.preventDefault();},
           onClick:function(){setEditColorId(isEdCol?null:d.id);},
-          style:{width:14,height:14,borderRadius:'50%',flexShrink:0,padding:0,cursor:'pointer',
+          style:{width:12,height:12,borderRadius:'50%',flexShrink:0,padding:0,cursor:'pointer',
             border:'none',background:d.color,outline:isEdCol?'2px solid #fff':'none',outlineOffset:'2px',
             boxShadow:'0 1px 3px rgba(0,0,0,.5)'}}),
         isRen
@@ -12680,7 +12680,7 @@ function CaTagSelector(props){
           onChange:function(e){moveTagToCategory(d.id,e.target.value);},
           onClick:function(e){e.stopPropagation();},
           style:{flexShrink:0,background:'#222',color:'#bbb',border:'1px solid #333',borderRadius:5,
-            fontSize:11,padding:'2px 3px',outline:'none',maxWidth:84,fontFamily:'inherit'}},
+            fontSize:11,padding:'0 2px',outline:'none',maxWidth:84,fontFamily:'inherit'}},
           cats.map(function(c){return ce('option',{key:c.id,value:c.id},c.name);})
             .concat([ce('option',{key:'__uncat',value:'__uncat'},'未分類')])),
         ce('button',{style:Object.assign({},BM,{color:'#f87171'}),title:'削除',
@@ -12712,7 +12712,10 @@ function CaTagSelector(props){
   /* 2026-10-11: タグ行の並べ方。通常(選択)モードは2列 (縦に長くなりすぎるため。左列を上から下→右列の順)。
      管理モードは1行にボタンが並ぶので1列のまま */
   function renderItems(items){
-    if(manage||items.length<2)return items.map(function(d,i,arr){return renderTagRow(d,i,arr);});
+    /* 管理モード: 幅に応じて複数列 (広いエディタ上部では2列以上、狭いカードでは1列)。行は列をまたいで割れない */
+    if(manage)return ce('div',{style:{columnWidth:300,columnGap:14}},
+      items.map(function(d,i,arr){return renderTagRow(d,i,arr);}));
+    if(items.length<2)return items.map(function(d,i,arr){return renderTagRow(d,i,arr);});
     return ce('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',columnGap:12,
         gridTemplateRows:'repeat('+Math.ceil(items.length/2)+',auto)',gridAutoFlow:'column'}},
       items.map(function(d,i,arr){return renderTagRow(d,i,arr);}));
