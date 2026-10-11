@@ -11899,6 +11899,20 @@ function caLoadTagCats(){
 function caSaveTagCats(arr){
   try{localStorage.setItem(CA_CHART_TAG_CATS_KEY,JSON.stringify(arr));}catch(e){}
 }
+/* 2026-10-11: カテゴリ定義の保存 + Firebase 同期 (タグ管理ページ と タグ選択パネルの管理モード で共用) */
+function caSaveTagCatsSync(arr,fbCfg){
+  caSaveTagCats(arr);
+  if(fbCfg&&fbCfg.url&&!fbCfg.paused){
+    var a=caAuthParam(fbCfg.secret);
+    var base=fbCfg.url.replace(/\/$/,'');
+    var ut=Date.now();
+    try{localStorage.setItem('ca_tag_cats_ut_v1',String(ut));}catch(e){}
+    fetch(base+'/ca-tag-cats.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({cats:arr,updatedAt:ut})}).catch(function(){});
+    fetch(base+'/ca-tag-cats-v.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({updatedAt:ut})}).catch(function(){});
+  }
+}
 function caLoadTagMap(){
   try{var v=JSON.parse(localStorage.getItem(CA_CHART_TAG_MAP_KEY));if(v&&typeof v==='object')return v;}catch(e){}
   return {};
@@ -12542,7 +12556,7 @@ function _caMemoHasContent(html){
 /* ── CaTagSelector: タグ選択パネル ── */
 /* ─── CaTagSelector: チャートへのタグ付け + (2026-10-11) 管理モード ───
    管理モード(✎): 追加 / 名前変更 / 色変更 / カテゴリ移動 / 削除 / 順番入れ替え(▲▼。タブレットでも使えるようボタン式)。
-   カテゴリ自体の追加・改名・削除はタグ管理ページ。変更したら 'ca_tag_defs_changed' を飛ばし、
+   カテゴリは追加のみ(改名・削除・並べ替えはタグ管理ページ)。変更したら 'ca_tag_defs_changed' を飛ばし、
    タグ名/色を描画時に読む親(カード・エディタ)が再描画する */
 function CaTagSelector(props){
   var selectedIds=props.selectedIds||[];
@@ -12553,7 +12567,8 @@ function CaTagSelector(props){
   var sDefs=useState(function(){return caLoadTagDefs();});
   var defs=sDefs[0],setDefs=sDefs[1];
   var sCats=useState(function(){return caLoadTagCats();});
-  var cats=sCats[0];
+  var cats=sCats[0],setCats=sCats[1];
+  var sNC=useState(''); var newCatName=sNC[0],setNewCatName=sNC[1];
   var sMan=useState(false); var manage=sMan[0],setManage=sMan[1];
   var sNN=useState(''); var newName=sNN[0],setNewName=sNN[1];
   var sRen=useState(null); var renId=sRen[0],setRenId=sRen[1];
@@ -12585,6 +12600,12 @@ function CaTagSelector(props){
     var n=renTxt.trim();
     if(n)saveDefs(defs.map(function(d){return d.id===id?Object.assign({},d,{name:n}):d;}));
     setRenId(null); setRenTxt('');
+  }
+  function addCategory(){
+    var n=newCatName.trim(); if(!n)return;
+    var next=cats.concat([{id:caNewCatId(),name:n}]);
+    caSaveTagCatsSync(next,fbCfg); setCats(next);
+    setNewCatName('');
   }
   function changeTagColor(id,c){
     pushTagCH(c);
@@ -12707,13 +12728,22 @@ function CaTagSelector(props){
           'タグなし。右上の「✎ 管理」から追加できます。')
       :(cats.length===0
           ?defs.map(function(d,i,arr){return renderTagRow(d,i,arr);})
-          :caGroupDefsByCat(defs,cats).map(function(g){
-              return ce('div',{key:g.cat?g.cat.id:'__uncat',style:{marginBottom:2}},
-                ce('div',{style:{fontSize:10,fontWeight:700,color:'#666',margin:'7px 0 4px',
-                  letterSpacing:0.3}},g.cat?g.cat.name:'未分類'),
-                g.items.map(function(d,i,arr){return renderTagRow(d,i,arr);})
-              );
-            })
+          :(function(){
+              /* 管理中は空のカテゴリも見出しを出す (追加した直後に見えなくならないように) */
+              var groups=manage
+                ?cats.map(function(c){return {cat:c,items:defs.filter(function(d){return caTagBucket(d,cats)===c.id;})};})
+                    .concat(defs.some(function(d){return caTagBucket(d,cats)==='__uncat';})
+                      ?[{cat:null,items:defs.filter(function(d){return caTagBucket(d,cats)==='__uncat';})}]:[])
+                :caGroupDefsByCat(defs,cats);
+              return groups.map(function(g){
+                return ce('div',{key:g.cat?g.cat.id:'__uncat',style:{marginBottom:2}},
+                  ce('div',{style:{fontSize:10,fontWeight:700,color:'#666',margin:'7px 0 4px',
+                    letterSpacing:0.3}},g.cat?g.cat.name:'未分類'),
+                  g.items.length===0&&ce('div',{style:{fontSize:10,color:'#555',margin:'0 0 6px 2px'}},'（タグなし）'),
+                  g.items.map(function(d,i,arr){return renderTagRow(d,i,arr);})
+                );
+              });
+            })()
         ),
     /* 追加 (管理モードのみ。新しいタグは末尾=未分類に入る。色/カテゴリは追加後に行のボタンで) */
     manage&&ce('div',{style:{display:'flex',gap:6,marginTop:8,paddingTop:8,borderTop:'1px solid #2a2a2a'}},
@@ -12725,6 +12755,17 @@ function CaTagSelector(props){
       ce('button',{onClick:createTag,
         style:{padding:IS_TOUCH?'8px 16px':'5px 12px',fontSize:12,fontWeight:700,background:'#2563eb',border:'none',
           borderRadius:6,color:'#fff',cursor:'pointer',flexShrink:0,fontFamily:'inherit'}},'追加')
+    ),
+    /* カテゴリ追加 (改名・削除・並べ替えはタグ管理ページ)。追加後は各タグ行のセレクトで移動する */
+    manage&&ce('div',{style:{display:'flex',gap:6,marginTop:6}},
+      ce('input',{type:'text',placeholder:'新しいカテゴリ名…',value:newCatName,
+        onChange:function(e){setNewCatName(e.target.value);},
+        onKeyDown:function(e){if(e.key==='Enter')addCategory();},
+        style:{flex:1,minWidth:0,background:'#222',border:'1px solid #333',color:'#ddd',fontSize:12,
+          borderRadius:6,padding:IS_TOUCH?'8px 10px':'5px 8px',outline:'none'}}),
+      ce('button',{onClick:addCategory,
+        style:{padding:IS_TOUCH?'8px 12px':'5px 10px',fontSize:12,fontWeight:700,background:'#374151',border:'none',
+          borderRadius:6,color:'#fff',cursor:'pointer',flexShrink:0,fontFamily:'inherit',whiteSpace:'nowrap'}},'カテゴリ追加')
     )
   );
 }
@@ -12773,17 +12814,7 @@ function TagManagerPage(props){
   /* 2026-06-16: カテゴリ保存 (saveDefs と同形、専用ノード/専用watermark)。
      ※catId変更は saveDefs を通す(defsに乗る)。saveCats は名前/順序のみ。両方同時に呼ばない。 */
   function saveCats(arr){
-    caSaveTagCats(arr);setCats(arr);
-    if(fbCfg&&fbCfg.url&&!fbCfg.paused){
-      var a=caAuthParam(fbCfg.secret);
-      var base=fbCfg.url.replace(/\/$/,'');
-      var ut=Date.now();
-      try{localStorage.setItem('ca_tag_cats_ut_v1',String(ut));}catch(e){}
-      fetch(base+'/ca-tag-cats.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({cats:arr,updatedAt:ut})}).catch(function(){});
-      fetch(base+'/ca-tag-cats-v.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({updatedAt:ut})}).catch(function(){});
-    }
+    caSaveTagCatsSync(arr,fbCfg);setCats(arr);
   }
 
   function createTag(){
