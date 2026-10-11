@@ -9525,7 +9525,9 @@ function ImageAnnotator(props){
                 })()
               ),
               /* タグセレクターパネル */
-              edTagOpen&&ce("div",{style:{padding:"8px 12px",borderTop:"1px solid #222",background:"#0a0a0a"}},
+              /* 2026-10-11: 高さに上限をつけて縦スクロール可能に (タグが多いと下が見えず操作できなかった。メモパネルと同じ作り) */
+              edTagOpen&&ce("div",{style:{padding:"8px 12px",borderTop:"1px solid #222",background:"#0a0a0a",
+                  maxHeight:"40vh",overflowY:"auto",overscrollBehavior:"contain",WebkitOverflowScrolling:"touch"}},
                 ce(CaTagSelector,{
                   chartId:img._draftId||savedDraftIdRef.current,
                   selectedIds:edTagIds,
