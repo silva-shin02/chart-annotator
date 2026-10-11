@@ -7606,6 +7606,13 @@ function ImageAnnotator(props){
   /* 2026-05-21: エディタ内チャートメモ・タグ */
   var stEdTagIds=useState(function(){return img._draftId?caGetChartTags(img._draftId):[];});
   var edTagIds=stEdTagIds[0],setEdTagIds=stEdTagIds[1];
+  /* 2026-10-11: タグ選択パネルの管理モードでタグ名/並びが変わったら、上部のタグチップも更新 */
+  var stEdTagDefVer=useState(0); var setEdTagDefVer=stEdTagDefVer[1];
+  useEffect(function(){
+    function onDefs(){setEdTagDefVer(function(v){return v+1;});}
+    window.addEventListener('ca_tag_defs_changed',onDefs);
+    return function(){window.removeEventListener('ca_tag_defs_changed',onDefs);};
+  },[]);
   var stEdMemoHtml=useState(function(){return img._draftId?caGetChartMemo(img._draftId):'';});
   var edMemoHtml=stEdMemoHtml[0],setEdMemoHtml=stEdMemoHtml[1];
   var stEdMemoOpen=useState(false); var edMemoOpen=stEdMemoOpen[0],setEdMemoOpen=stEdMemoOpen[1];
@@ -11870,6 +11877,20 @@ function caLoadTagDefs(){
 function caSaveTagDefs(arr){
   try{localStorage.setItem(CA_CHART_TAG_DEFS_KEY,JSON.stringify(arr));}catch(e){}
 }
+/* 2026-10-11: タグ定義の保存 + Firebase 同期 (タグ管理ページ と タグ選択パネルの管理モード で共用) */
+function caSaveTagDefsSync(arr,fbCfg){
+  caSaveTagDefs(arr);
+  if(fbCfg&&fbCfg.url&&!fbCfg.paused){
+    var a=caAuthParam(fbCfg.secret);
+    var base=fbCfg.url.replace(/\/$/,'');
+    var ut=Date.now();
+    try{localStorage.setItem('ca_tag_defs_ut_v1',String(ut));}catch(e){}
+    fetch(base+'/ca-tag-defs.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({defs:arr,updatedAt:ut})}).catch(function(){});
+    fetch(base+'/ca-tag-defs-v.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({updatedAt:ut})}).catch(function(){});
+  }
+}
 /* 2026-06-16: タグカテゴリ定義 (順序付き [{id,name}]) */
 function caLoadTagCats(){
   try{var v=JSON.parse(localStorage.getItem(CA_CHART_TAG_CATS_KEY));if(Array.isArray(v))return v;}catch(e){}
@@ -12518,17 +12539,25 @@ function _caMemoHasContent(html){
   return !!(html.replace(/<[^>]*>/g,'').trim());
 }
 
-/* ── CaTagSelector: タグ選択・管理パネル (カラーピッカー対応) ── */
-/* ─── CaTagSelector: チャートへのタグ付けのみ (管理はTagManagerPageで) ─── */
+/* ── CaTagSelector: タグ選択パネル ── */
+/* ─── CaTagSelector: チャートへのタグ付け + (2026-10-11) 管理モード ───
+   管理モード(✎): 追加 / 名前変更 / 削除 / 順番入れ替え(▲▼。タブレットでも使えるようボタン式)。
+   色の変更・カテゴリの編集は従来どおりタグ管理ページ。変更したら 'ca_tag_defs_changed' を飛ばし、
+   タグ名/色を描画時に読む親(カード・エディタ)が再描画する */
 function CaTagSelector(props){
   var selectedIds=props.selectedIds||[];
   var onChangeTags=props.onChangeTags;
   var onClose=props.onClose;
+  var fbCfg=props.fbCfg||{};
 
   var sDefs=useState(function(){return caLoadTagDefs();});
-  var defs=sDefs[0];
+  var defs=sDefs[0],setDefs=sDefs[1];
   var sCats=useState(function(){return caLoadTagCats();});
   var cats=sCats[0];
+  var sMan=useState(false); var manage=sMan[0],setManage=sMan[1];
+  var sNN=useState(''); var newName=sNN[0],setNewName=sNN[1];
+  var sRen=useState(null); var renId=sRen[0],setRenId=sRen[1];
+  var sRenTxt=useState(''); var renTxt=sRenTxt[0],setRenTxt=sRenTxt[1];
 
   function toggleTag(id){
     var newSel=selectedIds.indexOf(id)>=0
@@ -12536,9 +12565,76 @@ function CaTagSelector(props){
       :selectedIds.concat([id]);
     onChangeTags(newSel);
   }
+  function saveDefs(arr){
+    caSaveTagDefsSync(arr,fbCfg); setDefs(arr);
+    try{window.dispatchEvent(new Event('ca_tag_defs_changed'));}catch(e){}
+  }
+  function createTag(){
+    var n=newName.trim(); if(!n)return;
+    var color=CA_TAG_COLORS[defs.length%CA_TAG_COLORS.length];
+    saveDefs(defs.concat([{id:caNewTagId(),name:n,color:color,catId:null}]));
+    setNewName('');
+  }
+  function commitRename(id){
+    var n=renTxt.trim();
+    if(n)saveDefs(defs.map(function(d){return d.id===id?Object.assign({},d,{name:n}):d;}));
+    setRenId(null); setRenTxt('');
+  }
+  function deleteTag(id){
+    var d0=defs.find(function(d){return d.id===id;})||{};
+    window.caConfirm('タグ「'+(d0.name||'')+'」を削除しますか？\n(付いているチャートからも外れます)',function(){
+      saveDefs(defs.filter(function(d){return d.id!==id;}));
+      var map=caLoadTagMap();
+      Object.keys(map).forEach(function(cid){
+        if(cid.indexOf('__ut_')===0)return;
+        map[cid]=(map[cid]||[]).filter(function(x){return x!==id;});
+        if(!map[cid].length)delete map[cid];
+      });
+      caSaveTagMap(map);
+      /* いま開いているチャートの選択状態(親の state)からも外す */
+      if(selectedIds.indexOf(id)>=0)onChangeTags(selectedIds.filter(function(x){return x!==id;}));
+    },null,{yesLabel:'削除',noLabel:'キャンセル',danger:true});
+  }
+  /* 同じグループ(カテゴリ)内の前/後ろのタグと入れ替える。全体順(defs)のまま位置だけ交換 */
+  function moveTag(id,dir){
+    var b=caTagBucket(defs.find(function(d){return d.id===id;}),cats);
+    var idxs=[]; defs.forEach(function(d,i){if(caTagBucket(d,cats)===b)idxs.push(i);});
+    var pos=idxs.indexOf(defs.findIndex(function(d){return d.id===id;}));
+    var to=pos+dir; if(pos<0||to<0||to>=idxs.length)return;
+    var next=defs.slice(); var a=idxs[pos], c=idxs[to];
+    var t=next[a]; next[a]=next[c]; next[c]=t;
+    saveDefs(next);
+  }
   /* 2026-06-16: タグ1行 (フラット/グループ両方で共用) */
-  function renderTagRow(d){
+  function renderTagRow(d,gi,gArr){
     var sel=selectedIds.indexOf(d.id)>=0;
+    if(manage){
+      var BM={border:'1px solid #333',background:'#222',cursor:'pointer',fontFamily:'inherit',color:'#bbb',
+        borderRadius:5,padding:IS_TOUCH?'4px 9px':'1px 6px',fontSize:IS_TOUCH?14:12,lineHeight:1.3,flexShrink:0};
+      var isRen=(renId===d.id);
+      return ce('div',{key:d.id,style:{display:'flex',alignItems:'center',gap:6,marginBottom:6}},
+        ce('div',{style:{width:9,height:9,borderRadius:'50%',flexShrink:0,background:d.color,
+          boxShadow:'0 1px 3px rgba(0,0,0,.5)'}}),
+        isRen
+          ?ce('input',{ref:function(el){if(el)el.focus();},value:renTxt,
+              onChange:function(e){setRenTxt(e.target.value);},
+              onKeyDown:function(e){if(e.key==='Enter')commitRename(d.id);if(e.key==='Escape'){setRenId(null);setRenTxt('');}},
+              onBlur:function(){commitRename(d.id);},
+              style:{flex:1,minWidth:0,background:'#222',border:'1px solid #555',color:'#ddd',fontSize:12,
+                borderRadius:5,padding:'4px 8px',outline:'none'}})
+          :ce('span',{onClick:function(){setRenId(d.id);setRenTxt(d.name);},title:'タップで名前変更',
+              style:{flex:1,minWidth:0,fontSize:11,color:'#ddd',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',cursor:'text'}},d.name),
+        ce('button',{style:Object.assign({},BM,{opacity:gi>0?1:0.3}),disabled:gi===0,title:'上へ',
+          onMouseDown:function(e){e.preventDefault();},onClick:function(){moveTag(d.id,-1);}},'▲'),
+        ce('button',{style:Object.assign({},BM,{opacity:gi<gArr.length-1?1:0.3}),disabled:gi>=gArr.length-1,title:'下へ',
+          onMouseDown:function(e){e.preventDefault();},onClick:function(){moveTag(d.id,1);}},'▼'),
+        ce('button',{style:BM,title:'名前変更',
+          onMouseDown:function(e){e.preventDefault();},onClick:function(){setRenId(d.id);setRenTxt(d.name);}},
+          ce('span',{style:{display:'inline-block',transform:'rotate(-45deg)'}},'✏')),
+        ce('button',{style:Object.assign({},BM,{color:'#f87171'}),title:'削除',
+          onMouseDown:function(e){e.preventDefault();},onClick:function(){deleteTag(d.id);}},'×')
+      );
+    }
     return ce('div',{key:d.id,
         onClick:function(){toggleTag(d.id);},
         style:{display:'flex',alignItems:'center',gap:6,marginBottom:6,cursor:'pointer'}},
@@ -12561,24 +12657,42 @@ function CaTagSelector(props){
     /* ヘッダー */
     ce('div',{style:{display:'flex',justifyContent:'space-between',
         alignItems:'center',marginBottom:8}},
-      ce('span',{style:{fontSize:11,fontWeight:700,color:'#aaa'}},'🏷 タグ'),
-      ce('button',{style:Object.assign({},BS3,{fontSize:13,color:'#555',lineHeight:1}),
-        onClick:onClose},'✕')
+      ce('span',{style:{fontSize:11,fontWeight:700,color:'#aaa'}},'🏷 タグ'+(manage?'（管理中）':'')),
+      ce('div',{style:{display:'flex',alignItems:'center',gap:10}},
+        ce('button',{title:manage?'管理を終わる':'タグの追加・名前変更・削除・並べ替え',
+          onClick:function(){setManage(function(m){return !m;});setRenId(null);setRenTxt('');},
+          style:Object.assign({},BS3,{fontSize:11,fontWeight:700,padding:IS_TOUCH?'4px 9px':'2px 7px',borderRadius:5,
+            border:'1px solid '+(manage?'#22c55e':'#444'),color:manage?'#86efac':'#999',
+            background:manage?'#1a2e1a':'transparent'})},manage?'✓ 完了':'✎ 管理'),
+        ce('button',{style:Object.assign({},BS3,{fontSize:13,color:'#555',lineHeight:1}),
+          onClick:onClose},'✕')
+      )
     ),
-    /* タグ一覧 (選択のみ・カテゴリ見出しでグループ化) */
-    defs.length===0
+    /* タグ一覧 (カテゴリ見出しでグループ化) */
+    defs.length===0&&!manage
       ?ce('div',{style:{fontSize:11,color:'#555',padding:'4px 0'}},
-          'タグなし。ホーム画面「タグ管理」から追加できます。')
+          'タグなし。右上の「✎ 管理」から追加できます。')
       :(cats.length===0
-          ?defs.map(renderTagRow)
+          ?defs.map(function(d,i,arr){return renderTagRow(d,i,arr);})
           :caGroupDefsByCat(defs,cats).map(function(g){
               return ce('div',{key:g.cat?g.cat.id:'__uncat',style:{marginBottom:2}},
                 ce('div',{style:{fontSize:10,fontWeight:700,color:'#666',margin:'7px 0 4px',
                   letterSpacing:0.3}},g.cat?g.cat.name:'未分類'),
-                g.items.map(renderTagRow)
+                g.items.map(function(d,i,arr){return renderTagRow(d,i,arr);})
               );
             })
-        )
+        ),
+    /* 追加 (管理モードのみ。新しいタグは末尾=未分類に入る。色/カテゴリはタグ管理ページで) */
+    manage&&ce('div',{style:{display:'flex',gap:6,marginTop:8,paddingTop:8,borderTop:'1px solid #2a2a2a'}},
+      ce('input',{type:'text',placeholder:'新しいタグ名…',value:newName,
+        onChange:function(e){setNewName(e.target.value);},
+        onKeyDown:function(e){if(e.key==='Enter')createTag();},
+        style:{flex:1,minWidth:0,background:'#222',border:'1px solid #333',color:'#ddd',fontSize:12,
+          borderRadius:6,padding:IS_TOUCH?'8px 10px':'5px 8px',outline:'none'}}),
+      ce('button',{onClick:createTag,
+        style:{padding:IS_TOUCH?'8px 16px':'5px 12px',fontSize:12,fontWeight:700,background:'#2563eb',border:'none',
+          borderRadius:6,color:'#fff',cursor:'pointer',flexShrink:0,fontFamily:'inherit'}},'追加')
+    )
   );
 }
 
@@ -12621,17 +12735,7 @@ function TagManagerPage(props){
   function pushTagCH(c){var nh=[c].concat(tagCH.filter(function(x){return x!==c;})).slice(0,16);setTagCH(nh);try{localStorage.setItem('ca_tag_ch_v1',JSON.stringify(nh));}catch(e){}}
 
   function saveDefs(arr){
-    caSaveTagDefs(arr);setDefs(arr);
-    if(fbCfg&&fbCfg.url&&!fbCfg.paused){
-      var a=caAuthParam(fbCfg.secret);
-      var base=fbCfg.url.replace(/\/$/,'');
-      var ut=Date.now();
-      try{localStorage.setItem('ca_tag_defs_ut_v1',String(ut));}catch(e){}
-      fetch(base+'/ca-tag-defs.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({defs:arr,updatedAt:ut})}).catch(function(){});
-      fetch(base+'/ca-tag-defs-v.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({updatedAt:ut})}).catch(function(){});
-    }
+    caSaveTagDefsSync(arr,fbCfg);setDefs(arr);
   }
   /* 2026-06-16: カテゴリ保存 (saveDefs と同形、専用ノード/専用watermark)。
      ※catId変更は saveDefs を通す(defsに乗る)。saveCats は名前/順序のみ。両方同時に呼ばない。 */
@@ -13088,6 +13192,13 @@ function CaChartCard(props){
   /* タグ state */
   var sTO=useState(false); var tagOpen=sTO[0],setTagOpen=sTO[1];
   var sTI=useState(function(){return caGetChartTags(m.id);}); var tagIds=sTI[0],setTagIds=sTI[1];
+  /* 2026-10-11: タグ選択パネルの管理モードでタグ名/並びが変わったら、このカードのタグ表示も更新 */
+  var sTDV=useState(0); var setTagDefVer=sTDV[1];
+  useEffect(function(){
+    function onDefs(){setTagDefVer(function(v){return v+1;});}
+    window.addEventListener('ca_tag_defs_changed',onDefs);
+    return function(){window.removeEventListener('ca_tag_defs_changed',onDefs);};
+  },[]);
 
   /* SN予定 state */
   var sSNE=useState(null); var snEvents=sSNE[0],setSnEvents=sSNE[1];
