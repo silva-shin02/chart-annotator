@@ -62,6 +62,7 @@
 - `ImageAnnotator(props)` — **分析エディタ本体**。`analysisStrokes`(tf別の書き込み配列)・undo/redo・テキスト入力ポータル・autosave を所有。
 - `DataChart(props)` — **Canvasチャート＋全描画ツールの操作**（onMouseDown/Move/Up, onTouch*）。書き込み・選択・移動・計測・スタンプ矢印の入力処理が全部ここ。
 - `CaChartCard` / `CaCalendarModal` / `CaTagSearchModal` / `CaStampLogModal` / `PatternSearchModal` / `TagManagerPage` / `NotepadPage` / `RefAnalysisPicker` / `VirtualJoystick` / 各 `*Modal`。
+- `CaTagSelector`（カード/エディタのタグ選択パネル＋管理モード）/ `CaVpLadder`（全板パネル）。
 
 ### 描画（モジュールスコープの純関数）
 - `drawDataChart(...)` — メインのチャート描画（ローソク/EMA/VWAP/グリッド/出来高）。
@@ -135,6 +136,9 @@ git commit -m "..."   # 末尾に Co-Authored-By
 git push origin main
 ```
 - 修正後ユーザーへ：「**Ctrl+Shift+R でハードリロードして試して**」。
+- **クラウドセッションの実際の手順**（2026-10 時点）：`git fetch origin main && git checkout -B <作業ブランチ> origin/main` → 編集 → 構文チェック → commit（末尾に `Co-Authored-By` と `Claude-Session`）→ push → GitHub MCP で PR 作成（**draft で作られるので `update_pull_request draft:false` にしてから** `merge_pull_request`）→ マージ後 `git merge --ff-only origin/main && git push` で作業ブランチをマージコミットまで進めておく（やらないと Stop hook が「未プッシュ1件」と言う）。
+- 構文チェックの実際：`index.html` の `<script>`（src無し）を抜き出し、`new Function(JSON.stringify(本文))` を並べた js を node で実行。
+- 実データでのロジック検証は可（ユーザーがアップロードした JSON/CSV を `/root/.claude/uploads/...` から読む。index.html から関数を抜き出して node で実行）。UI 操作の検証はしない（ルール3）。
 
 ---
 
@@ -174,3 +178,23 @@ git push origin main
 - EMA は終値から α=2/(N+1) で正しく計算されている。HyperSBI2 と数円違って見えたのは **HyperSBI2 側の期間設定(20 など)違い** が主因で、ツールのバグではなかった。
 - 見た目の差は主に **Y軸フィットが EMA/VWAP の値も含めている**（`priceRange` 計算が ema9/22/50/200/vwap を min/max に入れる）ため。価格基準フィットに変えると HyperSBI2 に近づく（未対応・要望次第）。
 - スタンプ矢印の旧データは `rootFrac` のみ＝文字編集でズレる。根元を一度ドラッグし直すと rootOff 化して安定。
+
+## 10. 引継ぎ（2026-10-13 時点・前セッション PR #12〜#26）
+
+### 直近で入れたもの（詳細は §8）
+- タッチ精度対策（価格帯別出来高のつまみ相対ドラッグ・長押し、端点ナッジ）。
+- 価格帯別出来高：5分足×1分終値＝5分足終値ベース／平均線スイッチ／**既定をティックに**／**全板パネル**（行タップで水平線＋約定足の点）／縦線を足の中央に。
+- タグ選択パネル：管理モード（追加・改名・色・カテゴリ移動・カテゴリ追加・削除・▲▼並べ替え）、2列表示、エディタ側は縦スクロール（40vh）。
+- ↶↷ をメタ行右端に固定、十字カーソルの価格を左軸にも。
+
+### 検証済みの事実
+- **ティック集計＝HyperSBI2 全板の「出来高」列**：10/13 9984 15:30、全板の表示28行＋OVER/UNDER が完全一致（1分終値はほぼ全不一致）。全板は注文の無い値段の行を省く（5,317/5,316/5,313 など）が、ツールは1円ごと全行。
+- 足の出来高 v と sum(vp) は一致（10/13 9984：49,524,400 株、CSV 直集計とも一致）。
+
+### 未解決・保留（ユーザーの返事待ち/要望次第）
+- 「**POC以外の帯が短く見える**」：原因の見立て（最大帯基準の比例・寄り板寄せ・1分終値の尖り）と選択肢（そのまま／寄り板寄せを長さ基準から除外★推奨／上位5%基準／平方根）を提示したまま返事なし。※その後既定がティックになったので見え方が変わっている可能性あり。
+- 「**タグ管理の文字が大きい**」：管理モード（`CaTagSelector`）を小さくした。ホーム画面の全画面 `TagManagerPage` のことだった場合は未対応。
+- 全板パネル：表示範囲モードでカーソルも固定も無いとき、パネルは最新の足まで／チャートの縦線は画面中央の時刻、で食い違う。
+- つまみの ←→ は常に1分刻み（5分足ペインでも）。
+- 価格帯別出来高 5円/10円刻みの HyperSBI2 照合は未実施。濃淡2段階案・価格帯別ティック数・場中リアルタイム同期は §8 のとおり保留。
+
