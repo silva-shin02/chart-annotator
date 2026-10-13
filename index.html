@@ -5678,7 +5678,7 @@ function CaVpLadder(props){
     );
   }
   return ce('div',{onMouseDown:stop,onTouchStart:stop,onTouchMove:stop,onWheel:stop,onClick:stop,
-      style:{position:'absolute',top:0,right:0,bottom:0,width:210,zIndex:120,display:'flex',flexDirection:'column',
+      style:{position:'absolute',top:(props.top||0),right:0,bottom:0,width:210,zIndex:120,display:'flex',flexDirection:'column',
         background:'rgba(12,12,14,0.95)',borderLeft:'1px solid #333',boxShadow:'-4px 0 12px rgba(0,0,0,.5)',
         fontVariantNumeric:'tabular-nums',userSelect:'none',WebkitUserSelect:'none'}},
     ce('div',{style:{display:'flex',alignItems:'center',padding:'4px 8px',borderBottom:'1px solid #2a2a2a',flexShrink:0}},
@@ -6096,7 +6096,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   /* 2026-09-17: 価格帯別出来高 — ローソクの背面に左寄せ・半透明の横棒 (右端の最新足を隠さない)。
      vpOpt={on, mode:'visible'|'until', untilTm}。表示範囲=このペインに見えている当日足の時間帯 /
      指定時刻まで=当日の寄り〜untilTm。どちらも1分足の vp から集計(5分足ペインも同じ)。 */
-  var _vp=null, _vpCutX=null, _vpDimCol=null, _vpCutTm=null;
+  var _vp=null, _vpCutX=null, _vpLineX=null, _vpDimCol=null, _vpCutTm=null;
   var _vpRects=[];       /* 描いた帯 [x,y,w,h,色] (暗転のあと、縦線より右の部分だけ描き直す用) */
   var _vpLineOn=true;    /* 集計の境目の縦線を描くか (カーソル追従中は十字線があるので描かない) */
   var _vpHandle=false;   /* 縦線の上につまみ(DOM)を出すか。出すときはキャンバスのラベルは描かない */
@@ -6151,12 +6151,16 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     if(_vpCutTm!=null){
       /* 縦線 = その時刻の足の右端 (1分足: 中心+0.5本 / 5分足: 目盛りと同じく半本左へずらした枠の右端) */
       _vpCutX=uToX(tmSideToU(_vpCutTm,'cur')+(tf==='5m'?1-bar5TimeOff(tf):0.5));
+      /* 2026-10-13: 見える縦線(とつまみ)は指定時刻の足の「真ん中」を通す (足の間だとどちらの足か分からないため)。
+         暗転の境目(_vpCutX)は従来どおり足の右端 = 指定した足は集計に入るので暗くしない。
+         5分足はその時刻を含む5分足 (足は開始時刻の位置に描かれている) */
+      _vpLineX=minToX(tf==='5m'?5*Math.floor(_vpCutTm/5):_vpCutTm,'cur');
       if(_vpDimAlpha>0&&_vpCutX<padL+chartW)_vpDimCol=_caHexToRgba(caLoadChartBg(),_vpDimAlpha);
     }
   }
   /* つまみ(DOM)の位置と時刻を DataChart へ渡す (描画のたびに layoutRef は作り直されるので、出さないときは未設定=非表示) */
-  if(layoutRef&&layoutRef.current&&_vpHandle&&_vpCutX!=null&&_vpCutX>=padL-1&&_vpCutX<=padL+chartW+1){
-    layoutRef.current.vpHandleX=_vpCutX;
+  if(layoutRef&&layoutRef.current&&_vpHandle&&_vpLineX!=null&&_vpLineX>=padL-1&&_vpLineX<=padL+chartW+1){
+    layoutRef.current.vpHandleX=_vpLineX;
     layoutRef.current.vpHandleTm=_vpCutTm;
   }
   drawBarSet(visibleBars,'cur');
@@ -6386,19 +6390,19 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   /* 2026-09-17: 価格帯別出来高 — 集計の境目の縦線 (最前面)。
      つまみ(DOM)を出すとき(仮固定/指定時刻まで/ホバー無し端末の中央)はラベルをキャンバスに描かない。
      PCでカーソルが外れたとき(表示範囲の中央)だけ「HH:MM まで」ラベルを描く */
-  if(_vpLineOn&&_vpCutX!=null&&_vpCutX>=padL-1&&_vpCutX<=padL+chartW+1){
+  if(_vpLineOn&&_vpLineX!=null&&_vpLineX>=padL-1&&_vpLineX<=padL+chartW+1){
     ctx.save();
     ctx.strokeStyle='rgba(167,139,250,0.95)'; ctx.lineWidth=1.5; ctx.setLineDash([4,3]);
-    ctx.beginPath(); ctx.moveTo(Math.round(_vpCutX)+0.5,priceTop); ctx.lineTo(Math.round(_vpCutX)+0.5,volBot); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(Math.round(_vpLineX)+0.5,priceTop); ctx.lineTo(Math.round(_vpLineX)+0.5,volBot); ctx.stroke();
     ctx.setLineDash([]);
     ctx.restore();
   }
-  if(_vpLineOn&&!_vpHandle&&_vpCutX!=null&&_vpCutX>=padL-1&&_vpCutX<=padL+chartW+1){
+  if(_vpLineOn&&!_vpHandle&&_vpLineX!=null&&_vpLineX>=padL-1&&_vpLineX<=padL+chartW+1){
     ctx.save();
     var _ut=_vpCutTm, _ul=Math.floor(_ut/60)+':'+('0'+(_ut%60)).slice(-2)+' まで';
     ctx.font='bold 10px -apple-system,Helvetica,sans-serif';
     var _uw=ctx.measureText(_ul).width+10;
-    var _ux=Math.max(padL,Math.min(_vpCutX+4,padL+chartW-_uw));   /* 右端で切れないよう内側へ */
+    var _ux=Math.max(padL,Math.min(_vpLineX+4,padL+chartW-_uw));   /* 右端で切れないよう内側へ */
     ctx.fillStyle='rgba(83,74,183,0.92)'; ctx.fillRect(_ux,priceTop+2,_uw,16);
     ctx.fillStyle='#ffffff'; ctx.textAlign='left'; ctx.textBaseline='middle';
     ctx.fillText(_ul,_ux+5,priceTop+10);
@@ -7095,6 +7099,18 @@ function ImageAnnotator(props){
   /* 2026-10-13: 全板パネル (オーバーレイ) の開閉と、パネルで選んだ値段 (チャートに水平線+約定した足の点) */
   var sVpLad=useState(false); var vpLadOpen=sVpLad[0],setVpLadOpen=sVpLad[1];
   var sVpLadSel=useState(null); var vpLadSel=sVpLadSel[0],setVpLadSel=sVpLadSel[1];
+  /* 全板パネルをメタ行(ticker〜設定・↶↷・タグ/メモパネル)の下から出すため、メタ行の高さを測る */
+  var sMetaH=useState(0); var metaRowH=sMetaH[0],setMetaRowH=sMetaH[1];
+  var metaRowRoRef=useRef(null);
+  var metaRowRefCb=useRef(function(el){
+    if(metaRowRoRef.current){metaRowRoRef.current.disconnect();metaRowRoRef.current=null;}
+    if(!el)return;
+    setMetaRowH(el.offsetHeight);
+    if(typeof ResizeObserver!=='undefined'){
+      var ro=new ResizeObserver(function(){setMetaRowH(el.offsetHeight);});
+      ro.observe(el); metaRowRoRef.current=ro;
+    }
+  }).current;
   var sVpUntil=useState(null); var vpUntil=sVpUntil[0],setVpUntil=sVpUntil[1];
   /* 2026-09-17: 表示範囲モード — 右クリックで仮固定した時刻 / カーソルの足の時刻 (どちらも null=なし)。
      1分足・5分足ペインで共有 (どちらのペインで指しても両方がその時刻までで集計) */
@@ -7802,7 +7818,6 @@ function ImageAnnotator(props){
   /* 2026-04-20 Step3: 画像mode state撤去 (textInputState/floatPos) */
   /* 分析モード用 state */
   var stATI=useState(null);  var analysisTextInput=stATI[0],setAnalysisTextInput=stATI[1];
-  var stFPA=useState(null);  var floatPosAnalysis=stFPA[0],setFloatPosAnalysis=stFPA[1];
   /* F1: 過去チャート参照 (null=閉じている / object=開いている) */
   var stRA=useState(null);   var refAnalysis=stRA[0],setRefAnalysis=stRA[1];
   /* C5+: VJなどイベントハンドラ内で最新refAnalysisを参照するためのref
@@ -8094,7 +8109,6 @@ function ImageAnnotator(props){
   var analysisFutRef=useRef({'1m':[],'5m':[]});
   var analysisTfRef=useRef('1m');                     // 現在の tf (stale closure回避)
   var analysisTextInputRef=useRef(null);              // stale closure 回避
-  var analysisFloatDragRef=useRef(null);              // 分析モード floating undo/redo のドラッグ
   /* 2026-04-20: トリプルタップで消しゴム⇄前ツール切替用 */
   var prevToolBeforeEraserRef=useRef(null);
   /* 2026-04-22: 三本指ダブルタップで pan ⇄ 前ツール切替用 */
@@ -9508,7 +9522,7 @@ function ImageAnnotator(props){
             onClick:stackMode?function(e){setAnalysisTf('1m');}:(splitChart?function(e){setSplitActive('top');}:undefined)
           },
             /* メタ行 (ticker + date + チャートメモ/タグ) — 2026-05-21 */
-            ce("div",{style:{background:"#111",borderBottom:"1px solid #222",flexShrink:0}},
+            ce("div",{ref:metaRowRefCb,style:{background:"#111",borderBottom:"1px solid #222",flexShrink:0}},
               /* 上段: ticker・date・タグチップ・ボタン群 */
               ce("div",{style:{display:"flex",alignItems:"center",gap:6,padding:"5px 10px",flexWrap:"wrap",minHeight:32}},
                 ce("div",{style:{fontSize:13,fontWeight:700,color:"#ddd",flexShrink:0}},
@@ -9659,7 +9673,17 @@ function ImageAnnotator(props){
                         border:vpLadOpen?"1px solid #a3a31a":"1px solid #333",background:vpLadOpen?"#3a3a10":"#1a1a2e",color:vpLadOpen?"#f0e68c":"#8b8b9a"}},
                       "全板"),
                     tail);
-                })()
+                })(),
+                /* 2026-10-13: ↶↷ (旧: 画面右上に浮かせていた。ツールバー/チャート/全板パネルと重なるため、この行の右端に固定) */
+                ce("div",{style:{display:"flex",marginLeft:"auto",flexShrink:0,borderRadius:5,overflow:"hidden",border:"1px solid #333"}},
+                  ce("button",{onClick:undo,disabled:!canUndo,title:"元に戻す",
+                    style:{width:IS_TOUCH?40:32,height:IS_TOUCH?26:22,border:"none",borderRight:"1px solid #333",fontFamily:"inherit",
+                      background:canUndo?"#222":"transparent",color:canUndo?"#e5e5e5":"#444",fontSize:IS_TOUCH?15:13,
+                      cursor:canUndo?"pointer":"default",display:"flex",alignItems:"center",justifyContent:"center",padding:0}},"↩"),
+                  ce("button",{onClick:redo,disabled:!canRedo,title:"やり直す",
+                    style:{width:IS_TOUCH?40:32,height:IS_TOUCH?26:22,border:"none",fontFamily:"inherit",
+                      background:canRedo?"#222":"transparent",color:canRedo?"#e5e5e5":"#444",fontSize:IS_TOUCH?15:13,
+                      cursor:canRedo?"pointer":"default",display:"flex",alignItems:"center",justifyContent:"center",padding:0}},"↪"))
               ),
               /* タグセレクターパネル */
               /* 2026-10-11: 高さに上限をつけて縦スクロール可能に (タグが多いと下が見えず操作できなかった。メモパネルと同じ作り) */
@@ -10289,6 +10313,7 @@ function ImageAnnotator(props){
           /* 2026-10-13: 全板パネル (右端オーバーレイ・価格帯別出来高ON かつ データありのときのみ) */
           vpOn&&vpLadOpen&&vpRange().has&&ce(CaVpLadder,{
             bars:((simMode?simDisplayData:emaContinuedData)||{}).bars_1m||[],
+            top:metaRowH,
             cutTm:vpLadderCut(),
             selP:vpLadSel,
             onSelect:setVpLadSel,
@@ -10328,83 +10353,6 @@ function ImageAnnotator(props){
             setAnalysisPShift(function(ps){return ps-dy*0.5;});
           }
         }),
-        /* floating undo/redo (分析モード用)
-           2026-04-20: position:fixed化 + zIndex引き上げ (toolbar潜り込み防止) + タッチdrag対応
-           2026-04-22: 横並び + 左にドラッグハンドル、角ばらせる (radius 3px)、PC版40×24に小型化 */
-        ce("div",{
-          style:Object.assign(
-            floatPosAnalysis?{position:"fixed",left:floatPosAnalysis.x,top:floatPosAnalysis.y}:{position:"fixed",top:IS_TOUCH?80:70,right:16},
-            {display:"flex",flexDirection:"row",gap:0,zIndex:10010,pointerEvents:"auto",userSelect:"none",touchAction:"none"}
-          )
-        },
-          ce("div",{
-            onMouseDown:function(e){
-              e.stopPropagation();e.preventDefault();
-              var fRect=e.currentTarget.parentNode.getBoundingClientRect();
-              analysisFloatDragRef.current={
-                startX:e.clientX,startY:e.clientY,
-                ox:fRect.left,oy:fRect.top  /* 2026-04-20: fixed座標系 (viewport基準) */
-              };
-              function mv(ev){
-                if(!analysisFloatDragRef.current)return;
-                var d=analysisFloatDragRef.current;
-                setFloatPosAnalysis({x:d.ox+ev.clientX-d.startX,y:d.oy+ev.clientY-d.startY});
-              }
-              function up(){analysisFloatDragRef.current=null;document.removeEventListener("mousemove",mv);document.removeEventListener("mouseup",up);}
-              document.addEventListener("mousemove",mv);document.addEventListener("mouseup",up);
-            },
-            /* 2026-04-20: タッチdrag対応 (iPad等) */
-            onTouchStart:function(e){
-              if(e.touches.length!==1)return;
-              e.stopPropagation();
-              var t=e.touches[0];
-              var fRect=e.currentTarget.parentNode.getBoundingClientRect();
-              analysisFloatDragRef.current={
-                startX:t.clientX,startY:t.clientY,
-                ox:fRect.left,oy:fRect.top
-              };
-              function mv(ev){
-                if(!analysisFloatDragRef.current||!ev.touches.length)return;
-                ev.preventDefault();
-                var d=analysisFloatDragRef.current, tc=ev.touches[0];
-                setFloatPosAnalysis({x:d.ox+tc.clientX-d.startX,y:d.oy+tc.clientY-d.startY});
-              }
-              function up(){
-                analysisFloatDragRef.current=null;
-                document.removeEventListener("touchmove",mv);
-                document.removeEventListener("touchend",up);
-                document.removeEventListener("touchcancel",up);
-              }
-              document.addEventListener("touchmove",mv,{passive:false});
-              document.addEventListener("touchend",up);
-              document.addEventListener("touchcancel",up);
-            },
-            style:{width:IS_TOUCH?18:14,height:IS_TOUCH?36:20,
-              display:"flex",alignItems:"center",justifyContent:"center",cursor:"grab",
-              background:"rgba(255,255,255,0.7)",borderRadius:"3px 0 0 3px",border:"1px solid rgba(0,0,0,0.1)",
-              borderRight:"none",letterSpacing:2,fontSize:IS_TOUCH?11:9,color:"rgba(0,0,0,0.35)",backdropFilter:"blur(16px)",
-              writingMode:"vertical-rl",textOrientation:"upright"}
-          },"⋯"),
-          ce("div",{style:{display:"flex",borderRadius:"0 3px 3px 0",overflow:"hidden",
-            border:"1px solid rgba(0,0,0,0.12)",borderLeft:"none",
-            boxShadow:"0 4px 20px rgba(0,0,0,0.25),0 0 0 0.5px rgba(255,255,255,0.15),inset 0 1px 0 rgba(255,255,255,0.35)",
-            backdropFilter:"blur(16px)",background:"rgba(255,255,255,0.82)"}},
-            ce("button",{onClick:undo,disabled:!canUndo,
-              onMouseDown:function(e){e.stopPropagation();},onTouchStart:function(e){e.stopPropagation();},
-              style:{width:IS_TOUCH?62:34,height:IS_TOUCH?36:20,border:"none",borderRight:"1px solid rgba(0,0,0,0.12)",
-                background:canUndo?"rgba(0,0,0,0.06)":"transparent",color:canUndo?"rgba(0,0,0,0.85)":"rgba(0,0,0,0.2)",
-                fontSize:IS_TOUCH?20:13,cursor:canUndo?"pointer":"default",display:"flex",alignItems:"center",justifyContent:"center",
-                transition:"background .15s,color .15s"}},
-              "↩"),
-            ce("button",{onClick:redo,disabled:!canRedo,
-              onMouseDown:function(e){e.stopPropagation();},onTouchStart:function(e){e.stopPropagation();},
-              style:{width:IS_TOUCH?62:34,height:IS_TOUCH?36:20,border:"none",
-                background:canRedo?"rgba(0,0,0,0.06)":"transparent",color:canRedo?"rgba(0,0,0,0.85)":"rgba(0,0,0,0.2)",
-                fontSize:IS_TOUCH?20:13,cursor:canRedo?"pointer":"default",display:"flex",alignItems:"center",justifyContent:"center",
-                transition:"background .15s,color .15s"}},
-              "↪")
-          )
-        )
       )
     ),
 
