@@ -2933,6 +2933,10 @@ function DataChart(props){
         ctx.textAlign='left';
         ctx.fillStyle=LCC; ctx.fillRect(L.padL+L.chartW+2,lcy-8,lpw,16);
         ctx.fillStyle='#000'; ctx.fillText(lpStr,L.padL+L.chartW+7,lcy);
+        /* 2026-10-13: 左の価格軸にも (右は全板パネル等に隠れることがある) */
+        ctx.textAlign='right';
+        ctx.fillStyle=LCC; ctx.fillRect(Math.max(0,L.padL-2-lpw),lcy-8,lpw,16);
+        ctx.fillStyle='#000'; ctx.fillText(lpStr,Math.max(0,L.padL-2-lpw)+lpw-5,lcy);
       }
       ctx.restore();
     })();
@@ -2997,6 +3001,11 @@ function DataChart(props){
       ctx.fillRect(L.padL+L.chartW+2,snapCy-8,pw,16);
       ctx.fillStyle='#000';
       ctx.fillText(pStr,L.padL+L.chartW+7,snapCy);
+      /* 2026-10-13: 左の価格軸にも同じラベル (右は全板パネルを開くと隠れるため) */
+      var _plx=Math.max(0,L.padL-2-pw);
+      ctx.textAlign='right';
+      ctx.fillStyle=CROSS; ctx.fillRect(_plx,snapCy-8,pw,16);
+      ctx.fillStyle='#000'; ctx.fillText(pStr,_plx+pw-5,snapCy);
     }
   }
 
