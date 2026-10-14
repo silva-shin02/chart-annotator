@@ -3228,8 +3228,12 @@ function DataChart(props){
       });
     }
   }
-  function onChartMouseLeave(){
-    if(props.vpHoverTm!=null)vpReportHover(null);   /* 2026-09-17: カーソルが外れた=表示範囲の中央まで */
+  function onChartMouseLeave(e){
+    /* 2026-09-17: カーソルが外れた=表示範囲の中央まで。
+       2026-10-14: ただし全板パネルへ移ったときは最後のカーソルの時刻のまま (全板の集計時刻が大引けへ飛ばないように。
+       全板パネルから チャート以外へ出たときに CaVpLadder の onLeave で解除) */
+    var _rt=e&&e.relatedTarget, _toLad=!!(_rt&&_rt.closest&&_rt.closest('[data-vp-ladder]'));
+    if(props.vpHoverTm!=null&&!_toLad)vpReportHover(null);
     cursorRef.current=null;
     vpReportCursorP();
     if(props.onExternalCursorChange)props.onExternalCursorChange(null);
@@ -4964,10 +4968,11 @@ function DataChart(props){
 
   return ce("div",{
     ref:containerRef,
+    'data-ca-chart':'1',
     onMouseDown:onMouseDown,
     onMouseMove:onMouseMove,
     onMouseUp:onMouseUp,
-    onMouseLeave:function(){onMouseUp();onChartMouseLeave();},
+    onMouseLeave:function(e){onMouseUp();onChartMouseLeave(e);},
     onContextMenu:function(e){e.preventDefault();},
     onTouchStart:onTouchStart,
     onTouchMove:onTouchMove,
@@ -5721,7 +5726,12 @@ function CaVpLadder(props){
         color:opt.hov?'#fff':(opt.labelCol||'#4ade80'),fontWeight:(opt.bold||opt.hov)?700:400}},label)
     );
   }
-  return ce('div',{onMouseDown:stop,onTouchStart:stop,onTouchMove:stop,onWheel:stop,onClick:stop,
+  return ce('div',{onMouseDown:stop,onTouchStart:stop,onTouchMove:stop,onWheel:stop,onClick:stop,'data-vp-ladder':'1',
+      onMouseLeave:function(e){
+        /* 2026-10-14: チャートから持ち越したカーソルの時刻は、チャート以外へ出たら解除 (チャートへ戻るならチャート側が更新する) */
+        var rt=e.relatedTarget;
+        if(!(rt&&rt.closest&&rt.closest('[data-ca-chart]'))&&props.onLeave)props.onLeave();
+      },
       style:{position:'absolute',top:(props.top||0),right:0,bottom:0,width:210,zIndex:120,display:'flex',flexDirection:'column',
         background:'rgba(12,12,14,0.95)',borderLeft:'1px solid #333',boxShadow:'-4px 0 12px rgba(0,0,0,.5)',
         fontVariantNumeric:'tabular-nums',userSelect:'none',WebkitUserSelect:'none'}},
@@ -10372,6 +10382,7 @@ function ImageAnnotator(props){
             cursorSubRef:vpLadCurSubRef,
             onSelect:setVpLadSel,
             onHoverP:setVpLadHovP,
+            onLeave:function(){ if(vpHoverTm!=null)setVpHoverTm(null); },
             onClose:function(){setVpLadOpen(false);setVpLadSel(null);setVpLadHovP(null);}
           })
         ), /* end 横並び/縦並びコンテナ */
