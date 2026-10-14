@@ -13510,24 +13510,7 @@ function CaChartCard(props){
       })
     ),
 
-    /* SN チャート形状タグ (同日・同銘柄のSNデータから読み取り) */
-    (function(){
-      var snDate=_caResolveMetaDate(m);
-      if(!snDate||!m.ticker)return null;
-      var snTags=caLoadSnChartShapeTags(m.ticker,snDate);
-      if(!snTags||!snTags.length)return null;
-      return ce('div',{style:{padding:'0 9px 5px 9px',display:'flex',flexWrap:'wrap',gap:4}},
-        snTags.map(function(t,i){
-          var idx=t.indexOf(':');
-          var label=idx>=0?t.slice(idx+1):t;
-          return ce('span',{key:i,
-            style:{fontSize:10,padding:'2px 7px',borderRadius:10,
-              background:'#1c1f3a',color:'#a5b4fc',fontWeight:700,
-              whiteSpace:'nowrap',border:'1px solid #3730a3',letterSpacing:0.2}},
-            '✦ '+label);
-        })
-      );
-    })(),
+    /* 2026-10-14: SN チャート形状タグの表示は廃止 (タグは CA で付けて SN に表示する方式へ) */
 
     /* SN予定 (analysisDate がありイベントがある場合のみ) */
     snEvents&&snEvents.length>0&&(function(){
@@ -14828,8 +14811,6 @@ function CaCalendarModal(props){
                         var thumb=_thumbMemCache[m.id]||m.thumbUrl||m.thumb||null;
                         /* CA タグ */
                         var caTids=_calTagMap[m.id]||[];
-                        /* SN タグ */
-                        var snTags=selDate&&m.ticker?caLoadSnChartShapeTags(m.ticker,selDate):[];
                         /* メモ */
                         var memoHtml=caGetChartMemo(m.id);
                         var memoText=_calStripHtml(memoHtml);
@@ -14845,22 +14826,14 @@ function CaCalendarModal(props){
                             : ce('div',{style:{width:'100%',height:70,background:'#1e1e1e',
                                 display:'flex',alignItems:'center',justifyContent:'center',
                                 color:'#444',fontSize:11}},'サムネイルなし'),
-                          /* CA タグ + SN タグ */
-                          (caTids.length>0||snTags.length>0)&&ce('div',{
+                          /* CA タグ (2026-10-14: SN タグの表示は廃止) */
+                          caTids.length>0&&ce('div',{
                             style:{padding:'5px 8px 2px',display:'flex',flexWrap:'wrap',gap:4}},
                             caTids.map(function(tid){
                               var td=_calTagDefsById[tid]; if(!td)return null;
                               return ce('span',{key:tid,style:{fontSize:10,padding:'2px 7px',
                                 borderRadius:10,background:td.color,color:'#fff',fontWeight:700,
                                 whiteSpace:'nowrap'}},td.name);
-                            }),
-                            snTags.map(function(t,si){
-                              var _i=t.indexOf(':');
-                              var label=_i>=0?t.slice(_i+1):t;
-                              return ce('span',{key:'sn'+si,style:{fontSize:10,padding:'2px 7px',
-                                borderRadius:10,background:'#1c1f3a',color:'#a5b4fc',fontWeight:700,
-                                whiteSpace:'nowrap',border:'1px solid #3730a3'}},
-                                '✦ '+label);
                             })
                           ),
                           /* メモ (内容がある場合のみ) */
@@ -15471,21 +15444,7 @@ function CaTagSearchModal(props){
     return tagDefs.filter(function(td){return(caTagCharts[td.id]||[]).length>0;});
   },[tagDefs,caTagCharts]);
 
-  /* SN タグ → チャートリスト */
-  var snTagCharts=useMemo(function(){
-    var m={};
-    charts.forEach(function(c){
-      var date=_caResolveMetaDate(c);
-      if(!date||!c.ticker)return;
-      try{
-        var tags=caLoadSnChartShapeTags(c.ticker,date);
-        tags.forEach(function(t){if(!m[t])m[t]=[];m[t].push(c);});
-      }catch(e){}
-    });
-    return m;
-  },[charts]);
-
-  var snTagKeys=useMemo(function(){return Object.keys(snTagCharts);},[snTagCharts]);
+  /* 2026-10-14: SN タグでの検索は廃止 (タグは CA で付けて SN に表示する方式へ) */
 
   /* スタンプ (矢印付) → チャートリスト (非同期収集) */
   var snippetsById=useMemo(function(){var m={};caLoadSnippets().forEach(function(s){if(s&&s.id)m[s.id]=s;});return m;},[]);
@@ -15522,16 +15481,16 @@ function CaTagSearchModal(props){
       ?(caTagCharts[selTag.id]||[]).slice()
       :selTag.type==='stamp'
         ?((stampGroups[selTag.key]&&stampGroups[selTag.key].charts)||[]).slice()
-        :(snTagCharts[selTag.key]||[]).slice();
+        :[];
     list.sort(function(a,b){
       var da=_caResolveMetaDate(a)||'';
       var db=_caResolveMetaDate(b)||'';
       return db.localeCompare(da);
     });
     return list;
-  },[selTag,caTagCharts,snTagCharts,stampGroups]);
+  },[selTag,caTagCharts,stampGroups]);
 
-  var hasTags=activeCaTags.length>0||snTagKeys.length>0||stampKeys.length>0;
+  var hasTags=activeCaTags.length>0||stampKeys.length>0;
   var BT={border:'none',cursor:'pointer',fontFamily:'inherit'};
   /* 2026-06-16: CAタグ1ボタン (カテゴリ・グループ描画で共用) */
   function renderCaTagBtn(td){
@@ -15596,29 +15555,8 @@ function CaTagSearchModal(props){
                     })
                 )
               ),
-              snTagKeys.length>0&&ce('div',null,
-                activeCaTags.length>0&&ce('div',{style:{margin:'6px 12px',borderTop:'1px solid #2a2a2a'}}),
-                ce('div',{style:{padding:'4px 12px 5px',fontSize:10,fontWeight:700,
-                  color:'#555',letterSpacing:1,textTransform:'uppercase'}},'SN タグ'),
-                snTagKeys.map(function(t){
-                  var isSel=selTag&&selTag.type==='sn'&&selTag.key===t;
-                  var cnt=(snTagCharts[t]||[]).length;
-                  var _i=t.indexOf(':'); var label=_i>=0?t.slice(_i+1):t;
-                  return ce('button',{key:t,
-                    onClick:function(){setSelTag({type:'sn',key:t,label:label});},
-                    style:Object.assign({},BT,{display:'flex',alignItems:'center',gap:7,
-                      width:'100%',padding:'7px 12px',textAlign:'left',
-                      background:isSel?'#1c1f3a':'transparent'})},
-                    ce('span',{style:{fontSize:10,color:'#a5b4fc',flexShrink:0}},'✦'),
-                    ce('span',{style:{fontSize:12,flex:1,
-                      color:isSel?'#a5b4fc':'#ccc',
-                      overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},label),
-                    ce('span',{style:{fontSize:10,color:'#555',flexShrink:0}},cnt)
-                  );
-                })
-              ),
               stampKeys.length>0&&ce('div',null,
-                (activeCaTags.length>0||snTagKeys.length>0)&&ce('div',{style:{margin:'6px 12px',borderTop:'1px solid #2a2a2a'}}),
+                activeCaTags.length>0&&ce('div',{style:{margin:'6px 12px',borderTop:'1px solid #2a2a2a'}}),
                 ce('div',{style:{padding:'4px 12px 5px',fontSize:10,fontWeight:700,
                   color:'#555',letterSpacing:1,textTransform:'uppercase'}},'スタンプ'),
                 stampKeys.map(function(k){
@@ -15656,7 +15594,6 @@ function CaTagSearchModal(props){
                           var thumb=_thumbMemCache[m.id]||m.thumbUrl||m.thumb||null;
                           var date=_caResolveMetaDate(m);
                           var caTids=tagMap[m.id]||[];
-                          var snTags=date&&m.ticker?caLoadSnChartShapeTags(m.ticker,date):[];
                           var memoText=_stripHtml(caGetChartMemo(m.id));
                           return ce('div',{key:m.id,
                             style:{border:'1px solid #2a2a2a',borderRadius:8,
@@ -15670,19 +15607,13 @@ function CaTagSearchModal(props){
                               :ce('div',{style:{width:'100%',height:70,background:'#1e1e1e',
                                   display:'flex',alignItems:'center',justifyContent:'center',
                                   color:'#444',fontSize:11}},'サムネイルなし'),
-                            (caTids.length>0||snTags.length>0)&&ce('div',{
+                            caTids.length>0&&ce('div',{
                               style:{padding:'5px 8px 2px',display:'flex',flexWrap:'wrap',gap:4}},
                               caTids.map(function(tid){
                                 var td=tagDefsById[tid]; if(!td)return null;
                                 return ce('span',{key:tid,style:{fontSize:10,padding:'2px 7px',
                                   borderRadius:10,background:td.color,color:'#fff',fontWeight:700,
                                   whiteSpace:'nowrap'}},td.name);
-                              }),
-                              snTags.map(function(t,si){
-                                var _i=t.indexOf(':'); var lbl=_i>=0?t.slice(_i+1):t;
-                                return ce('span',{key:'sn'+si,style:{fontSize:10,padding:'2px 7px',
-                                  borderRadius:10,background:'#1c1f3a',color:'#a5b4fc',fontWeight:700,
-                                  whiteSpace:'nowrap',border:'1px solid #3730a3'}},'✦ '+lbl);
                               })
                             ),
                             memoText&&ce('div',{style:{padding:'3px 8px 4px',fontSize:11,color:'#888',
