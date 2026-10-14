@@ -5693,15 +5693,13 @@ function CaVpLadder(props){
     if(idx>=0)el.scrollTop=Math.max(0,idx*RH-el.clientHeight/2+RH/2);
     updVis();
   },[curP,nRows]);
-  /* カーソルの値段の行が見えていなければ、ぎりぎり見える位置までスクロール (見えていれば動かさない) */
+  /* 2026-10-14: 十字カーソルの値段の行を中央へ (カーソルが無いときは上の「現在値を中央へ」のまま) */
   var hovRowP=(model&&hovP!=null)?Math.round(hovP/model.rs)*model.rs:null;
   useEffect(function(){
     var el=scRef.current; if(!el||!model||hovRowP==null)return;
     var idx=-1; model.rows.forEach(function(r,i){if(r.p===hovRowP)idx=i;});
     if(idx<0)return;
-    var top=idx*RH, bot=top+RH;
-    if(top<el.scrollTop)el.scrollTop=top;
-    else if(bot>el.scrollTop+el.clientHeight)el.scrollTop=bot-el.clientHeight;
+    el.scrollTop=Math.max(0,idx*RH-el.clientHeight/2+RH/2);
   },[hovRowP,curP,nRows]);
   useEffect(function(){ window.addEventListener('resize',updVis); return function(){window.removeEventListener('resize',updVis);}; },[]);
   function hhmm(t){return t==null?'--:--':Math.floor(t/60)+':'+('0'+(t%60)).slice(-2);}
