@@ -7140,7 +7140,8 @@ function ImageAnnotator(props){
   var sVpMode=useState(caLoadVpMode); var vpMode=sVpMode[0],setVpMode=sVpMode[1];
   var sVpSrc=useState(caLoadVpSrc); var vpSrc=sVpSrc[0],setVpSrc=sVpSrc[1];   /* 集計元 'tick'|'close' */
   /* 2026-10-13: 全板パネル (オーバーレイ) の開閉と、パネルで選んだ値段 (チャートに水平線+約定した足の点) */
-  var sVpLad=useState(false); var vpLadOpen=sVpLad[0],setVpLadOpen=sVpLad[1];
+  /* 2026-10-14: 全板パネルは既定で開いた状態 (✕/「全板」ボタンで閉じられる。エディタを開き直すとまた開く) */
+  var sVpLad=useState(true); var vpLadOpen=sVpLad[0],setVpLadOpen=sVpLad[1];
   var sVpLadSel=useState(null); var vpLadSel=sVpLadSel[0],setVpLadSel=sVpLadSel[1];
   /* 全板パネルをメタ行(ticker〜設定・↶↷・タグ/メモパネル)の下から出すため、メタ行の高さを測る */
   var sMetaH=useState(0); var metaRowH=sMetaH[0],setMetaRowH=sMetaH[1];
