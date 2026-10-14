@@ -9685,10 +9685,8 @@ function ImageAnnotator(props){
                     tail=ce("span",{style:{fontSize:11,color:"#c4b5fd",fontWeight:700,flexShrink:0}},
                       "寄り〜"+Math.floor(vpPinTm/60)+':'+('0'+(vpPinTm%60)).slice(-2)
                         +(HAS_HOVER?"（固定中・つまみで調整／同じ足を右クリックで解除）":"（固定中・つまみで調整）"));
-                  }else{
-                    tail=ce("span",{style:{fontSize:11,color:"#8b8b9a",flexShrink:0}},
-                      HAS_HOVER?"寄り〜カーソルの足（右クリックで固定）":"寄り〜つまみの時刻（つまみを動かすと固定）");
                   }
+                  /* 2026-10-14: 固定していないときの説明文「寄り〜カーソルの足（右クリックで固定）」「寄り〜つまみの時刻（つまみを動かすと固定）」は廃止 (tail=undefined) */
                   return ce(Fragment,null,
                     seg([['visible','表示範囲'],['until','指定時刻まで']],vpMode,function(k){setVpMode(k);caSaveVpMode(k);}),
                     /* 2026-10-14: 帯の刻みは1円固定 (自動/1円/5円/10円 の切替は廃止・vpOptNow で bin:'1') */
