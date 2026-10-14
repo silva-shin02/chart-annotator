@@ -5710,6 +5710,13 @@ function CaVpLadder(props){
   useEffect(function(){ return function(){ if(props.onHoverP)props.onHoverP(null); }; },[]);
   function hhmm(t){return t==null?'--:--':Math.floor(t/60)+':'+('0'+(t%60)).slice(-2);}
   function stop(e){e.stopPropagation();}
+  /* 約定のある1分足の時刻 (スライダーの刻み) と、集計時刻に当たる位置 (それ以前で最後の約定足) */
+  var tmList=useMemo(function(){
+    var a=[]; for(var i=0;i<bars.length;i++){ if(bars[i].v>0)a.push(_caVpTm(bars[i].t)); } return a;
+  },[bars]);
+  var tmIdx=0; for(var ti=0;ti<tmList.length;ti++){ if(cut!=null&&tmList[ti]<=cut)tmIdx=ti; }
+  var stepBtnSt={border:'1px solid #444',background:'#222',color:'#ddd',borderRadius:4,fontSize:12,lineHeight:'18px',
+    padding:'0 7px',cursor:'pointer',flexShrink:0};
   var over=0, under=0;
   if(model){ model.rows.forEach(function(r,i){ if(i<vis.first)over+=r.v; else if(vis.last>=0&&i>vis.last)under+=r.v; }); }
   function cellRow(key,label,v,opt){
@@ -5739,6 +5746,14 @@ function CaVpLadder(props){
       ce('span',{style:{flex:1,fontSize:11,fontWeight:700,color:'#ccc'}},'全板 出来高（寄り〜'+hhmm(cut)+'）'),
       ce('button',{onClick:props.onClose,title:'閉じる',
         style:{border:'none',background:'none',color:'#777',fontSize:14,cursor:'pointer',padding:'0 2px',lineHeight:1}},'✕')),
+    /* 2026-10-14: 集計時刻のスライダー + ←→(1分ずつ)。チャートのつまみと同じ親の vpSetTime
+       (表示範囲=その時刻で固定 / 指定時刻まで=スライダーと同じ値)。スライダーは約定のある1分足だけを刻む (昼休みを飛ばす) */
+    props.onSetTime&&tmList.length>0&&ce('div',{style:{display:'flex',alignItems:'center',gap:4,padding:'3px 6px',borderBottom:'1px solid #2a2a2a',flexShrink:0}},
+      ce('button',{onClick:function(){ if(cut!=null)props.onSetTime(cut-1); },title:'1分戻す',style:stepBtnSt},'←'),
+      ce('input',{type:'range',min:0,max:tmList.length-1,step:1,value:tmIdx,
+        onChange:function(e){ var t=tmList[+e.target.value]; if(t!=null)props.onSetTime(t); },
+        style:{flex:1,minWidth:0,margin:0,accentColor:'#8b5cf6',cursor:'pointer',touchAction:'none'}}),
+      ce('button',{onClick:function(){ if(cut!=null)props.onSetTime(cut+1); },title:'1分進める',style:stepBtnSt},'→')),
     ce('div',{style:{display:'flex',height:18,flexShrink:0,fontSize:10,color:'#888',borderBottom:'1px solid #2a2a2a'}},
       ce('div',{style:{flex:1,textAlign:'center',lineHeight:'18px'}},'出来高'),
       ce('div',{style:{width:62,textAlign:'center',lineHeight:'18px',borderLeft:'1px solid #26262a'}},'値段')),
@@ -10382,6 +10397,7 @@ function ImageAnnotator(props){
             cursorSubRef:vpLadCurSubRef,
             onSelect:setVpLadSel,
             onHoverP:setVpLadHovP,
+            onSetTime:vpSetTime,
             onLeave:function(){ if(vpHoverTm!=null)setVpHoverTm(null); },
             onClose:function(){setVpLadOpen(false);setVpLadSel(null);setVpLadHovP(null);}
           })
