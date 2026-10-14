@@ -2308,6 +2308,21 @@ function DataChart(props){
     if(!props.onVpHover||props.vpHoverTm===tm)return;
     props.onVpHover(tm);
   }
+  /* 2026-10-14: 全板パネルへ十字カーソルの価格を通知 (十字の価格ラベルと同じ1円スナップ。価格エリア外/カーソル無し=null)。
+     値が変わったときだけ。親は再レンダーせず全板パネルだけが更新される (props.onVpCursorP) */
+  var vpCurPRef=useRef(null);
+  function vpReportCursorP(){
+    if(!props.onVpCursorP)return;
+    var L=layoutRef.current, pos=cursorRef.current, p=null;
+    if(L&&pos&&pos.x>=L.padL&&pos.x<=L.padL+L.chartW&&pos.y>=L.priceTop&&pos.y<=L.priceBot
+       &&L.pmax!=null&&L.pmin!=null&&L.pmax!==L.pmin){
+      var xs=xToSideTm(pos.x);
+      if(xs&&xs.side==='cur')p=Math.round(L.pmax-((pos.y-L.priceTop)/L.priceH)*(L.pmax-L.pmin));
+    }
+    if(vpCurPRef.current===p)return;
+    vpCurPRef.current=p;
+    props.onVpCursorP(p);
+  }
   /* 2026-09-17: 縦線の上のつまみ「← HH:MM →」(DOM)。
      位置と時刻は描画のたびに drawDataChart が layoutRef に書き(vpHandleX/vpHandleTm)、描画直後にここで反映する。
      時刻部分=左右ドラッグ(足単位で吸着) / ←→=1分ずつ。どちらも親の onVpSetTime へ
@@ -3183,6 +3198,7 @@ function DataChart(props){
   //   gap にいる場合は通知しない。
   // 2026-06-25: stackMode 1m⇔5m 連動カーソル用に {tm, p(価格・円), src(自分のtf)} も onLinkCursorChange で通知。
   function notifyExternalCursorFromLocal(){
+    vpReportCursorP();
     var onCh=props.onExternalCursorChange;
     var onLink=props.onLinkCursorChange;
     if(!onCh&&!onLink)return;
@@ -3215,6 +3231,7 @@ function DataChart(props){
   function onChartMouseLeave(){
     if(props.vpHoverTm!=null)vpReportHover(null);   /* 2026-09-17: カーソルが外れた=表示範囲の中央まで */
     cursorRef.current=null;
+    vpReportCursorP();
     if(props.onExternalCursorChange)props.onExternalCursorChange(null);
     if(props.onLinkCursorChange)props.onLinkCursorChange(null);
     drawCrosshair();
@@ -4961,6 +4978,7 @@ function DataChart(props){
       // ペンのホバーがチャート外に出たら十字カーソル消す
       if(e.pointerType==='pen'){
         cursorRef.current=null;
+        vpReportCursorP();
         if(props.onExternalCursorChange)props.onExternalCursorChange(null);
         if(props.onLinkCursorChange)props.onLinkCursorChange(null);
         drawCrosshair();
@@ -5652,8 +5670,15 @@ function CaVpLadder(props){
     var rows=[], maxV=0, pocP=null;
     for(var p=hi;p>=lo;p-=rs){ var v=map[p]||0; rows.push({p:p,v:v}); if(v>maxV){maxV=v;pocP=p;} }
     if(curP!=null)curP=Math.round(curP/rs)*rs;
-    return {rows:rows,maxV:maxV,pocP:pocP,curP:curP};
+    return {rows:rows,maxV:maxV,pocP:pocP,curP:curP,rs:rs};
   },[bars,cut]);
+  /* 2026-10-14: 十字カーソルの価格 (親の cursorSubRef 経由で DataChart から直接届く。null=カーソル無し) */
+  var sHovP=useState(null); var hovP=sHovP[0],setHovP=sHovP[1];
+  useEffect(function(){
+    var r=props.cursorSubRef; if(!r)return;
+    r.current=setHovP;
+    return function(){ if(r.current===setHovP)r.current=null; };
+  },[]);
   var scRef=useRef(null);
   var sVis=useState({first:0,last:-1}); var vis=sVis[0],setVis=sVis[1];
   function updVis(){
@@ -5668,6 +5693,16 @@ function CaVpLadder(props){
     if(idx>=0)el.scrollTop=Math.max(0,idx*RH-el.clientHeight/2+RH/2);
     updVis();
   },[curP,nRows]);
+  /* カーソルの値段の行が見えていなければ、ぎりぎり見える位置までスクロール (見えていれば動かさない) */
+  var hovRowP=(model&&hovP!=null)?Math.round(hovP/model.rs)*model.rs:null;
+  useEffect(function(){
+    var el=scRef.current; if(!el||!model||hovRowP==null)return;
+    var idx=-1; model.rows.forEach(function(r,i){if(r.p===hovRowP)idx=i;});
+    if(idx<0)return;
+    var top=idx*RH, bot=top+RH;
+    if(top<el.scrollTop)el.scrollTop=top;
+    else if(bot>el.scrollTop+el.clientHeight)el.scrollTop=bot-el.clientHeight;
+  },[hovRowP,curP,nRows]);
   useEffect(function(){ window.addEventListener('resize',updVis); return function(){window.removeEventListener('resize',updVis);}; },[]);
   function hhmm(t){return t==null?'--:--':Math.floor(t/60)+':'+('0'+(t%60)).slice(-2);}
   function stop(e){e.stopPropagation();}
@@ -5678,12 +5713,13 @@ function CaVpLadder(props){
     var w=(model&&model.maxV>0&&v>0)?Math.min(100,v/model.maxV*100):0;
     return ce('div',{key:key,onClick:opt.onClick,
         style:{display:'flex',height:RH,flexShrink:0,borderBottom:'1px solid #1d1d1f',cursor:opt.onClick?'pointer':'default',
-          background:opt.cur?'#5c5410':'transparent',boxShadow:opt.sel?'inset 0 0 0 1.5px #22d3ee':'none'}},
+          background:opt.hov?'#1f4d7a':(opt.cur?'#5c5410':'transparent'),
+          boxShadow:opt.sel?'inset 0 0 0 1.5px #22d3ee':(opt.hov&&opt.cur?'inset 3px 0 0 #e8e070':'none')}},
       ce('div',{style:{flex:1,position:'relative',textAlign:'right',paddingRight:6,fontSize:12,lineHeight:RH+'px',color:'#e8e070',overflow:'hidden'}},
         w>0&&ce('div',{style:{position:'absolute',left:2,top:5,height:RH-10,width:w+'%',background:'#6b6b1f'}}),
         ce('span',{style:{position:'relative'}},v>0?v.toLocaleString():'')),
       ce('div',{style:{width:62,flexShrink:0,textAlign:'center',fontSize:12,lineHeight:RH+'px',borderLeft:'1px solid #26262a',
-        color:opt.labelCol||'#4ade80',fontWeight:opt.bold?700:400}},label)
+        color:opt.hov?'#fff':(opt.labelCol||'#4ade80'),fontWeight:(opt.bold||opt.hov)?700:400}},label)
     );
   }
   return ce('div',{onMouseDown:stop,onTouchStart:stop,onTouchMove:stop,onWheel:stop,onClick:stop,
@@ -5705,7 +5741,7 @@ function CaVpLadder(props){
             style:{flex:1,minHeight:0,overflowY:'auto',overscrollBehavior:'contain',WebkitOverflowScrolling:'touch',touchAction:'pan-y'}},
           model.rows.map(function(r){
             return cellRow(r.p,(r.p%1?r.p.toFixed(1):Math.round(r.p).toLocaleString()),r.v,{
-              cur:r.p===model.curP, sel:r.p===selP,
+              cur:r.p===model.curP, sel:r.p===selP, hov:r.p===hovRowP,
               labelCol:r.p===model.pocP?'#c4b5fd':null, bold:r.p===model.pocP,
               onClick:function(){ if(props.onSelect)props.onSelect(r.p===selP?null:r.p); }});
           })),
@@ -7317,6 +7353,10 @@ function ImageAnnotator(props){
   /* 2026-09-17: つまみ(ドラッグ/←→)からの時刻変更。範囲 [初約定の足, 最後の約定の足] に収める。
      表示範囲モード=その時刻で仮固定 / 指定時刻までモード=スライダーと同じ値 (右端=最新に追従) */
   /* 2026-10-13: 全板パネルの集計時刻。指定時刻まで=その時刻 / 表示範囲=固定 > カーソルの足 > 最新(最後の約定の足) */
+  /* 2026-10-14: 十字カーソルの価格 → 全板パネルの該当行をハイライト。
+     親の state にはせず、全板パネルが登録した関数(vpLadCurSubRef)へ直接渡す (カーソル移動で エディタ全体を再レンダーしない) */
+  var vpLadCurSubRef=useRef(null);
+  function vpLadCursorP(p){ var f=vpLadCurSubRef.current; if(f)f(p); }
   function vpLadderCut(){
     var r=vpRange(); if(r.hi==null)return null;
     var o=vpOptNow();
@@ -9724,7 +9764,7 @@ function ImageAnnotator(props){
             (function(analysisTf){return ce(DataChart,{
               data:simMode?simDisplayData:emaContinuedData, tf:topTf, showCrosshair:showCrosshair,
               vpOpt:vpOptNow(),   /* 2026-09-17: 価格帯別出来高 */
-              vpPinTm:vpPinTm, onVpPin:setVpPinTm, vpHoverTm:vpHoverTm, onVpHover:setVpHoverTm, onVpSetTime:vpSetTime,
+              vpPinTm:vpPinTm, onVpPin:setVpPinTm, vpHoverTm:vpHoverTm, onVpHover:setVpHoverTm, onVpSetTime:vpSetTime, onVpCursorP:vpLadCursorP,
               /* C1+: 過去chartデータを渡して同一キャンバスに連結描画 */
               refData:refAnalysis?refAnalysis.analysisData:null,
               /* C3+: 過去chart側ストロークも連結描画 (C6で書込対応) */
@@ -10021,7 +10061,7 @@ function ImageAnnotator(props){
             (function(analysisTf){return ce(DataChart,{
               data:simMode?simDisplayData:emaContinuedData, tf:'5m', showCrosshair:showCrosshair,
               vpOpt:vpOptNow(),   /* 2026-09-17: 価格帯別出来高 (5分足ペインも1分足の vp から集計) */
-              vpPinTm:vpPinTm, onVpPin:setVpPinTm, vpHoverTm:vpHoverTm, onVpHover:setVpHoverTm, onVpSetTime:vpSetTime,
+              vpPinTm:vpPinTm, onVpPin:setVpPinTm, vpHoverTm:vpHoverTm, onVpHover:setVpHoverTm, onVpSetTime:vpSetTime, onVpCursorP:vpLadCursorP,
               /* 2026-06-25: stackMode 1m⇔5m カーソル連動 (この下段は常にstack時のみrender) */
               linkCursorRef:linkCursorRef, linkCursorBump:cursorBump, onLinkCursorChange:notifyLinkCursor,
               /* 2026-06-18: controlled view/zoom/pShift (uncontrolled再フィットによる倍率縮小を防止) */
@@ -10325,6 +10365,7 @@ function ImageAnnotator(props){
             top:metaRowH,
             cutTm:vpLadderCut(),
             selP:vpLadSel,
+            cursorSubRef:vpLadCurSubRef,
             onSelect:setVpLadSel,
             onClose:function(){setVpLadOpen(false);setVpLadSel(null);}
           })
