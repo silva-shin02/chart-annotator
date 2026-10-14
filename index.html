@@ -2637,7 +2637,7 @@ function DataChart(props){
 
   /* 2026-09-17: 価格帯別出来高の表示条件 (オブジェクトは毎レンダー作り直されるので値でキー化して再描画判定) */
   var vpOpt=props.vpOpt||null;
-  var vpKey=vpOpt?((vpOpt.on?1:0)+'|'+vpOpt.mode+'|'+vpOpt.untilTm+'|'+vpOpt.bin+'|'+(vpOpt.pinned?1:0)+'|'+vpOpt.src+'|'+(vpOpt.avg?1:0)+'|'+vpOpt.selP):'';
+  var vpKey=vpOpt?((vpOpt.on?1:0)+'|'+vpOpt.mode+'|'+vpOpt.untilTm+'|'+vpOpt.bin+'|'+(vpOpt.pinned?1:0)+'|'+vpOpt.src+'|'+(vpOpt.avg?1:0)+'|'+vpOpt.selP+'|'+vpOpt.ladHovP):'';
   // メインチャート描画
   useEffect(function(){
     if((!bars.length&&!hasRef)||!priceRange)return;
@@ -5702,6 +5702,7 @@ function CaVpLadder(props){
     el.scrollTop=Math.max(0,idx*RH-el.clientHeight/2+RH/2);
   },[hovRowP,curP,nRows]);
   useEffect(function(){ window.addEventListener('resize',updVis); return function(){window.removeEventListener('resize',updVis);}; },[]);
+  useEffect(function(){ return function(){ if(props.onHoverP)props.onHoverP(null); }; },[]);
   function hhmm(t){return t==null?'--:--':Math.floor(t/60)+':'+('0'+(t%60)).slice(-2);}
   function stop(e){e.stopPropagation();}
   var over=0, under=0;
@@ -5709,7 +5710,7 @@ function CaVpLadder(props){
   function cellRow(key,label,v,opt){
     opt=opt||{};
     var w=(model&&model.maxV>0&&v>0)?Math.min(100,v/model.maxV*100):0;
-    return ce('div',{key:key,onClick:opt.onClick,
+    return ce('div',{key:key,onClick:opt.onClick,onPointerEnter:opt.onEnter,onPointerLeave:opt.onLeave,
         style:{display:'flex',height:RH,flexShrink:0,borderBottom:'1px solid #1d1d1f',cursor:opt.onClick?'pointer':'default',
           background:opt.hov?'#1f4d7a':(opt.cur?'#5c5410':'transparent'),
           boxShadow:opt.sel?'inset 0 0 0 1.5px #22d3ee':(opt.hov&&opt.cur?'inset 3px 0 0 #e8e070':'none')}},
@@ -5741,7 +5742,10 @@ function CaVpLadder(props){
             return cellRow(r.p,(r.p%1?r.p.toFixed(1):Math.round(r.p).toLocaleString()),r.v,{
               cur:r.p===model.curP, sel:r.p===selP, hov:r.p===hovRowP,
               labelCol:r.p===model.pocP?'#c4b5fd':null, bold:r.p===model.pocP,
-              onClick:function(){ if(props.onSelect)props.onSelect(r.p===selP?null:r.p); }});
+              onClick:function(){ if(props.onSelect)props.onSelect(r.p===selP?null:r.p); },
+              /* 2026-10-14: マウスが乗った行の値段をチャートに水平線で (タッチは対象外=離しても消えないため) */
+              onEnter:function(e){ if(e.pointerType==='mouse'&&props.onHoverP)props.onHoverP(r.p); },
+              onLeave:function(e){ if(e.pointerType==='mouse'&&props.onHoverP)props.onHoverP(null); }});
           })),
         cellRow('__under','UNDER',under,{labelCol:'#ddd'}))
   );
@@ -6365,6 +6369,26 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
       ctx.fillText(_spTxt,padL+chartW-4,_spY-2);
     }
     ctx.restore();
+  }
+
+  /* 2026-10-14: 全板パネルでマウスが乗っている行の値段 (vpOpt.ladHovP) に水平線 + 右端に値段 */
+  if(vpOpt&&vpOpt.on&&vpOpt.ladHovP!=null&&!isThumbnail){
+    var _lhP=vpOpt.ladHovP, _lhY=pToY(_lhP);
+    if(_lhY>=priceTop&&_lhY<=priceBot){
+      ctx.save();
+      ctx.beginPath(); ctx.rect(padL,priceTop,chartW,priceH); ctx.clip();
+      var _lhYr=Math.round(_lhY)+0.5;
+      ctx.strokeStyle='rgba(96,165,250,0.95)'; ctx.lineWidth=1.5; ctx.setLineDash([4,3]);
+      ctx.beginPath(); ctx.moveTo(padL,_lhYr); ctx.lineTo(padL+chartW,_lhYr); ctx.stroke();
+      ctx.setLineDash([]);
+      var _lhTxt=(_lhP%1?_lhP.toFixed(1):Math.round(_lhP).toLocaleString());
+      ctx.font='bold 11px -apple-system,Helvetica,sans-serif';
+      var _lhW=ctx.measureText(_lhTxt).width+8;
+      ctx.fillStyle='#1f4d7a'; ctx.fillRect(padL+2,_lhYr-8,_lhW,16);
+      ctx.textAlign='left'; ctx.textBaseline='middle'; ctx.fillStyle='#fff';
+      ctx.fillText(_lhTxt,padL+6,_lhYr);
+      ctx.restore();
+    }
   }
 
   /* B-drawing: 時刻+価格座標ストローク描画 (ズーム・パンに追従)
@@ -7141,6 +7165,8 @@ function ImageAnnotator(props){
   /* 2026-10-14: 全板パネルは既定で開いた状態 (✕/「全板」ボタンで閉じられる。エディタを開き直すとまた開く) */
   var sVpLad=useState(true); var vpLadOpen=sVpLad[0],setVpLadOpen=sVpLad[1];
   var sVpLadSel=useState(null); var vpLadSel=sVpLadSel[0],setVpLadSel=sVpLadSel[1];
+  /* 2026-10-14: 全板パネルでマウスが乗っている行の値段 → チャートに水平線 (vpOpt.ladHovP) */
+  var sVpLadHovP=useState(null); var vpLadHovP=sVpLadHovP[0],setVpLadHovP=sVpLadHovP[1];
   /* 全板パネルをメタ行(ticker〜設定・↶↷・タグ/メモパネル)の下から出すため、メタ行の高さを測る */
   var sMetaH=useState(0); var metaRowH=sMetaH[0],setMetaRowH=sMetaH[1];
   var metaRowRoRef=useRef(null);
@@ -7340,12 +7366,12 @@ function ImageAnnotator(props){
     if(vpMode!=='until'){
       /* 表示範囲: 寄り〜(仮固定 > カーソルの足)。どちらも無ければ untilTm=null → 各ペインが自分の表示範囲の中央を使う */
       var cut=(vpPinTm!=null)?vpPinTm:vpHoverTm;
-      return {on:true, mode:'visible', untilTm:(cut!=null?cut:null), pinned:(vpPinTm!=null), bin:'1', src:vpSrc, avg:true, selP:(vpLadOpen?vpLadSel:null)};
+      return {on:true, mode:'visible', untilTm:(cut!=null?cut:null), pinned:(vpPinTm!=null), bin:'1', src:vpSrc, avg:true, selP:(vpLadOpen?vpLadSel:null), ladHovP:(vpLadOpen?vpLadHovP:null)};
     }
     var r=vpRange();
-    if(r.hi==null)return {on:true, mode:'until', untilTm:null, bin:'1', src:vpSrc, avg:true, selP:(vpLadOpen?vpLadSel:null)};
+    if(r.hi==null)return {on:true, mode:'until', untilTm:null, bin:'1', src:vpSrc, avg:true, selP:(vpLadOpen?vpLadSel:null), ladHovP:(vpLadOpen?vpLadHovP:null)};
     var u=(vpUntil==null)?r.hi:Math.max(r.lo,Math.min(r.hi,vpUntil));
-    return {on:true, mode:'until', untilTm:u, bin:'1', src:vpSrc, avg:true, selP:(vpLadOpen?vpLadSel:null)};
+    return {on:true, mode:'until', untilTm:u, bin:'1', src:vpSrc, avg:true, selP:(vpLadOpen?vpLadSel:null), ladHovP:(vpLadOpen?vpLadHovP:null)};
   }
   /* 2026-09-17: つまみ(ドラッグ/←→)からの時刻変更。範囲 [初約定の足, 最後の約定の足] に収める。
      表示範囲モード=その時刻で仮固定 / 指定時刻までモード=スライダーと同じ値 (右端=最新に追従) */
@@ -10345,7 +10371,8 @@ function ImageAnnotator(props){
             selP:vpLadSel,
             cursorSubRef:vpLadCurSubRef,
             onSelect:setVpLadSel,
-            onClose:function(){setVpLadOpen(false);setVpLadSel(null);}
+            onHoverP:setVpLadHovP,
+            onClose:function(){setVpLadOpen(false);setVpLadSel(null);setVpLadHovP(null);}
           })
         ), /* end 横並び/縦並びコンテナ */
         /* F2: VirtualJoystick (タッチデバイスのみ、分析モードのpan制御) */
