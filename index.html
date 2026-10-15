@@ -2327,7 +2327,7 @@ function DataChart(props){
      位置と時刻は描画のたびに drawDataChart が layoutRef に書き(vpHandleX/vpHandleTm)、描画直後にここで反映する。
      時刻部分=左右ドラッグ(足単位で吸着) / ←→=1分ずつ。どちらも親の onVpSetTime へ
      (表示範囲なら仮固定、指定時刻までならスライダーと同じ値)。つまみ上の左ボタン操作はチャートへ伝えない */
-  var vpHandleRef=useRef(null), vpHandleTimeRef=useRef(null);
+  var vpHandleRef=useRef(null), vpHandleTimeRef=useRef(null), vpCenterSentRef=useRef(null);
   var vpPropsRef=useRef(props); vpPropsRef.current=props;   /* ドラッグ中(window listener)でも最新の親関数を呼ぶ */
   var vpDragRef=useRef(null);
   /* ドラッグ用: 描画域の外へ出ても端に留める。前日側は当日の寄り(9:00)扱い */
@@ -2420,6 +2420,11 @@ function DataChart(props){
   useEffect(function(){ return function(){ vpLpCancel(); }; },[]);
   /* 描画直後に呼ぶ: つまみを縦線の位置へ (はみ出す分は内側へ寄せる) */
   function vpSyncHandle(){
+    /* 2026-10-14: 表示範囲の中央の時刻を親へ (中央を使っている描画のときだけ・変わったときだけ。全板パネルの集計時刻に使う) */
+    var L0=layoutRef.current;
+    if(props.onVpCenterTm&&L0&&L0.vpCenterTm!=null&&L0.vpCenterTm!==vpCenterSentRef.current){
+      vpCenterSentRef.current=L0.vpCenterTm; props.onVpCenterTm(L0.vpCenterTm);
+    }
     var el=vpHandleRef.current, L=layoutRef.current; if(!el)return;
     if(!L||L.vpHandleX==null||L.vpHandleTm==null){ el.style.display='none'; return; }
     el.style.display='flex';
@@ -3232,8 +3237,8 @@ function DataChart(props){
     /* 2026-09-17: カーソルが外れた=表示範囲の中央まで。
        2026-10-14: ただし全板パネルへ移ったときは最後のカーソルの時刻のまま (全板の集計時刻が大引けへ飛ばないように。
        全板パネルから チャート以外へ出たときに CaVpLadder の onLeave で解除) */
-    var _rt=e&&e.relatedTarget, _toLad=!!(_rt&&_rt.closest&&_rt.closest('[data-vp-ladder]'));
-    if(props.vpHoverTm!=null&&!_toLad)vpReportHover(null);
+    /* 2026-10-14 (ユーザー指定): 全板パネルへ移ったときも解除する = 全板は「上のチャートの表示範囲の中央の足」まで (vpLadderCut) */
+    if(props.vpHoverTm!=null)vpReportHover(null);
     cursorRef.current=null;
     vpReportCursorP();
     if(props.onExternalCursorChange)props.onExternalCursorChange(null);
@@ -6176,6 +6181,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   var _vpRects=[];       /* 描いた帯 [x,y,w,h,色] (暗転のあと、縦線より右の部分だけ描き直す用) */
   var _vpLineOn=true;    /* 集計の境目の縦線を描くか (カーソル追従中は十字線があるので描かない) */
   var _vpHandle=false;   /* 縦線の上につまみ(DOM)を出すか。出すときはキャンバスのラベルは描かない */
+  var _vpCenterTm=null;  /* 2026-10-14: 表示範囲モード・固定/カーソル無しのとき、このペインの表示範囲の中央の時刻 (全板パネル用に親へ) */
   if(vpOpt&&vpOpt.on&&!isThumbnail&&caVpHasData(data)){
     var _vpFrom=null, _vpTo=null, _vpDimAlpha=0;
     /* 暗さ: 未固定(カーソル追従/表示範囲の中央)=薄く0.35 / 仮固定・指定時刻まで=濃く0.62 */
@@ -6195,6 +6201,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
       }else{
         var _uc=(uS+uE)/2, _tv=hasRef?(_uc-tmVisSpan-gapVis):_uc;
         _vpTo=(_tv<0)?-1:Math.round(visToTm(_tv+tmVisStart));
+        _vpCenterTm=_vpTo;
         if(_vpTo>=0){ _vpCutTm=_vpTo; _vpDimAlpha=0.35; if(!HAS_HOVER)_vpHandle=true; }
       }
     }
@@ -6234,6 +6241,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
       if(_vpDimAlpha>0&&_vpCutX<padL+chartW)_vpDimCol=_caHexToRgba(caLoadChartBg(),_vpDimAlpha);
     }
   }
+  if(layoutRef&&layoutRef.current)layoutRef.current.vpCenterTm=_vpCenterTm;
   /* つまみ(DOM)の位置と時刻を DataChart へ渡す (描画のたびに layoutRef は作り直されるので、出さないときは未設定=非表示) */
   if(layoutRef&&layoutRef.current&&_vpHandle&&_vpLineX!=null&&_vpLineX>=padL-1&&_vpLineX<=padL+chartW+1){
     layoutRef.current.vpHandleX=_vpLineX;
@@ -7213,6 +7221,8 @@ function ImageAnnotator(props){
      1分足・5分足ペインで共有 (どちらのペインで指しても両方がその時刻までで集計) */
   var sVpPin=useState(null); var vpPinTm=sVpPin[0],setVpPinTm=sVpPin[1];
   var sVpHover=useState(null); var vpHoverTm=sVpHover[0],setVpHoverTm=sVpHover[1];
+  /* 2026-10-14: 上のチャート(メインのペイン)の表示範囲の中央の時刻 (DataChart の onVpCenterTm)。全板パネルの集計時刻に使う */
+  var sVpCenter=useState(null); var vpCenterTm=sVpCenter[0],setVpCenterTm=sVpCenter[1];
   /* 別チャート(銘柄/日付)に切り替わったら指定時刻は「最新に追従」、仮固定は解除へ戻す */
   useEffect(function(){ setVpUntil(null); setVpPinTm(null); setVpHoverTm(null); },[analysisData?analysisData.ticker:null, analysisData?analysisData.date:null]);
   /* ジョイスティック表示状態 (タッチのみ) */
@@ -7413,6 +7423,8 @@ function ImageAnnotator(props){
     var r=vpRange(); if(r.hi==null)return null;
     var o=vpOptNow();
     if(o&&o.untilTm!=null)return o.untilTm;
+    /* 2026-10-14: 表示範囲モードで固定もカーソルも無い = 上のチャートの表示範囲の中央の足まで (チャートの縦線とそろえる) */
+    if(o&&o.mode==='visible'&&vpCenterTm!=null)return vpCenterTm;
     return r.hi;
   }
   function vpSetTime(tm){
@@ -9797,7 +9809,7 @@ function ImageAnnotator(props){
             (function(analysisTf){return ce(DataChart,{
               data:simMode?simDisplayData:emaContinuedData, tf:topTf, showCrosshair:showCrosshair,
               vpOpt:vpOptNow(),   /* 2026-09-17: 価格帯別出来高 */
-              vpPinTm:vpPinTm, onVpPin:setVpPinTm, vpHoverTm:vpHoverTm, onVpHover:setVpHoverTm, onVpSetTime:vpSetTime, onVpCursorP:vpLadCursorP,
+              vpPinTm:vpPinTm, onVpPin:setVpPinTm, vpHoverTm:vpHoverTm, onVpHover:setVpHoverTm, onVpSetTime:vpSetTime, onVpCursorP:vpLadCursorP, onVpCenterTm:setVpCenterTm,
               /* C1+: 過去chartデータを渡して同一キャンバスに連結描画 */
               refData:refAnalysis?refAnalysis.analysisData:null,
               /* C3+: 過去chart側ストロークも連結描画 (C6で書込対応) */
