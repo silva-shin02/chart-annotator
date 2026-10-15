@@ -5700,11 +5700,12 @@ function CaVpLadder(props){
     if(idx>=0)el.scrollTop=Math.max(0,idx*RH-el.clientHeight/2+RH/2);
     updVis();
   },[curP,nRows]);
-  /* 2026-10-14: 十字カーソルの値段の行を中央へ (カーソルが無いときは上の「現在値を中央へ」のまま) */
+  /* 2026-10-14: 十字カーソルの値段の行を中央へ。カーソルが消えたら (チャート外・出来高域・価格軸・全板の上) 現在値=黄の行を中央へ戻す */
   var hovRowP=(model&&hovP!=null)?Math.round(hovP/model.rs)*model.rs:null;
   useEffect(function(){
-    var el=scRef.current; if(!el||!model||hovRowP==null)return;
-    var idx=-1; model.rows.forEach(function(r,i){if(r.p===hovRowP)idx=i;});
+    var el=scRef.current; if(!el||!model)return;
+    var tgt=(hovRowP!=null)?hovRowP:model.curP; if(tgt==null)return;
+    var idx=-1; model.rows.forEach(function(r,i){if(r.p===tgt)idx=i;});
     if(idx<0)return;
     el.scrollTop=Math.max(0,idx*RH-el.clientHeight/2+RH/2);
   },[hovRowP,curP,nRows]);
