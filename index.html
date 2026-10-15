@@ -5679,6 +5679,8 @@ function CaVpLadder(props){
   },[bars,cut]);
   /* 2026-10-14: 十字カーソルの価格 (親の cursorSubRef 経由で DataChart から直接届く。null=カーソル無し) */
   var sHovP=useState(null); var hovP=sHovP[0],setHovP=sHovP[1];
+  /* 2026-10-14: 全板パネル上でマウスを乗せている行 (青くするだけ。中央寄せ/スクロールはしない) */
+  var sLadHov=useState(null); var ladHovP=sLadHov[0],setLadHovP=sLadHov[1];
   useEffect(function(){
     var r=props.cursorSubRef; if(!r)return;
     r.current=setHovP;
@@ -5722,7 +5724,7 @@ function CaVpLadder(props){
   function cellRow(key,label,v,opt){
     opt=opt||{};
     var w=(model&&model.maxV>0&&v>0)?Math.min(100,v/model.maxV*100):0;
-    return ce('div',{key:key,onClick:opt.onClick,onPointerEnter:opt.onEnter,onPointerLeave:opt.onLeave,
+    return ce('div',{key:key,onClick:opt.onClick,onMouseEnter:opt.onEnter,onPointerEnter:opt.onEnter,onPointerLeave:opt.onLeave,
         style:{display:'flex',height:RH,flexShrink:0,borderBottom:'1px solid #1d1d1f',cursor:opt.onClick?'pointer':'default',
           background:opt.hov?'#1f4d7a':(opt.cur?'#5c5410':'transparent'),
           boxShadow:opt.sel?'inset 0 0 0 1.5px #22d3ee':(opt.hov&&opt.cur?'inset 3px 0 0 #e8e070':'none')}},
@@ -5761,11 +5763,12 @@ function CaVpLadder(props){
       ?ce('div',{style:{padding:12,fontSize:11,color:'#777'}},'この時刻までの約定がありません')
       :ce(Fragment,null,
         cellRow('__over','OVER',over,{labelCol:'#ddd'}),
-        ce('div',{ref:scRef,onScroll:updVis,
+        ce('div',{ref:scRef,onScroll:updVis,onMouseLeave:function(){setLadHovP(null);},
             style:{flex:1,minHeight:0,overflowY:'auto',overscrollBehavior:'contain',WebkitOverflowScrolling:'touch',touchAction:'pan-y'}},
           model.rows.map(function(r){
             return cellRow(r.p,(r.p%1?r.p.toFixed(1):Math.round(r.p).toLocaleString()),r.v,{
-              cur:r.p===model.curP, sel:r.p===selP, hov:r.p===hovRowP,
+              cur:r.p===model.curP, sel:r.p===selP, hov:r.p===(ladHovP!=null?ladHovP:hovRowP),
+              onEnter:function(){ setLadHovP(r.p); },
               labelCol:r.p===model.pocP?'#c4b5fd':null, bold:r.p===model.pocP,
               onClick:function(){ if(props.onSelect)props.onSelect(r.p===selP?null:r.p); },
               /* 2026-10-14: マウスが乗った行の値段をチャートに水平線で (タッチは対象外=離しても消えないため) */
