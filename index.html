@@ -719,6 +719,8 @@ var CA_VP_BIN_KEY='ca_vp_bin_v1';
 var CA_VP_SRC_KEY='ca_vp_src_v1';
 /* 2026-10-08: 帯の長さの平均線 ON/OFF (既定OFF)。全チャート共通 */
 var CA_VP_AVG_KEY='ca_vp_avg_v1';
+/* 2026-10-17: 価格帯別出来高の一番長い帯(POC)の長さ = 描画域幅 × この割合 (旧 0.25。短すぎて見えづらいため 0.40 に。帯どうしの比率は不変) */
+var CA_VP_MAXW_FRAC=0.40;
 /* 2026-09-29: 集計元の切替UIを出すか。true = 出す (ティック/1分終値を切替) / false = 1分終値に固定。
    復活させるときはここを true に戻すだけ (集計・保存・同期の実装はそのまま残してある) */
 var CA_VP_SRC_UI=true;
@@ -6207,7 +6209,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     }
     if(_vpFrom!=null)_vp=caVpAggregate(data.bars_1m,_vpFrom,_vpTo,pxPerYen,vpOpt.bin,vpOpt.src,(tf==='5m'?data.bars_5m:null));
     if(_vp){
-      var _vpMaxW=chartW*0.25;
+      var _vpMaxW=chartW*CA_VP_MAXW_FRAC;
       ctx.save();
       ctx.beginPath(); ctx.rect(padL,priceTop,chartW,priceH); ctx.clip();
       _vp.levels.forEach(function(lv){
@@ -6343,7 +6345,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
       var _pocTxt='POC '+(_vp.step<1?_vp.pocP.toFixed(1):String(Math.round(_vp.pocP)));
       ctx.font='bold 10px -apple-system,Helvetica,sans-serif';
       ctx.textAlign='left'; ctx.textBaseline='bottom';
-      ctx.fillStyle='#c4b5fd'; ctx.fillText(_pocTxt,padL+chartW*0.25+6,_pocY-2);
+      ctx.fillStyle='#c4b5fd'; ctx.fillText(_pocTxt,padL+chartW*CA_VP_MAXW_FRAC+6,_pocY-2);
       ctx.restore();
     }
   }
@@ -6352,7 +6354,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
      縦の範囲は一番高い帯〜一番低い帯。縦線(集計の境目)より右の暗転の上にも出す */
   if(vpOpt&&vpOpt.avg&&_vp&&_vp.levels.length&&_vp.maxV>0){
     var _avgV=_vp.total/_vp.levels.length;
-    var _avgX=Math.round(padL+Math.max(1,_avgV/_vp.maxV*chartW*0.25))+0.5;
+    var _avgX=Math.round(padL+Math.max(1,_avgV/_vp.maxV*chartW*CA_VP_MAXW_FRAC))+0.5;
     var _loP=Infinity, _hiP=-Infinity;
     _vp.levels.forEach(function(lv){ if(lv.lo<_loP)_loP=lv.lo; if(lv.lo+_vp.bin>_hiP)_hiP=lv.lo+_vp.bin; });
     var _avgYt=Math.max(priceTop,pToY(_hiP)), _avgYb=Math.min(priceBot,pToY(_loP));
