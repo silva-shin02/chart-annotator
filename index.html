@@ -3521,6 +3521,18 @@ function DataChart(props){
     var pr=projectBoxPerimeterOff(b1,hx,hy,Z);
     return Object.assign({},newS,{pointer:Object.assign({},p,{rootSide:pr.side,rootOff:pr.off,rootFrac:pr.frac})});
   }
+  /* 2026-10-17 (ユーザー指定): 新しく貼るスタンプの矢印の根元 = 矢先の真上(真下)の枠の辺。
+     矢先が枠より下 → 下の辺の「矢先の真上」/ 枠より上 → 上の辺の「真下」(枠の横幅の外なら辺の端=斜め) / 横 → 一番近い辺 */
+  function ptrRootAboveTip(box,tipX,tipY,Z){
+    var horiz=null;
+    if(tipY>=box.y+box.h)horiz='bottom'; else if(tipY<=box.y)horiz='top';
+    if(horiz){
+      var off=Math.max(0,Math.min(box.w,tipX-box.x))/Z;
+      return {rootSide:horiz,rootOff:off,rootFrac:box.w>0?Math.max(0,Math.min(1,(tipX-box.x)/box.w)):0.5};
+    }
+    var pr=projectBoxPerimeterOff(box,tipX,tipY,Z);
+    return {rootSide:pr.side,rootOff:pr.off,rootFrac:pr.frac};
+  }
   /* strokeId から現在の {idx,side,stroke} を引く (cur側のみ対応) */
   function findSnippetById(id){
     if(!id)return null;
@@ -3557,7 +3569,17 @@ function DataChart(props){
         return true;
       }
       /* 空白タップ → 配置確定して矢印の根元選択ステージへ */
-      setPtrEdit({strokeId:pe.strokeId,phase:'pickRoot',side:hit.side});
+      /* 2026-10-17: 根元選びは省略 → 矢先の段階へ。仮の矢先 = 枠の下の辺の中央から真下に約70px (根元はその真上) */
+      (function(){
+        var Zp=(layoutRef.current&&layoutRef.current.zoom>0)?layoutRef.current.zoom:1;
+        var tsx=box.x+box.w/2, tsy=box.y+box.h+70;
+        var tpd=pxToTimePrice(rect.left+tsx, rect.top+tsy);
+        var a0d=s.anchors&&s.anchors[0]?s.anchors[0]:{tm:0,p:0};
+        var tTm=(tpd&&typeof tpd.tm==='number')?tpd.tm:a0d.tm, tP=(tpd&&tpd.p!=null)?tpd.p:a0d.p;
+        var rt=ptrRootAboveTip(box,minToXWithSide(tTm,hit.side),pToYcss(tP),Zp);
+        commitPointer(pe.strokeId,{rootSide:rt.rootSide,rootFrac:rt.rootFrac,rootOff:rt.rootOff,tipTm:tTm,tipP:tP});
+      })();
+      setPtrEdit({strokeId:pe.strokeId,phase:'editing',side:hit.side});
       return true;
     }
     var _Zd=(layoutRef.current&&layoutRef.current.zoom>0)?layoutRef.current.zoom:1;
@@ -3570,6 +3592,7 @@ function DataChart(props){
       }
       var rp=pointerRootPtZ(box,s.pointer,_Zd);
       if(Math.hypot(px-rp.x,py-rp.y)<=18){
+        pe.rootManual=true;   /* 根元を手で動かしたら、以後は矢先に合わせた自動の根元をやめる */
         ptrDragRef.current={strokeId:pe.strokeId,side:hit.side,idx:hit.idx,mode:'root',
           tipTm:s.pointer.tipTm,tipP:s.pointer.tipP,rootSide:s.pointer.rootSide,rootFrac:s.pointer.rootFrac,rootOff:s.pointer.rootOff};
         return true;
@@ -3580,8 +3603,10 @@ function DataChart(props){
       if(!pe.fromSelect){
         var tpClk=pxToTimePrice(clientX,clientY);
         if(tpClk&&typeof tpClk.tm==='number'&&tpClk.p!=null){
+          var rtc=pe.rootManual?{rootSide:s.pointer.rootSide,rootFrac:s.pointer.rootFrac,rootOff:s.pointer.rootOff}
+            :ptrRootAboveTip(box,minToXWithSide(tpClk.tm,hit.side),pToYcss(tpClk.p),_Zd);
           commitPointer(pe.strokeId,{
-            rootSide:s.pointer.rootSide, rootFrac:s.pointer.rootFrac, rootOff:s.pointer.rootOff,
+            rootSide:rtc.rootSide, rootFrac:rtc.rootFrac, rootOff:rtc.rootOff,
             tipTm:tpClk.tm, tipP:tpClk.p
           });
           _ptrSchedDraw();
@@ -3622,6 +3647,16 @@ function DataChart(props){
     } else if(d.mode==='tip'){
       var tp=pxToTimePrice(clientX,clientY);
       if(tp){ if(typeof tp.tm==='number')d.tipTm=tp.tm; if(tp.p!=null)d.tipP=tp.p; }
+      /* 2026-10-17: 新しく貼るとき(選択からの再編集でない・根元を手で動かしていない)は根元を矢先の真上へ */
+      var peT=ptrEditRef.current;
+      if(peT&&!peT.fromSelect&&!peT.rootManual&&d.tipTm!=null&&d.tipP!=null){
+        var hitT=findSnippetById(d.strokeId), boxT=hitT?getSnippetBoxCss(hitT.stroke,hitT.side):null;
+        if(boxT){
+          var ZT=(layoutRef.current&&layoutRef.current.zoom>0)?layoutRef.current.zoom:1;
+          var rtT=ptrRootAboveTip(boxT,minToXWithSide(d.tipTm,hitT.side),pToYcss(d.tipP),ZT);
+          d.rootSide=rtT.rootSide; d.rootFrac=rtT.rootFrac; d.rootOff=rtT.rootOff;
+        }
+      }
     } else if(d.mode==='root'){
       var hit=findSnippetById(d.strokeId);
       if(hit){var box=getSnippetBoxCss(hit.stroke,hit.side);
@@ -5303,7 +5338,7 @@ function DataChart(props){
       var bannerLeft=bx+bw/2;
       var msg=isPlacing?'スタンプの位置を決める（ドラッグで調整／空白をタップで次へ）'
              :isPick?'矢印の根元を枠線上でタップ'
-             :'矢先をドラッグして時間を決める';
+             :'矢先をドラッグ（またはタップ）して時間を決める';
       /* 枠の見た目: placing=破線(移動可)、pickRoot=パルス、editing=なし */
       var frameEl=null;
       if(isPlacing){
