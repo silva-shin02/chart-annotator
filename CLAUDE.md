@@ -118,7 +118,7 @@
 - 先頭で `if(ptrEditRef.current && ptrPointerDown(...)) return;`（スタンプ矢印編集を最優先）。
 - 早期ブロック `if(drawTool==='text'||drawTool==='lasso')` が**既存テキスト/スタンプのタップを先に処理して return する**（ここを見落として後段に書くと到達しない＝過去のハマり）。
 - スタンプ(矢印付き)を「選択(lasso)」or「スタンプ(snippet)」でタップ → **1タップ目=選択+矢印ハンドル表示、2タップ目=テキスト編集**。
-- スタンプ新規配置フロー（2026-10-17〜）：配置(placing, ドラッグで位置調整→空白タップ) → **矢先編集(editing)**（根元選択 pickRoot は省略。仮の矢先＝枠の下辺中央から真下70px）→ 矢先をドラッグ/タップ → 確定。新規配置中は**根元＝矢先の真上の枠の辺**（`ptrRootAboveTip`：矢先が枠より下→下辺、上→上辺、横幅の外なら辺の端）。根元つまみを手で動かすと `ptrEdit.rootManual=true` で以後自動をやめる。選択からの再編集（fromSelect）は自動なし。`ptrEdit={strokeId,phase,side,fromSelect?,rootManual?}`。
+- スタンプ新規配置フロー（2026-10-17〜）：配置(placing, ドラッグで位置調整→空白タップ) → **矢先編集(editing)**（根元選択 pickRoot は省略。仮の矢先＝枠の下辺中央から真下35px（2026-10-17 に70→35））→ 矢先をドラッグ/タップ → 確定。新規配置中は**根元＝矢先の真上の枠の辺**（`ptrRootAboveTip`：矢先が枠より下→下辺、上→上辺、横幅の外なら辺の端）。根元つまみを手で動かすと `ptrEdit.rootManual=true` で以後自動をやめる。選択からの再編集（fromSelect）は自動なし。`ptrEdit={strokeId,phase,side,fromSelect?,rootManual?}`。矢先/根元の丸点の近く（18px以内）をクリックしただけでも、その位置へ移す（つまみを掴んだ瞬間に `ptrPointerMove` を1回呼ぶ）。
 
 ---
 
