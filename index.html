@@ -2754,7 +2754,7 @@ function DataChart(props){
           shifted=applyHandleTransform(s,m.handleId,m.dtm,m.dp);
         }else{
           shifted=Object.assign({},s,{
-            anchors:s.anchors.map(function(a){return {tm:a.tm+m.dtm, p:a.p+m.dp};})
+            anchors:caMoveAnchors(s,s.anchors,m.dtm,m.dp)
           });
           shifted=keepPointerAngle(s,shifted,m.side);
         }
@@ -2795,7 +2795,7 @@ function DataChart(props){
         var arr2=(sel.side==='ref')?(refStrokes||[]):(strokes||[]);
         var s2=arr2[sel.idx]; if(!s2)return;
         var moved=keepPointerAngle(s2,Object.assign({},s2,{
-          anchors:s2.anchors.map(function(a){return {tm:a.tm+(lmv.dtm||0),p:a.p+(lmv.dp||0)};})
+          anchors:caMoveAnchors(s2,s2.anchors,(lmv.dtm||0),(lmv.dp||0))
         }),sel.side);
         var minFn=function(m){return minToXWithSide(m,sel.side);};
         function pToYm(p){
@@ -3115,7 +3115,7 @@ function DataChart(props){
               return L.priceTop+(1-(pp-L.pmin)/(L.pmax-L.pmin))*L.priceH;
             }
             var shifted=keepPointerAngle(sm,Object.assign({},sm,{
-              anchors:sm.anchors.map(function(a){return {tm:a.tm+m.dtm, p:a.p+m.dp};})
+              anchors:caMoveAnchors(sm,sm.anchors,m.dtm,m.dp)
             }),mSide);
             var tp2=shifted.type||shifted.tool;
             if(tp2==='freehand'||tp2==='text'){
@@ -4575,7 +4575,7 @@ function DataChart(props){
           var arr=(it.side==='ref')?(refStrokes||[]):(strokes||[]);
           var s=arr[it.idx]; if(!s)return null;
           var _mv=Object.assign({},s,{
-            anchors:it.anchors.map(function(a){return {tm:a.tm+(lm.dtm||0), p:a.p+(lm.dp||0)};})
+            anchors:caMoveAnchors(s,it.anchors,(lm.dtm||0),(lm.dp||0))
           });
           var _orig=Object.assign({},s,{anchors:it.anchors});
           return {side:it.side,idx:it.idx,stroke:keepPointerAngle(_orig,_mv,it.side)};
@@ -4639,7 +4639,7 @@ function DataChart(props){
             newStroke=applyHandleTransform(s,m.handleId,m.dtm,m.dp);
           }else{
             newStroke=Object.assign({},s,{
-              anchors:s.anchors.map(function(a){return {tm:a.tm+m.dtm, p:a.p+m.dp};})
+              anchors:caMoveAnchors(s,s.anchors,m.dtm,m.dp)
             });
             newStroke=keepPointerAngle(s,newStroke,m.side);
           }
@@ -7118,6 +7118,12 @@ function drawUnifiedLassoBox(ctx,strokes,lassoSel,side,minToX,pToY){
 }
 
 /* 選択ハイライト (縁取り) */
+/* 2026-10-17 (ユーザー指定): 書き込みを本体ごと動かすときの anchors。矢印ツール(type 'arrow')は矢先=anchors[0](矢じり側)を固定し、
+   根元側だけ動かす (投げ縄でまとめて動かすときも、1本だけドラッグするときも)。端点つまみのドラッグは対象外 (applyHandleTransform) */
+function caMoveAnchors(s, src, dtm, dp){
+  var keepTip=((s&&(s.type||s.tool))==='arrow');
+  return (src||[]).map(function(a,i){ return (keepTip&&i===0)?{tm:a.tm,p:a.p}:{tm:a.tm+dtm, p:a.p+dp}; });
+}
 function drawSelectionHighlight(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,priceTop,priceBot,priceH){
   if(!s||!s.anchors||!s.anchors.length)return;
   var tp=s.type||s.tool;
