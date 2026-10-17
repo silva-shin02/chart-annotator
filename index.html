@@ -2874,13 +2874,13 @@ function DataChart(props){
         var _dr=ptrDragRef.current;
         var _Zr=(L&&L.zoom>0)?L.zoom:1;
         var _rPtr=(_dr&&(_dr.rootSide!=null||_dr.rootOff!=null))
-          ?{rootSide:(_dr.rootSide!=null?_dr.rootSide:(_s.pointer&&_s.pointer.rootSide)),rootFrac:_dr.rootFrac,rootOff:_dr.rootOff}
+          ?{rootSide:(_dr.rootSide!=null?_dr.rootSide:(_s.pointer&&_s.pointer.rootSide)),rootFrac:_dr.rootFrac,rootOff:_dr.rootOff,rootVert:_dr.rootVert}
           :(_s.pointer||{});
         var _tTm=(_dr&&_dr.tipTm!=null)?_dr.tipTm:(_s.pointer?_s.pointer.tipTm:null);
         var _tP=(_dr&&_dr.tipP!=null)?_dr.tipP:(_s.pointer?_s.pointer.tipP:null);
         if(_box&&_tTm!=null&&_tP!=null){
-          var _rp=pointerRootPtZ(_box,_rPtr,_Zr);
           var _tx=minToXWithSide(_tTm,_hh.side), _ty=pToYcss(_tP);
+          var _rp=pointerRootPtZ(_box,_rPtr,_Zr,_tx);
           var _col=_s.color||'#ff9500';
           drawPointerArrow(ctx,_rp.x,_rp.y,_tx,_ty,_col,2.4);
           ctx.save();
@@ -3493,8 +3493,8 @@ function DataChart(props){
     if(!oldS||!oldS._snippet||!p||typeof p.tipTm!=='number'||typeof p.tipP!=='number')return newS;
     var L=layoutRef.current, Z=(L&&L.zoom>0)?L.zoom:1;
     var b0=getSnippetBoxCss(oldS,side), b1=getSnippetBoxCss(newS,side); if(!b0||!b1)return newS;
-    var r0=pointerRootPtZ(b0,p,Z);
     var tx=minToXWithSide(p.tipTm,side||'cur'), ty=pToYcss(p.tipP);
+    var r0=pointerRootPtZ(b0,p,Z,tx);
     var dx=r0.x-tx, dy=r0.y-ty, len=Math.hypot(dx,dy); if(len<1)return newS;
     var ux=dx/len, uy=dy/len;
     if(tx>=b1.x&&tx<=b1.x+b1.w&&ty>=b1.y&&ty<=b1.y+b1.h)return newS;
@@ -3506,8 +3506,8 @@ function DataChart(props){
       if(t1>tmin)tmin=t1; if(t2<tmax)tmax=t2;
     }
     slab(tx,ux,b1.x,b1.x+b1.w); slab(ty,uy,b1.y,b1.y+b1.h);
-    var hx, hy;
-    if(tmin<=tmax&&tmin>0){ hx=tx+ux*tmin; hy=ty+uy*tmin; }
+    var hx, hy, hitEdge=false;
+    if(tmin<=tmax&&tmin>0){ hx=tx+ux*tmin; hy=ty+uy*tmin; hitEdge=true; }
     else{
       /* 当たらない → 半直線に一番近い角 */
       var best=null, bd=Infinity;
@@ -3519,7 +3519,9 @@ function DataChart(props){
       hx=best[0]; hy=best[1];
     }
     var pr=projectBoxPerimeterOff(b1,hx,hy,Z);
-    return Object.assign({},newS,{pointer:Object.assign({},p,{rootSide:pr.side,rootOff:pr.off,rootFrac:pr.frac})});
+    /* 垂直の矢印 (rootVert) は真上/真下の辺に当たる間だけ垂直追従を続ける。角に付いたら通常の rootOff へ */
+    var keepVert=!!p.rootVert&&hitEdge&&(pr.side==='top'||pr.side==='bottom');
+    return Object.assign({},newS,{pointer:Object.assign({},p,{rootSide:pr.side,rootOff:pr.off,rootFrac:pr.frac,rootVert:keepVert})});
   }
   /* 2026-10-17 (ユーザー指定): 新しく貼るスタンプの矢印の根元 = 矢先の真上(真下)の枠の辺。
      矢先が枠より下 → 下の辺の「矢先の真上」/ 枠より上 → 上の辺の「真下」(枠の横幅の外なら辺の端=斜め) / 横 → 一番近い辺 */
@@ -3533,10 +3535,10 @@ function DataChart(props){
     if(tipY>=box.y+box.h)horiz='bottom'; else if(tipY<=box.y)horiz='top';
     if(horiz){
       var off=Math.max(0,Math.min(box.w,tipX-box.x))/Z;
-      return {rootSide:horiz,rootOff:off,rootFrac:box.w>0?Math.max(0,Math.min(1,(tipX-box.x)/box.w)):0.5};
+      return {rootSide:horiz,rootOff:off,rootFrac:box.w>0?Math.max(0,Math.min(1,(tipX-box.x)/box.w)):0.5,rootVert:true};
     }
     var pr=projectBoxPerimeterOff(box,tipX,tipY,Z);
-    return {rootSide:pr.side,rootOff:pr.off,rootFrac:pr.frac};
+    return {rootSide:pr.side,rootOff:pr.off,rootFrac:pr.frac,rootVert:false};
   }
   /* strokeId から現在の {idx,side,stroke} を引く (cur側のみ対応) */
   function findSnippetById(id){
@@ -3582,7 +3584,7 @@ function DataChart(props){
         var a0d=s.anchors&&s.anchors[0]?s.anchors[0]:{tm:0,p:0};
         var tTm=ptrSnapTipTm((tpd&&typeof tpd.tm==='number')?tpd.tm:a0d.tm), tP=(tpd&&tpd.p!=null)?tpd.p:a0d.p;
         var rt=ptrRootAboveTip(box,minToXWithSide(tTm,hit.side),pToYcss(tP),Zp);
-        commitPointer(pe.strokeId,{rootSide:rt.rootSide,rootFrac:rt.rootFrac,rootOff:rt.rootOff,tipTm:tTm,tipP:tP});
+        commitPointer(pe.strokeId,{rootSide:rt.rootSide,rootFrac:rt.rootFrac,rootOff:rt.rootOff,rootVert:rt.rootVert,tipTm:tTm,tipP:tP});
       })();
       setPtrEdit({strokeId:pe.strokeId,phase:'editing',side:hit.side});
       return true;
@@ -3591,17 +3593,20 @@ function DataChart(props){
     if(pe.phase==='editing'&&s.pointer){
       var tipX=minToXWithSide(s.pointer.tipTm,hit.side), tipY=pToYcss(s.pointer.tipP);
       if(Math.hypot(px-tipX,py-tipY)<=18){
+        /* 選択からの再編集は根元を今の位置に止める (垂直追従をやめ、今の根元を rootOff に焼き付け) */
+        var rpT0=pointerRootPtZ(box,s.pointer,_Zd,tipX), offT0=(s.pointer.rootSide==='top'||s.pointer.rootSide==='bottom')?(rpT0.x-box.x)/_Zd:s.pointer.rootOff;
         ptrDragRef.current={strokeId:pe.strokeId,side:hit.side,idx:hit.idx,mode:'tip',
-          tipTm:s.pointer.tipTm,tipP:s.pointer.tipP,rootSide:s.pointer.rootSide,rootFrac:s.pointer.rootFrac,rootOff:s.pointer.rootOff};
+          tipTm:s.pointer.tipTm,tipP:s.pointer.tipP,rootSide:s.pointer.rootSide,rootFrac:s.pointer.rootFrac,
+          rootOff:(pe.fromSelect&&s.pointer.rootVert)?offT0:s.pointer.rootOff,rootVert:pe.fromSelect?false:!!s.pointer.rootVert};
         /* 2026-10-17: 丸点の近くをクリックしただけでも、その位置へ矢先を移す (細かい調整用。ドラッグはこれまでどおり) */
         ptrPointerMove(clientX,clientY);
         return true;
       }
-      var rp=pointerRootPtZ(box,s.pointer,_Zd);
+      var rp=pointerRootPtZ(box,s.pointer,_Zd,tipX);
       if(Math.hypot(px-rp.x,py-rp.y)<=18){
         pe.rootManual=true;   /* 根元を手で動かしたら、以後は矢先に合わせた自動の根元をやめる */
         ptrDragRef.current={strokeId:pe.strokeId,side:hit.side,idx:hit.idx,mode:'root',
-          tipTm:s.pointer.tipTm,tipP:s.pointer.tipP,rootSide:s.pointer.rootSide,rootFrac:s.pointer.rootFrac,rootOff:s.pointer.rootOff};
+          tipTm:s.pointer.tipTm,tipP:s.pointer.tipP,rootSide:s.pointer.rootSide,rootFrac:s.pointer.rootFrac,rootOff:s.pointer.rootOff,rootVert:false};
         ptrPointerMove(clientX,clientY);   /* 2026-10-17: 根元もクリックした位置へ (枠線上に投影) */
         return true;
       }
@@ -3612,10 +3617,10 @@ function DataChart(props){
         var tpClk=pxToTimePrice(clientX,clientY);
         if(tpClk&&typeof tpClk.tm==='number'&&tpClk.p!=null){
           tpClk.tm=ptrSnapTipTm(tpClk.tm);
-          var rtc=pe.rootManual?{rootSide:s.pointer.rootSide,rootFrac:s.pointer.rootFrac,rootOff:s.pointer.rootOff}
+          var rtc=pe.rootManual?{rootSide:s.pointer.rootSide,rootFrac:s.pointer.rootFrac,rootOff:s.pointer.rootOff,rootVert:!!s.pointer.rootVert}
             :ptrRootAboveTip(box,minToXWithSide(tpClk.tm,hit.side),pToYcss(tpClk.p),_Zd);
           commitPointer(pe.strokeId,{
-            rootSide:rtc.rootSide, rootFrac:rtc.rootFrac, rootOff:rtc.rootOff,
+            rootSide:rtc.rootSide, rootFrac:rtc.rootFrac, rootOff:rtc.rootOff, rootVert:rtc.rootVert,
             tipTm:tpClk.tm, tipP:tpClk.p
           });
           _ptrSchedDraw();
@@ -3663,14 +3668,14 @@ function DataChart(props){
         if(boxT){
           var ZT=(layoutRef.current&&layoutRef.current.zoom>0)?layoutRef.current.zoom:1;
           var rtT=ptrRootAboveTip(boxT,minToXWithSide(d.tipTm,hitT.side),pToYcss(d.tipP),ZT);
-          d.rootSide=rtT.rootSide; d.rootFrac=rtT.rootFrac; d.rootOff=rtT.rootOff;
+          d.rootSide=rtT.rootSide; d.rootFrac=rtT.rootFrac; d.rootOff=rtT.rootOff; d.rootVert=rtT.rootVert;
         }
       }
     } else if(d.mode==='root'){
       var hit=findSnippetById(d.strokeId);
       if(hit){var box=getSnippetBoxCss(hit.stroke,hit.side);
         if(box){var _Zm=(layoutRef.current&&layoutRef.current.zoom>0)?layoutRef.current.zoom:1;
-          var pr=projectBoxPerimeterOff(box,px,py,_Zm); d.rootSide=pr.side; d.rootFrac=pr.frac; d.rootOff=pr.off;}}
+          var pr=projectBoxPerimeterOff(box,px,py,_Zm); d.rootSide=pr.side; d.rootFrac=pr.frac; d.rootOff=pr.off; d.rootVert=false;}}
     }
     _ptrSchedDraw();
     return true;
@@ -3696,6 +3701,7 @@ function DataChart(props){
         rootSide:d.rootSide!=null?d.rootSide:base.rootSide,
         rootFrac:d.rootFrac!=null?d.rootFrac:base.rootFrac,
         rootOff:d.rootOff!=null?d.rootOff:base.rootOff,
+        rootVert:d.rootVert!=null?d.rootVert:!!base.rootVert,
         tipTm:d.tipTm!=null?d.tipTm:base.tipTm,
         tipP:d.tipP!=null?d.tipP:base.tipP
       });
@@ -6837,8 +6843,8 @@ function drawAnalysisStrokeExt(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,pric
       /* スタンプ矢印: 枠の root点 → 矢先(tipTm,tipP) */
       if(s.pointer&&typeof s.pointer.tipTm==='number'&&typeof s.pointer.tipP==='number'){
         var pbox={x:x-bpad,y:y-bpad,w:maxW+bpad*2,h:boxH+bpad*2};
-        var rpt=pointerRootPtZ(pbox,s.pointer,Z);
         var tpx=minToX(s.pointer.tipTm), tpy=pToY(s.pointer.tipP);
+        var rpt=pointerRootPtZ(pbox,s.pointer,Z,tpx);
         ctx.globalAlpha=op;
         drawPointerArrow(ctx,rpt.x,rpt.y,tpx,tpy,col,Math.max(1.5,2*Z));
       }
@@ -6960,10 +6966,15 @@ function projectBoxPerimeter(box, px, py){
 /* root を「辺の始点からの論理px距離 rootOff」で解決 (文字数/プレフィックスで枠幅が変わっても
    左端=アンカー基準なので位置が動かない)。rootOff 未設定の旧データは従来の rootFrac で解決。
    Z は box 構築時のズーム倍率 (box は Z倍済みpx、rootOff は論理px) */
-function pointerRootPtZ(box, pointer, Z){
+function pointerRootPtZ(box, pointer, Z, tipX){
   pointer=pointer||{};
   var side=pointer.rootSide||'bottom';
   Z=(typeof Z==='number'&&Z>0)?Z:1;
+  /* 2026-10-17: rootVert = 矢先の真上(真下)に付けた根元。横の倍率はズーム/画面幅に正比例しないので、
+     rootOff ではなく矢先の x から直接求める (ズーム・画面幅が変わっても垂直のまま) */
+  if(pointer.rootVert&&typeof tipX==='number'&&(side==='top'||side==='bottom')){
+    return {x:Math.max(box.x, Math.min(box.x+box.w, tipX)), y:(side==='top'?box.y:box.y+box.h)};
+  }
   if(typeof pointer.rootOff==='number'){
     if(side==='top'||side==='bottom'){
       var x=Math.max(box.x, Math.min(box.x+box.w, box.x+pointer.rootOff*Z));
