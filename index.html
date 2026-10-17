@@ -3572,7 +3572,7 @@ function DataChart(props){
       /* 2026-10-17: 根元選びは省略 → 矢先の段階へ。仮の矢先 = 枠の下の辺の中央から真下に約70px (根元はその真上) */
       (function(){
         var Zp=(layoutRef.current&&layoutRef.current.zoom>0)?layoutRef.current.zoom:1;
-        var tsx=box.x+box.w/2, tsy=box.y+box.h+70;
+        var tsx=box.x+box.w/2, tsy=box.y+box.h+35;   /* 2026-10-17: 初期の矢印の長さ 70→35px (ユーザー指定) */
         var tpd=pxToTimePrice(rect.left+tsx, rect.top+tsy);
         var a0d=s.anchors&&s.anchors[0]?s.anchors[0]:{tm:0,p:0};
         var tTm=(tpd&&typeof tpd.tm==='number')?tpd.tm:a0d.tm, tP=(tpd&&tpd.p!=null)?tpd.p:a0d.p;
@@ -3588,6 +3588,8 @@ function DataChart(props){
       if(Math.hypot(px-tipX,py-tipY)<=18){
         ptrDragRef.current={strokeId:pe.strokeId,side:hit.side,idx:hit.idx,mode:'tip',
           tipTm:s.pointer.tipTm,tipP:s.pointer.tipP,rootSide:s.pointer.rootSide,rootFrac:s.pointer.rootFrac,rootOff:s.pointer.rootOff};
+        /* 2026-10-17: 丸点の近くをクリックしただけでも、その位置へ矢先を移す (細かい調整用。ドラッグはこれまでどおり) */
+        ptrPointerMove(clientX,clientY);
         return true;
       }
       var rp=pointerRootPtZ(box,s.pointer,_Zd);
@@ -3595,6 +3597,7 @@ function DataChart(props){
         pe.rootManual=true;   /* 根元を手で動かしたら、以後は矢先に合わせた自動の根元をやめる */
         ptrDragRef.current={strokeId:pe.strokeId,side:hit.side,idx:hit.idx,mode:'root',
           tipTm:s.pointer.tipTm,tipP:s.pointer.tipP,rootSide:s.pointer.rootSide,rootFrac:s.pointer.rootFrac,rootOff:s.pointer.rootOff};
+        ptrPointerMove(clientX,clientY);   /* 2026-10-17: 根元もクリックした位置へ (枠線上に投影) */
         return true;
       }
       /* ハンドル外タップ:
