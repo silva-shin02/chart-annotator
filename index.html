@@ -16430,6 +16430,41 @@ var _caLibScrollTop=0;
 var _caLibScrollTicker=null;
 var _caLibAnchorId=null;     /* 復元アンカー = 開いた時に最上部に見えていたカードのid */
 var _caLibAnchorDelta=0;     /* ビュー上端からアンカー上端までのpx。これを保って復元するのでズレない */
+/* ─── 2026-10-17: 横断テキスト検索のヘルパー ───────────────────────────
+   _srchNorm: 表記ゆれを吸収 (NFKC=全角英数→半角・半角カナ→全角 / 小文字化 / カタカナ→ひらがな)
+   _srchMiniStrokes: チャートデータから検索に使う書き込み(テキスト/スタンプ)だけを抜き出す (小さく保存するため)
+   _srchHtmlText: メモ(HTML)をプレーンテキストへ */
+function _srchNorm(s){
+  s=String(s==null?'':s);
+  try{s=s.normalize('NFKC');}catch(e){}
+  s=s.toLowerCase();
+  return s.replace(/[ァ-ヶ]/g,function(c){return String.fromCharCode(c.charCodeAt(0)-0x60);});
+}
+function _srchMiniStrokes(d){
+  var out=[];
+  if(!d||!d.analysisStrokes)return out;
+  ['1m','5m'].forEach(function(tfk){
+    (d.analysisStrokes[tfk]||[]).forEach(function(s){
+      if(!s||(s.type||s.tool)!=='text')return;
+      out.push({tf:tfk,text:s.text||'',_snippet:!!s._snippet,snipId:s.snipId||null,_editedText:!!s._editedText});
+    });
+  });
+  return out;
+}
+function _srchHtmlText(h){
+  if(!h)return '';
+  return String(h).replace(/<br\s*\/?>/gi,' ').replace(/<\/(p|div|li)>/gi,' ').replace(/<[^>]*>/g,'')
+    .replace(/&nbsp;/g,' ').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&amp;/g,'&');
+}
+/* 一致した箇所の前後を少しだけ切り出す (結果一覧の1行表示用) */
+function _srchExcerpt(text,nq){
+  var t=String(text||'').replace(/\s+/g,' ');
+  var i=_srchNorm(t).indexOf(nq);
+  if(i<0||t.length<=60)return t.substring(0,60);
+  var st=Math.max(0,i-20);
+  return (st>0?'…':'')+t.substring(st,st+60)+(st+60<t.length?'…':'');
+}
+
 function DraftLibrary(props){
   var onOpen=props.onOpen, onClose=props.onClose, fbCfg=props.fbCfg||{}, initialTicker=props.initialTicker||null;
   var highlightDate=props.highlightDate||null;
@@ -16668,49 +16703,81 @@ function DraftLibrary(props){
   var sImportDrag=useState(false);var importDragActive=sImportDrag[0],setImportDragActive=sImportDrag[1];
   var importDragCountRef=useRef(0);
   var sImportLog=useState([]); var importLog=sImportLog[0],setImportLog=sImportLog[1];
+  /* 2026-10-17: 横断テキスト検索を作り直し
+     - 対象: チャート名 / 銘柄名・コード / タグ名 / チャートメモ / 形状メモ / 書き込みのテキスト・スタンプ(定義の文字も)
+     - この端末に無いチャートは Firebase から取得し、検索用の文字だけ IDB 'srch_<id>' に保存 (savedAt が同じ間は再利用。
+       チャート本体 'data_<id>' には書かない＝同期・楽観ロックに影響しない)
+     - 表記ゆれ吸収 (_srchNorm)、結果はチャートの日付の新しい順 */
+  var searchSeqRef=useRef(0);
+  var sSrchProg=useState(null); var searchProg=sSrchProg[0],setSearchProg=sSrchProg[1];
   function doSearch(q){
-    if(!q||!q.trim()){setSearchResults([]);return;}
-    setSearching(true);
-    var query=q.trim().toLowerCase();
-    var results=[];
-    var pending=meta.length;
-    if(pending===0){setSearchResults([]);setSearching(false);return;}
-    meta.forEach(function(m){
+    var seq=++searchSeqRef.current;
+    if(!q||!q.trim()){setSearchResults([]);setSearching(false);setSearchProg(null);return;}
+    var nq=_srchNorm(q.trim());
+    var list=meta.slice();
+    if(list.length===0){setSearchResults([]);setSearching(false);return;}
+    setSearching(true); setSearchProg({done:0,total:list.length});
+    var tagMap=caLoadTagMap(), defsById={};
+    caLoadTagDefs().forEach(function(d){if(d&&d.id)defsById[d.id]=d;});
+    var snipById={}; caLoadSnippets().forEach(function(x){if(x&&x.id)snipById[x.id]=x;});
+    var useFb=!!(fbCfg&&fbCfg.url&&!_fbIsPaused(fbCfg));
+    var dataBase=useFb?fbCfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data':null;
+    var auth=useFb?caAuthParam(fbCfg.secret):'';
+    function getStrokes(m,cb){
       caLoadDataAsync(m.id,function(d){
-        var matches=[];
-        /* チャート名にマッチ */
-        if((m.name||'').toLowerCase().indexOf(query)>=0){
-          matches.push({field:'名前',text:m.name});
-        }
-        /* テキストストロークをスキャン */
-        if(d&&d.analysisStrokes){
-          ['1m','5m'].forEach(function(tfk){
-            var arr=d.analysisStrokes[tfk]||[];
-            arr.forEach(function(s){
-              if((s.type||s.tool)==='text'&&s.text){
-                if(s.text.toLowerCase().indexOf(query)>=0){
-                  matches.push({field:tfk+'注釈',text:s.text.substring(0,60)});
-                }
-              }
-            });
-          });
-        }
-        if(matches.length>0){
-          results.push({meta:m,matches:matches});
-        }
-        pending--;
-        if(pending<=0){
-          /* ticker順→日付順 */
-          results.sort(function(a,b){
-            var tc=(a.meta.ticker||'').localeCompare(b.meta.ticker||'','ja');
-            if(tc!==0)return tc;
-            return (b.meta.savedAt||0)-(a.meta.savedAt||0);
-          });
-          setSearchResults(results);
-          setSearching(false);
-        }
+        if(d){cb(_srchMiniStrokes(d));return;}
+        idbGet('srch_'+m.id,function(c){
+          if(c&&c.savedAt===(m.savedAt||0)&&Array.isArray(c.strokes)){cb(c.strokes);return;}
+          if(!useFb){cb(null);return;}
+          fetch(dataBase+'/'+m.id+'.json'+auth).then(function(r){return r.ok?r.text():null;})
+            .then(function(txt){
+              var fd=null; try{fd=txt?JSON.parse(txt):null;}catch(e){}
+              var st=fd?_srchMiniStrokes(fd):null;
+              if(st)idbSet('srch_'+m.id,{savedAt:m.savedAt||0,strokes:st});
+              cb(st);
+            })["catch"](function(){cb(null);});
+        });
       });
-    });
+    }
+    function scan(m,strokes){
+      var hits=[];
+      function chk(field,text){ if(text&&_srchNorm(text).indexOf(nq)>=0)hits.push({field:field,text:_srchExcerpt(text,nq)}); }
+      chk('名前',m.name||'');
+      var code=caGetCodeByTicker(m.ticker||'');
+      chk('銘柄',(m.ticker||'')+(code?' '+code:''));
+      (tagMap[m.id]||[]).forEach(function(tid){ var td=defsById[tid]; if(td)chk('タグ',td.name); });
+      chk('メモ',_srchHtmlText(caGetChartMemo(m.id)));
+      chk('形状メモ',_srchHtmlText(caGetShapeMemo(m.id)));
+      (strokes||[]).forEach(function(st){
+        var t=caSnipEffText(st,snipById)||st.text||'';
+        chk(st.tf+(st._snippet?'スタンプ':'注釈'),t);
+      });
+      return hits;
+    }
+    var results=[], idx=0, done=0, N=list.length, PAR=4;
+    function finish(){
+      if(seq!==searchSeqRef.current)return;
+      results.sort(function(a,b){
+        var da=_caResolveMetaDate(a.meta)||'', db=_caResolveMetaDate(b.meta)||'';
+        if(da!==db)return db.localeCompare(da);
+        return (b.meta.savedAt||0)-(a.meta.savedAt||0);
+      });
+      setSearchResults(results); setSearching(false); setSearchProg(null);
+    }
+    function next(){
+      if(seq!==searchSeqRef.current)return;
+      if(idx>=N)return;
+      var m=list[idx++];
+      getStrokes(m,function(st){
+        if(seq!==searchSeqRef.current)return;
+        var h=scan(m,st);
+        if(h.length)results.push({meta:m,matches:h});
+        done++;
+        if(done%20===0||done===N)setSearchProg({done:done,total:N});
+        if(done>=N)finish(); else next();
+      });
+    }
+    for(var k=0;k<Math.min(PAR,N);k++)next();
   }
   /* 2026-06-11: スタンプ検索タブを開いた時に全チャートを走査 (初回のみ) */
   useEffect(function(){
@@ -18036,18 +18103,8 @@ function DraftLibrary(props){
         color:sel?td.color:'#8b949e',outline:"none"}},
       td.name);
   };
-  var _srchEffDate=function(m){
-    var ad=m.analysisDate||'';
-    if(/^\d{4}-\d{2}-\d{2}$/.test(ad))return ad;
-    var rx=ad.match(/^(\d{4})(\d{2})(\d{2})$/);
-    if(rx)return rx[1]+'-'+rx[2]+'-'+rx[3];
-    var n=m.name||'';
-    var rx2=n.match(/(?:^|[_\-])(\d{4})-(\d{2})-(\d{2})/);
-    if(rx2)return rx2[1]+'-'+rx2[2]+'-'+rx2[3];
-    var rx3=n.match(/_(\d{4})(\d{2})(\d{2})(?:[._]|$)/);
-    if(rx3)return rx3[1]+'-'+rx3[2]+'-'+rx3[3];
-    return '';
-  };
+  /* 2026-10-17: 日付の読み取りはエディタと同じ _caResolveMetaDate に統一 */
+  var _srchEffDate=function(m){ return _caResolveMetaDate(m)||''; };
   var _tagSearchFiltered=selTagIds.length===0?meta.slice():meta.filter(function(m){
     var mt=_srchTagMap[m.id]||[];
     if(tagMode==='and')return selTagIds.every(function(tid){return mt.indexOf(tid)>=0;});
@@ -18067,7 +18124,12 @@ function DraftLibrary(props){
       if(!_srchTkM[tk]){_srchTkM[tk]=[];_tagSearchGroups.push({key:tk,items:_srchTkM[tk]});}
       _srchTkM[tk].push(m);
     });
-    _tagSearchGroups.sort(function(a,b){return a.key.localeCompare(b.key,'ja');});
+    /* 2026-10-17: 銘柄グループは「その銘柄の一番新しいチャートの日付」が新しい順 (中身は既に新しい順) */
+    _tagSearchGroups.sort(function(a,b){
+      var da=_srchEffDate(a.items[0])||'', db=_srchEffDate(b.items[0])||'';
+      if(da!==db)return db.localeCompare(da);
+      return a.key.localeCompare(b.key,'ja');
+    });
   }else if(tagGroupBy==='date'){
     var _srchDtM={};
     _tagSearchFiltered.forEach(function(m){
@@ -18103,7 +18165,12 @@ function DraftLibrary(props){
       if(!_stTk[tk]){_stTk[tk]=[];_stampGroups.push({key:tk,items:_stTk[tk]});}
       _stTk[tk].push(p);
     });
-    _stampGroups.sort(function(a,b){return a.key.localeCompare(b.key,'ja');});
+    /* 2026-10-17: 銘柄グループは一番新しい日付が新しい順 */
+    _stampGroups.sort(function(a,b){
+      var da=(a.items[0]&&a.items[0].date)||'', db=(b.items[0]&&b.items[0].date)||'';
+      if(da!==db)return db.localeCompare(da);
+      return a.key.localeCompare(b.key,'ja');
+    });
   }else if(stampGroupBy==='date'){
     var _stDt={};
     _stampFiltered.forEach(function(p){
@@ -18450,7 +18517,7 @@ function DraftLibrary(props){
           ce("input",{autoFocus:searchTab==='text',value:searchQuery,
             onChange:function(e){setSearchQuery(e.target.value);},
             onKeyDown:function(e){if(e.key==='Enter')doSearch(searchQuery);},
-            placeholder:"注釈テキスト・チャート名を検索…",
+            placeholder:"注釈・スタンプ・メモ・タグ・銘柄・チャート名を検索…",
             style:{flex:1,padding:"7px 10px",fontSize:13,background:"#161b22",
               border:"1px solid #30363d",borderRadius:8,color:"#e6edf3",outline:"none",
               fontFamily:"inherit"}}),
@@ -18481,14 +18548,16 @@ function DraftLibrary(props){
               cursor:searchQuery.trim()?"pointer":"default"})},
             "＋ 現在の語を登録")
         ),
-        searching&&ce("div",{style:{textAlign:"center",color:"#8b949e",padding:30,fontSize:13}},"検索中…"),
+        searching&&ce("div",{style:{textAlign:"center",color:"#8b949e",padding:30,fontSize:13}},
+          "検索中…"+(searchProg?"（"+searchProg.done+" / "+searchProg.total+"）":""),
+          ce("div",{style:{fontSize:11,color:"#6e7681",marginTop:6}},"この端末に無いチャートは Firebase から読むので、初回は時間がかかります")),
         !searching&&searchResults.length===0&&searchQuery&&ce("div",{style:{textAlign:"center",color:"#8b949e",padding:30,fontSize:13}},"該当なし"),
         !searching&&searchResults.length>0&&ce("div",{style:{flex:1,overflowY:"auto",padding:10}},
           ce("div",{style:{fontSize:11,color:"#8b949e",marginBottom:8}},searchResults.length+"件のチャートがヒット"),
           searchResults.map(function(r){
             var m=r.meta;
             var mTags=_srchTagMap[m.id]||[];
-            var dateStr=m.savedAt?new Date(m.savedAt).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
+            var _ed=_srchEffDate(m), dateStr=_ed?(_ed+_dowLabel(_ed)):'';   /* 2026-10-17: 保存時刻ではなくチャートの日付 */
             return ce("div",{key:m.id,onClick:function(){openChart(m.id);setShowSearch(false);},
               style:{display:"flex",gap:8,padding:"8px 10px",background:"#161b22",
                 borderRadius:8,border:"1px solid #21262d",marginBottom:6,cursor:"pointer",
