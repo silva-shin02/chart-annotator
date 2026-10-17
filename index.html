@@ -3523,6 +3523,11 @@ function DataChart(props){
   }
   /* 2026-10-17 (ユーザー指定): 新しく貼るスタンプの矢印の根元 = 矢先の真上(真下)の枠の辺。
      矢先が枠より下 → 下の辺の「矢先の真上」/ 枠より上 → 上の辺の「真下」(枠の横幅の外なら辺の端=斜め) / 横 → 一番近い辺 */
+  /* 2026-10-17 (ユーザー指定): スタンプの矢先の時刻は足の中央にぴったり合わせる (1分足=整数分 / 5分足=一番近い5分足の開始分=足の中央) */
+  function ptrSnapTipTm(tm){
+    if(typeof tm!=='number'||isNaN(tm))return tm;
+    return tf==='5m'?5*Math.round(tm/5):Math.round(tm);
+  }
   function ptrRootAboveTip(box,tipX,tipY,Z){
     var horiz=null;
     if(tipY>=box.y+box.h)horiz='bottom'; else if(tipY<=box.y)horiz='top';
@@ -3575,7 +3580,7 @@ function DataChart(props){
         var tsx=box.x+box.w/2, tsy=box.y+box.h+35;   /* 2026-10-17: 初期の矢印の長さ 70→35px (ユーザー指定) */
         var tpd=pxToTimePrice(rect.left+tsx, rect.top+tsy);
         var a0d=s.anchors&&s.anchors[0]?s.anchors[0]:{tm:0,p:0};
-        var tTm=(tpd&&typeof tpd.tm==='number')?tpd.tm:a0d.tm, tP=(tpd&&tpd.p!=null)?tpd.p:a0d.p;
+        var tTm=ptrSnapTipTm((tpd&&typeof tpd.tm==='number')?tpd.tm:a0d.tm), tP=(tpd&&tpd.p!=null)?tpd.p:a0d.p;
         var rt=ptrRootAboveTip(box,minToXWithSide(tTm,hit.side),pToYcss(tP),Zp);
         commitPointer(pe.strokeId,{rootSide:rt.rootSide,rootFrac:rt.rootFrac,rootOff:rt.rootOff,tipTm:tTm,tipP:tP});
       })();
@@ -3606,6 +3611,7 @@ function DataChart(props){
       if(!pe.fromSelect){
         var tpClk=pxToTimePrice(clientX,clientY);
         if(tpClk&&typeof tpClk.tm==='number'&&tpClk.p!=null){
+          tpClk.tm=ptrSnapTipTm(tpClk.tm);
           var rtc=pe.rootManual?{rootSide:s.pointer.rootSide,rootFrac:s.pointer.rootFrac,rootOff:s.pointer.rootOff}
             :ptrRootAboveTip(box,minToXWithSide(tpClk.tm,hit.side),pToYcss(tpClk.p),_Zd);
           commitPointer(pe.strokeId,{
@@ -3649,7 +3655,7 @@ function DataChart(props){
       if(tpv){ if(tpv.tm!=null)d.curTm=tpv.tm+d.offTm; if(tpv.p!=null)d.curP=tpv.p+d.offP; }
     } else if(d.mode==='tip'){
       var tp=pxToTimePrice(clientX,clientY);
-      if(tp){ if(typeof tp.tm==='number')d.tipTm=tp.tm; if(tp.p!=null)d.tipP=tp.p; }
+      if(tp){ if(typeof tp.tm==='number')d.tipTm=ptrSnapTipTm(tp.tm); if(tp.p!=null)d.tipP=tp.p; }
       /* 2026-10-17: 新しく貼るとき(選択からの再編集でない・根元を手で動かしていない)は根元を矢先の真上へ */
       var peT=ptrEditRef.current;
       if(peT&&!peT.fromSelect&&!peT.rootManual&&d.tipTm!=null&&d.tipP!=null){
