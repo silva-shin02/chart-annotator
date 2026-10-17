@@ -2756,6 +2756,7 @@ function DataChart(props){
           shifted=Object.assign({},s,{
             anchors:s.anchors.map(function(a){return {tm:a.tm+m.dtm, p:a.p+m.dp};})
           });
+          shifted=keepPointerAngle(s,shifted,m.side);
         }
         var tp2=shifted.type||shifted.tool;
         if(tp2==='freehand'||tp2==='text'){
@@ -2793,9 +2794,9 @@ function DataChart(props){
       lassoSel.forEach(function(sel){
         var arr2=(sel.side==='ref')?(refStrokes||[]):(strokes||[]);
         var s2=arr2[sel.idx]; if(!s2)return;
-        var moved=Object.assign({},s2,{
+        var moved=keepPointerAngle(s2,Object.assign({},s2,{
           anchors:s2.anchors.map(function(a){return {tm:a.tm+(lmv.dtm||0),p:a.p+(lmv.dp||0)};})
-        });
+        }),sel.side);
         var minFn=function(m){return minToXWithSide(m,sel.side);};
         function pToYm(p){
           if(typeof L.dpmax==='number'&&typeof L.pxPerYen==='number'&&L.pxPerYen>0)return L.priceTop+(L.dpmax-p)*L.pxPerYen;
@@ -3113,9 +3114,9 @@ function DataChart(props){
               }
               return L.priceTop+(1-(pp-L.pmin)/(L.pmax-L.pmin))*L.priceH;
             }
-            var shifted=Object.assign({},sm,{
+            var shifted=keepPointerAngle(sm,Object.assign({},sm,{
               anchors:sm.anchors.map(function(a){return {tm:a.tm+m.dtm, p:a.p+m.dp};})
-            });
+            }),mSide);
             var tp2=shifted.type||shifted.tool;
             if(tp2==='freehand'||tp2==='text'){
               drawAnalysisStrokeExt(pctx,shifted,minToXloc2,pToYloc2,L.padL,L.padR,L.padT,L.padB,L.chartW,L.priceTop,L.priceBot,L.priceH,tf);
@@ -3481,6 +3482,44 @@ function DataChart(props){
     var tH=lines.length*fs*1.3;
     var bpad=3*hitZoom;
     return {x:tx-bpad, y:ty-bpad, w:mW+bpad*2, h:tH+bpad*2};
+  }
+  /* 2026-10-17 (ユーザー指定): 矢印付きスタンプの枠を動かしたときは、矢先(記録時刻)を固定したまま矢印の傾きを保つ。
+     「矢先→元の根元」の向きの直線が、新しい枠の辺と最初に交わる点を新しい根元にする (rootSide/rootOff を付け直す)。
+     直線が枠に当たらない (角を越える) ときは、直線に一番近い角に付ける (このときだけ傾きが少し変わる)。
+     矢先が新しい枠の中に入ったときは従来どおり (根元は枠上の同じ位置)。
+     地図モデルは縦横同じ倍率なので、今のズームで求めた傾きはズームを変えても保たれる。 */
+  function keepPointerAngle(oldS, newS, side){
+    var p=oldS&&oldS.pointer;
+    if(!oldS||!oldS._snippet||!p||typeof p.tipTm!=='number'||typeof p.tipP!=='number')return newS;
+    var L=layoutRef.current, Z=(L&&L.zoom>0)?L.zoom:1;
+    var b0=getSnippetBoxCss(oldS,side), b1=getSnippetBoxCss(newS,side); if(!b0||!b1)return newS;
+    var r0=pointerRootPtZ(b0,p,Z);
+    var tx=minToXWithSide(p.tipTm,side||'cur'), ty=pToYcss(p.tipP);
+    var dx=r0.x-tx, dy=r0.y-ty, len=Math.hypot(dx,dy); if(len<1)return newS;
+    var ux=dx/len, uy=dy/len;
+    if(tx>=b1.x&&tx<=b1.x+b1.w&&ty>=b1.y&&ty<=b1.y+b1.h)return newS;
+    /* 矢先から (ux,uy) 方向の半直線と枠の交点 (スラブ法) */
+    var tmin=-Infinity, tmax=Infinity;
+    function slab(o,d,lo,hi){
+      if(Math.abs(d)<1e-9){ if(o<lo||o>hi){tmin=Infinity;tmax=-Infinity;} return; }
+      var t1=(lo-o)/d, t2=(hi-o)/d; if(t1>t2){var tt=t1;t1=t2;t2=tt;}
+      if(t1>tmin)tmin=t1; if(t2<tmax)tmax=t2;
+    }
+    slab(tx,ux,b1.x,b1.x+b1.w); slab(ty,uy,b1.y,b1.y+b1.h);
+    var hx, hy;
+    if(tmin<=tmax&&tmin>0){ hx=tx+ux*tmin; hy=ty+uy*tmin; }
+    else{
+      /* 当たらない → 半直線に一番近い角 */
+      var best=null, bd=Infinity;
+      [[b1.x,b1.y],[b1.x+b1.w,b1.y],[b1.x,b1.y+b1.h],[b1.x+b1.w,b1.y+b1.h]].forEach(function(c){
+        var t=Math.max(0,(c[0]-tx)*ux+(c[1]-ty)*uy);
+        var d=Math.hypot(c[0]-(tx+ux*t),c[1]-(ty+uy*t));
+        if(d<bd){bd=d;best=c;}
+      });
+      hx=best[0]; hy=best[1];
+    }
+    var pr=projectBoxPerimeterOff(b1,hx,hy,Z);
+    return Object.assign({},newS,{pointer:Object.assign({},p,{rootSide:pr.side,rootOff:pr.off,rootFrac:pr.frac})});
   }
   /* strokeId から現在の {idx,side,stroke} を引く (cur側のみ対応) */
   function findSnippetById(id){
@@ -4500,9 +4539,11 @@ function DataChart(props){
         var moveItems=lm.origItems.map(function(it){
           var arr=(it.side==='ref')?(refStrokes||[]):(strokes||[]);
           var s=arr[it.idx]; if(!s)return null;
-          return {side:it.side,idx:it.idx,stroke:Object.assign({},s,{
+          var _mv=Object.assign({},s,{
             anchors:it.anchors.map(function(a){return {tm:a.tm+(lm.dtm||0), p:a.p+(lm.dp||0)};})
-          })};
+          });
+          var _orig=Object.assign({},s,{anchors:it.anchors});
+          return {side:it.side,idx:it.idx,stroke:keepPointerAngle(_orig,_mv,it.side)};
         }).filter(Boolean);
         if(onStrokeUpdateMany)onStrokeUpdateMany(moveItems);
       }
@@ -4565,6 +4606,7 @@ function DataChart(props){
             newStroke=Object.assign({},s,{
               anchors:s.anchors.map(function(a){return {tm:a.tm+m.dtm, p:a.p+m.dp};})
             });
+            newStroke=keepPointerAngle(s,newStroke,m.side);
           }
           onStrokeUpdate(m.side,m.idx,newStroke);
         }
