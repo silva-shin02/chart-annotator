@@ -118,7 +118,7 @@
 - 先頭で `if(ptrEditRef.current && ptrPointerDown(...)) return;`（スタンプ矢印編集を最優先）。
 - 早期ブロック `if(drawTool==='text'||drawTool==='lasso')` が**既存テキスト/スタンプのタップを先に処理して return する**（ここを見落として後段に書くと到達しない＝過去のハマり）。
 - スタンプ(矢印付き)を「選択(lasso)」or「スタンプ(snippet)」でタップ → **1タップ目=選択+矢印ハンドル表示、2タップ目=テキスト編集**。
-- スタンプ新規配置フロー（2026-10-17〜）：配置(placing, ドラッグで位置調整→空白タップ) → **矢先編集(editing)**（根元選択 pickRoot は省略。仮の矢先＝枠の下辺中央から真下35px（2026-10-17 に70→35））→ 矢先をドラッグ/タップ → 確定。新規配置中は**根元＝矢先の真上の枠の辺**（`ptrRootAboveTip`：矢先が枠より下→下辺、上→上辺、横幅の外なら辺の端）。この自動の根元は `pointer.rootVert=true` を保存し、描画時は rootOff ではなく**矢先の x から直接**根元を求める（横の倍率 `innerW/uSpan` はズーム・画面幅に正比例しないため、rootOff だとズーム/リサイズで傾いた。2026-10-17 修正）。根元つまみを手で動かすと `ptrEdit.rootManual=true`・`rootVert=false` で以後自動をやめる。選択からの再編集（fromSelect）は自動なし。`ptrEdit={strokeId,phase,side,fromSelect?,rootManual?}`。矢先の時刻は**足の中央にぴったり**（`ptrSnapTipTm`：1分足=整数分・5分足=一番近い5分足の開始分）。矢先/根元の丸点の近く（18px以内）をクリックしただけでも、その位置へ移す（つまみを掴んだ瞬間に `ptrPointerMove` を1回呼ぶ）。
+- スタンプ新規配置フロー（2026-10-17〜）：配置(placing, ドラッグで位置調整→空白タップ) → **矢先編集(editing)**（根元選択 pickRoot は省略。仮の矢先＝枠の下辺中央から真下35px（2026-10-17 に70→35））→ 矢先をドラッグ/タップ → 確定。新規配置中は**根元＝矢先の真上の枠の辺**（`ptrRootAboveTip`：矢先が枠より下→下辺、上→上辺、横幅の外なら辺の端）。この自動の根元は `pointer.rootVert=true` を保存し、描画時は rootOff ではなく**矢先の x から直接**根元を求める（横の倍率 `innerW/uSpan` はズーム・画面幅に正比例しないため、rootOff だとズーム/リサイズで傾いた。2026-10-17 修正）。根元つまみを手で動かすと `ptrEdit.rootManual=true`・`rootVert=false` で以後自動をやめる。選択からの再編集（fromSelect）は自動なし。`ptrEdit={strokeId,phase,side,fromSelect?,rootManual?}`。矢先の時刻は**足の中央にぴったり**（`ptrSnapTipTm`：1分足=整数分・5分足=一番近い5分足の開始分）。描くときも矢先の x は足の中央（`ptrTipBarTm`＝時刻表示と同じ丸め）をヒゲと同じ `Math.round(x)+0.5`（`ptrTipPx`）に合わせる（2026-10-18・吸着前の旧データもヒゲにそろう）。矢先/根元の丸点の近く（18px以内）をクリックしただけでも、その位置へ移す（つまみを掴んだ瞬間に `ptrPointerMove` を1回呼ぶ）。
 
 ---
 

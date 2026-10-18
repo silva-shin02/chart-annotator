@@ -2879,7 +2879,7 @@ function DataChart(props){
         var _tTm=(_dr&&_dr.tipTm!=null)?_dr.tipTm:(_s.pointer?_s.pointer.tipTm:null);
         var _tP=(_dr&&_dr.tipP!=null)?_dr.tipP:(_s.pointer?_s.pointer.tipP:null);
         if(_box&&_tTm!=null&&_tP!=null){
-          var _tx=minToXWithSide(_tTm,_hh.side), _ty=pToYcss(_tP);
+          var _tx=ptrTipPx(minToXWithSide(ptrTipBarTm(_tTm,tf),_hh.side)), _ty=pToYcss(_tP);
           var _rp=pointerRootPtZ(_box,_rPtr,_Zr,_tx);
           var _col=_s.color||'#ff9500';
           drawPointerArrow(ctx,_rp.x,_rp.y,_tx,_ty,_col,2.4);
@@ -3493,7 +3493,7 @@ function DataChart(props){
     if(!oldS||!oldS._snippet||!p||typeof p.tipTm!=='number'||typeof p.tipP!=='number')return newS;
     var L=layoutRef.current, Z=(L&&L.zoom>0)?L.zoom:1;
     var b0=getSnippetBoxCss(oldS,side), b1=getSnippetBoxCss(newS,side); if(!b0||!b1)return newS;
-    var tx=minToXWithSide(p.tipTm,side||'cur'), ty=pToYcss(p.tipP);
+    var tx=ptrTipPx(minToXWithSide(ptrTipBarTm(p.tipTm,tf),side||'cur')), ty=pToYcss(p.tipP);
     var r0=pointerRootPtZ(b0,p,Z,tx);
     var dx=r0.x-tx, dy=r0.y-ty, len=Math.hypot(dx,dy); if(len<1)return newS;
     var ux=dx/len, uy=dy/len;
@@ -3591,7 +3591,7 @@ function DataChart(props){
     }
     var _Zd=(layoutRef.current&&layoutRef.current.zoom>0)?layoutRef.current.zoom:1;
     if(pe.phase==='editing'&&s.pointer){
-      var tipX=minToXWithSide(s.pointer.tipTm,hit.side), tipY=pToYcss(s.pointer.tipP);
+      var tipX=ptrTipPx(minToXWithSide(ptrTipBarTm(s.pointer.tipTm,tf),hit.side)), tipY=pToYcss(s.pointer.tipP);
       if(Math.hypot(px-tipX,py-tipY)<=18){
         /* 選択からの再編集は根元を今の位置に止める (垂直追従をやめ、今の根元を rootOff に焼き付け) */
         var rpT0=pointerRootPtZ(box,s.pointer,_Zd,tipX), offT0=(s.pointer.rootSide==='top'||s.pointer.rootSide==='bottom')?(rpT0.x-box.x)/_Zd:s.pointer.rootOff;
@@ -6843,7 +6843,7 @@ function drawAnalysisStrokeExt(ctx,s,minToX,pToY,padL,padR,padT,padB,chartW,pric
       /* スタンプ矢印: 枠の root点 → 矢先(tipTm,tipP) */
       if(s.pointer&&typeof s.pointer.tipTm==='number'&&typeof s.pointer.tipP==='number'){
         var pbox={x:x-bpad,y:y-bpad,w:maxW+bpad*2,h:boxH+bpad*2};
-        var tpx=minToX(s.pointer.tipTm), tpy=pToY(s.pointer.tipP);
+        var tpx=ptrTipPx(minToX(ptrTipBarTm(s.pointer.tipTm,tf))), tpy=pToY(s.pointer.tipP);
         var rpt=pointerRootPtZ(pbox,s.pointer,Z,tpx);
         ctx.globalAlpha=op;
         drawPointerArrow(ctx,rpt.x,rpt.y,tpx,tpy,col,Math.max(1.5,2*Z));
@@ -6922,6 +6922,14 @@ function snipTimeStr(tm){
 }
 /* スタンプの時刻文字列: 5分足=枠範囲(crosshairTimeStrと同じ「HH:MM～HH:MM」・15:30は単一)、
    1分足=従来どおり単一時刻(snipTimeStr)。tipTm=矢先の保存tm。 */
+/* 2026-10-18: 矢先を描く x = 足の中央 (時刻表示と同じく分に丸める・5分足は一番近い5分足)。
+   ヒゲと同じく Math.round(x)+0.5 に合わせる (ローソクのヒゲは drawBarSet でこの位置に1px で描く)。
+   矢先の時刻を足に吸着する前に貼った旧データも、描くときは足の中央にそろう。 */
+function ptrTipBarTm(tipTm, tf){
+  if(typeof tipTm!=='number'||isNaN(tipTm))return tipTm;
+  return tf==='5m'?5*Math.round(tipTm/5):Math.round(tipTm);
+}
+function ptrTipPx(x){return Math.round(x)+0.5;}
 function stampTimeStr(tipTm, tf){
   return tf==='5m' ? crosshairTimeStr(tipTm, '5m') : snipTimeStr(tipTm);
 }
