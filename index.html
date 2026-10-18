@@ -8452,6 +8452,26 @@ function ImageAnnotator(props){
   var lastThumbUploadAtRef=useRef(0);
   var lastThumbUrlRef=useRef(null);
   var savedDraftIdRef=useRef(img._draftId||null);
+  /* 2026-10-18: 「前の日/次の日」— 同じ銘柄で、このチャートの日付の直前/直後の日付のチャート (メタの日付 _caResolveMetaDate で比較・同じ日付は除く) */
+  var dayNav=useMemo(function(){
+    var ticker=img._ticker||(analysisData&&analysisData.ticker)||'';
+    var cur=(analysisData&&analysisData.date)||'';
+    var cid=img._draftId||savedDraftIdRef.current||null;
+    var r={prev:null,prevD:'',next:null,nextD:''};
+    if(!ticker||!cur)return r;
+    caLoadMeta().forEach(function(m){
+      if(!m||m.ticker!==ticker||m.id===cid)return;
+      var d=_caResolveMetaDate(m); if(!d)return;
+      if(d<cur&&d>r.prevD){r.prev=m;r.prevD=d;}
+      if(d>cur&&(!r.nextD||d<r.nextD)){r.next=m;r.nextD=d;}
+    });
+    return r;
+  },[analysisData,img]);
+  /* 保存してから別の日のチャートを開く (検索の ◀▶ と同じ経路: saveAndExit → App onSearchNav → DraftLibrary navOpenId) */
+  function goDay(m){
+    if(!m)return;
+    saveAndExit(function(){ if(props.onSearchNav)props.onSearchNav(m.id); });
+  }
   var savedTickerRef=useRef(img._ticker||'');
   var postSaveCallbackRef=useRef(null);
   /* エディタ内タグ変更ハンドラ */
@@ -9394,28 +9414,7 @@ function ImageAnnotator(props){
             background:refAnalysis?"#16a34a":"#7c3aed",
             color:refAnalysis?"#bbf7d0":"#e9d5ff"})
         },refAnalysis?"閉じる":"前日チャート"),
-        /* 2026-04-30: C - 現在チャートをクエリにしてテンプレ類似検索 (保存済みのみ) */
-        analysisData && img && img._draftId && ce("button",{
-          onClick:function(){
-            if(splitChart){closeSplitView();}
-            else{setShowSplitPicker(true);}
-          },
-          title:splitChart?"分割表示を閉じる":"このチャートに似た過去チャートを検索",
-          style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",
-            background:splitChart?"#16a34a":"#4a1e5f",
-            color:splitChart?"#bbf7d0":"#c4a5f7"})
-        },"🔎 似た形"),
-        /* 2026-07-07: チャート形状 登録モード (保存済みチャートのみ・シミュ中は非表示) */
-        analysisData && img && img._draftId && !simMode && ce("button",{
-          onClick:function(){
-            setShapeCapPayload(null);
-            setShapeCapMode(function(v){return !v;});
-          },
-          title:shapeCapMode?"形状登録(撮影)をやめる":"チャートを四角で囲んで形状カタログに登録",
-          style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",
-            background:shapeCapMode?"#7f1d1d":"#134e4a",
-            color:shapeCapMode?"#fca5a5":"#5eead4",fontWeight:700})
-        },shapeCapMode?"📐 撮影をやめる":"📐 形状登録"),
+        /* 2026-10-18: 「🔎 似た形」「📐 形状登録」ボタンは廃止 (ユーザー指定)。代わりに ⚙ 設定 の左に「前の日/次の日」 */
         /* シミュレーション: このチャートを練習モードで開く (前日自動連結・保存なし) */
         analysisData && !simMode && ce("button",{
           onClick:function(){
@@ -9450,6 +9449,15 @@ function ImageAnnotator(props){
           color:_fbIsPaused(props.fbCfg)?'#f87171':autoSaveStatus==='saving'?'#93c5fd':autoSaveStatus==='ok'?'#86efac':autoSaveStatus==='err'?'#fca5a5':'#fb923c'}},
           _fbIsPaused(props.fbCfg)?'⏸ 同期停止中':autoSaveStatus==='saving'?'⏳ 自動保存中':autoSaveStatus==='ok'?'✓ 自動保存済':autoSaveStatus==='err'?'✕ 自動保存失敗':'🔥 自動保存ON'
         ),
+        /* 2026-10-18: 前の日 / 次の日 (同じ銘柄の直前/直後の日付のチャートへ。シミュ中は出さない) */
+        analysisData && !simMode && [['prev','◀ 前の日'],['next','次の日 ▶']].map(function(it){
+          var m=dayNav[it[0]], d=dayNav[it[0]+'D'];
+          var md=d?d.slice(5).replace(/^0/,'').replace('-0','-').replace('-','/'):'';
+          return ce("button",{key:'day_'+it[0],disabled:!m,onClick:function(){goDay(m);},
+            title:m?(md+' のチャートを開く'):(it[0]==='prev'?'前の日のチャートがありません':'次の日のチャートがありません'),
+            style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#2a2a2a",color:m?"#ddd":"#555",cursor:m?"pointer":"default"})},
+            it[1]);
+        }),
         /* 2026-04-20: ⚙ 設定ボタン */
         ce("button",{onClick:function(){setShowDisplaySettings(true);},
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#1e3a5f",color:"#a5b4fc",fontWeight:700})},
