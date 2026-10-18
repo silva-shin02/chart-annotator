@@ -6418,8 +6418,10 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
      画面の上/下に外れているときは線を引かず、その端にラベルだけ ▲/▼ 付きで出す。Y軸フィットには含めない。 */
   if(prevClose&&typeof prevClose.p==='number'&&!(_indVis&&_indVis.prevClose===false)&&!(dim&&dim.thumbnail)){
     var _pcY=pToY(prevClose.p);
-    var _pcDm=String(prevClose.date||'').match(/^\d{4}-(\d{2})-(\d{2})$/);
-    var _pcTxt='前日終値 '+(prevClose.p%1?prevClose.p.toFixed(1):Math.round(prevClose.p).toLocaleString())+(_pcDm?' ('+(+_pcDm[1])+'/'+(+_pcDm[2])+')':'');
+    var _pcDm=String(prevClose.date||'').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    /* 2026-10-18: 日付に曜日も付ける 例「10/16(金)」 */
+    var _pcWd=_pcDm?'日月火水木金土'.charAt(new Date(+_pcDm[1],+_pcDm[2]-1,+_pcDm[3]).getDay()):'';
+    var _pcTxt='前日終値 '+(prevClose.p%1?prevClose.p.toFixed(1):Math.round(prevClose.p).toLocaleString())+(_pcDm?'  '+(+_pcDm[2])+'/'+(+_pcDm[3])+'('+_pcWd+')':'');
     ctx.save();
     ctx.font='bold 10px -apple-system,Helvetica,sans-serif';
     ctx.textAlign='left'; ctx.fillStyle=CA_PREV_CLOSE_COL;
