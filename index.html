@@ -996,9 +996,11 @@ function caSetShapeMemo(id,html){
 /* 記録タップ→チャートを開いた後に撮影範囲へジャンプするための一時指示 (ImageAnnotator が消費) */
 var _caShapeJumpReq=null;
 
+/* 2026-10-18: 前日終値の水平線の色 */
+var CA_PREV_CLOSE_COL='#9ca3af';
 /* 2026-06-29: 指標(EMA/VWAP)の表示ON/OFF。既定は全表示=後方互換 */
 function caLoadIndicatorVis(){
-  var def={ema9:true,ema22:true,ema50:true,ema200:true,vwap:true};
+  var def={ema9:true,ema22:true,ema50:true,ema200:true,vwap:true,prevClose:true};
   try{var v=JSON.parse(localStorage.getItem(CA_INDICATOR_VIS_KEY));
     if(v&&typeof v==='object')return Object.assign(def,v);}catch(e){}
   return def;
@@ -1684,7 +1686,8 @@ function DisplaySettingsModal(props){
   var INDS=[
     {k:'ema9',label:'EMA9',col:'#ffffff'},{k:'ema22',label:'EMA22',col:'#ffa9ff'},
     {k:'ema50',label:'EMA50',col:'#ff00ff'},{k:'ema200',label:'EMA200',col:'#a06bd0'},
-    {k:'vwap',label:'VWAP',col:'#ffff00'}
+    {k:'vwap',label:'VWAP',col:'#ffff00'},
+    {k:'prevClose',label:'前日終値',col:CA_PREV_CLOSE_COL}
   ];
   var CARD={background:"#1a1a1a",borderRadius:10,padding:"10px 12px",border:"1px solid #1e3a5f"};
   var HEAD={fontSize:13,fontWeight:700,color:"#a5b4fc",marginBottom:4};
@@ -1760,7 +1763,7 @@ function DisplaySettingsModal(props){
           /* 2026-06-29 C1: 指標の表示ON/OFF */
           ce("div",{style:CARD},
             ce("div",{style:HEAD},"📈 指標の表示 ON/OFF"),
-            ce("div",{style:DESC},"チャートに重ねる EMA / VWAP の表示を切り替えます（非表示の指標はY軸の自動フィットからも除外）。"),
+            ce("div",{style:DESC},"チャートに重ねる EMA / VWAP / 前日終値の表示を切り替えます（非表示の指標はY軸の自動フィットからも除外。前日終値はフィットに含めません）。"),
             ce("div",{style:{display:"flex",flexWrap:"wrap",gap:8}},
               INDS.map(function(it){
                 var on=indVis[it.k]!==false;
@@ -2665,7 +2668,7 @@ function DataChart(props){
         }catch(e){}
       }
       try{
-        drawDataChart(canvas,bars,data,dimWithPx,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx,refBars,refData,getCandleGap(tf),refStrokes,moveHint,lassoSel,props.snippetsById,vpOpt);
+        drawDataChart(canvas,bars,data,dimWithPx,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,props.editingTextIdx,refBars,refData,getCandleGap(tf),refStrokes,moveHint,lassoSel,props.snippetsById,vpOpt,props.prevClose);
       } finally {
         if(dprOverridden){
           try{Object.defineProperty(window,'devicePixelRatio',{value:origDPR,configurable:true});}catch(e){}
@@ -2675,7 +2678,7 @@ function DataChart(props){
       drawCrosshair();
     });
     return function(){cancelAnimationFrame(rafId);};
-  },[data,bars,dim,tf,view,pShift,zoom,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes,moveHint,pricePx,chartBg,lassoSel,indVis,priceGridStep,vpKey]);
+  },[data,bars,dim,tf,view,pShift,zoom,priceRange,strokes,selectedIdx,props.editingTextIdx,refData,refBars,refStrokes,moveHint,pricePx,chartBg,lassoSel,indVis,priceGridStep,vpKey,props.prevClose]);
 
   // showCrosshair 切替時: OFFなら消す、ONなら再描画
   useEffect(function(){
@@ -5923,7 +5926,7 @@ function computeEnhancedBars(bars, refBars){
    2026-04-21: 地図モデルズーム化 — dim.zoom で X/Y 同倍率
                barW = Z_BASE_BAR_PX * zoom, pxPerYen = (Z_BASE_PRICE_PX/10) * zoom
                uSpan は zoom と chartW から派生 (view.uE は setView で同期されている前提) */
-function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,editingTextIdx,refBars,refData,gapVis,refStrokes,hideHint,lassoSel,snippetsById,vpOpt){
+function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,editingTextIdx,refBars,refData,gapVis,refStrokes,hideHint,lassoSel,snippetsById,vpOpt,prevClose){
   // B完全版: EMA 前日連続化 (refData ありなら bars の EMA を上書き)
   bars=computeEnhancedBars(bars, refBars);
   var dpr=window.devicePixelRatio||1;
@@ -6411,6 +6414,27 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
       drawLine(visibleBars,'cur',line.k,line.col);
     }
   });
+  /* 2026-10-18: 前日終値 (prevClose={p,date}) — 価格エリアいっぱいに水平の点線＋左端に「前日終値 価格 (M/D)」。
+     画面の上/下に外れているときは線を引かず、その端にラベルだけ ▲/▼ 付きで出す。Y軸フィットには含めない。 */
+  if(prevClose&&typeof prevClose.p==='number'&&!(_indVis&&_indVis.prevClose===false)&&!(dim&&dim.thumbnail)){
+    var _pcY=pToY(prevClose.p);
+    var _pcDm=String(prevClose.date||'').match(/^\d{4}-(\d{2})-(\d{2})$/);
+    var _pcTxt='前日終値 '+(prevClose.p%1?prevClose.p.toFixed(1):Math.round(prevClose.p).toLocaleString())+(_pcDm?' ('+(+_pcDm[1])+'/'+(+_pcDm[2])+')':'');
+    ctx.save();
+    ctx.font='bold 10px -apple-system,Helvetica,sans-serif';
+    ctx.textAlign='left'; ctx.fillStyle=CA_PREV_CLOSE_COL;
+    if(_pcY<priceTop){
+      ctx.textBaseline='top'; ctx.fillText('▲ '+_pcTxt,padL+4,priceTop+2);
+    }else if(_pcY>priceBot){
+      ctx.textBaseline='bottom'; ctx.fillText('▼ '+_pcTxt,padL+4,priceBot-2);
+    }else{
+      ctx.strokeStyle=CA_PREV_CLOSE_COL; ctx.lineWidth=1; ctx.setLineDash([6,4]);
+      ctx.beginPath(); ctx.moveTo(padL,Math.round(_pcY)+0.5); ctx.lineTo(padL+chartW,Math.round(_pcY)+0.5); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.textBaseline='bottom'; ctx.fillText(_pcTxt,padL+4,_pcY-2);
+    }
+    ctx.restore();
+  }
 
   /* 2026-09-17: 価格帯別出来高 — 集計外(指定時刻より右)の暗転(価格エリア) と POC 線。
      書き込みより前に描くので、スタンプ等は暗くならず POC 線より手前に出る。 */
@@ -8178,6 +8202,19 @@ function ImageAnnotator(props){
       bars_5m:computeEnhancedBars(analysisData.bars_5m||[],emaSeedData.bars_5m||null)
     });
   },[analysisData,emaSeedData,refAnalysis,simMode]);
+  /* 2026-10-18: 前日終値 = 当日より前で一番近い日付の同銘柄チャートの最後の約定足の終値。
+     前日チャートを並べていればそれ、無ければ EMA 連続化用に読んだ前日データ(emaSeedData)から。 */
+  var prevCloseInfo=useMemo(function(){
+    var cur=(analysisData&&analysisData.date)||'';
+    function pick(d){
+      if(!d)return null;
+      if(cur&&d.date&&!(d.date<cur))return null;   /* 当日以降のチャートは使わない */
+      var b=(d.bars_1m&&d.bars_1m.length)?d.bars_1m:(d.bars_5m||[]);
+      for(var i=b.length-1;i>=0;i--){ if(b[i]&&b[i].v>0&&typeof b[i].c==='number')return {p:b[i].c,date:d.date||''}; }
+      return null;
+    }
+    return pick(refAnalysis&&refAnalysis.analysisData)||pick(emaSeedData);
+  },[analysisData,refAnalysis,emaSeedData]);
   /* 2026-06-15: simMode表示データもメモ化 — 参照が毎レンダー変わると stackModeの下5m(uncontrolled)が
      無関係な再描画のたびに getFitZoom で再フィットしズーム/パンが飛ぶため。simCutoffTm変化時のみ更新。 */
   var simDisplayData=useMemo(function(){
@@ -10048,6 +10085,7 @@ function ImageAnnotator(props){
                引数渡しで外側値を捕捉(var巻き上げ回避)。 */
             (function(analysisTf){return ce(DataChart,{
               data:simMode?simDisplayData:emaContinuedData, tf:topTf, showCrosshair:showCrosshair,
+              prevClose:prevCloseInfo,   /* 2026-10-18: 前日終値の水平線 */
               vpOpt:vpOptNow(),   /* 2026-09-17: 価格帯別出来高 */
               vpPinTm:vpPinTm, onVpPin:setVpPinTm, vpHoverTm:vpHoverTm, onVpHover:setVpHoverTm, onVpSetTime:vpSetTime, onVpCursorP:vpLadCursorP, onVpCenterTm:setVpCenterTm,
               /* C1+: 過去chartデータを渡して同一キャンバスに連結描画 */
@@ -10345,6 +10383,7 @@ function ImageAnnotator(props){
                非シミュは外側analysisTfのまま(tap-to-focus維持)。引数渡しで外側値を捕捉。 */
             (function(analysisTf){return ce(DataChart,{
               data:simMode?simDisplayData:emaContinuedData, tf:'5m', showCrosshair:showCrosshair,
+              prevClose:prevCloseInfo,
               vpOpt:vpOptNow(),   /* 2026-09-17: 価格帯別出来高 (5分足ペインも1分足の vp から集計) */
               vpPinTm:vpPinTm, onVpPin:setVpPinTm, vpHoverTm:vpHoverTm, onVpHover:setVpHoverTm, onVpSetTime:vpSetTime, onVpCursorP:vpLadCursorP,
               /* 2026-06-25: stackMode 1m⇔5m カーソル連動 (この下段は常にstack時のみrender) */
