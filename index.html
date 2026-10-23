@@ -11493,6 +11493,38 @@ function caLoadData(id){
   return null;
 }
 // 非同期版: メモリ → IndexedDB (C8a: localStorage層は廃止)
+/* 2026-10-23: ボラ率 = 前場(9:00〜11:30)の1分足ごとの (高値−安値)÷終値 の平均 [%]。
+   寄りの足も含む。約定の無い足(出来高0)も値幅0として数える。チャート一覧の並び替え・カード表示用。
+   キャッシュは localStorage (この端末のみ・Firebase 同期なし) {id:{v,sa}}。sa=メタの savedAt が変わったら計算し直す。 */
+var CA_VOL_CACHE_KEY='ca_vol_am1m_v1';
+var _caVolMem=null;
+function caCalcVolAm1m(ad){
+  var b=ad&&ad.bars_1m; if(!b||!b.length)return null;
+  var sum=0,n=0;
+  b.forEach(function(x){
+    if(!x||!x.t)return;
+    var p=String(x.t).split(':'), tm=(+p[0])*60+(+p[1]);
+    if(!(tm>=540&&tm<=690))return;
+    if(!(x.c>0)||typeof x.h!=='number'||typeof x.l!=='number')return;
+    sum+=(x.h-x.l)/x.c; n++;
+  });
+  return n?sum/n*100:null;
+}
+function _caVolCache(){
+  if(_caVolMem)return _caVolMem;
+  try{_caVolMem=JSON.parse(localStorage.getItem(CA_VOL_CACHE_KEY))||{};}catch(e){_caVolMem={};}
+  return _caVolMem;
+}
+/* undefined=未計算 / null=データはあったが前場の足が無い / 数値=ボラ率% */
+function caVolGet(m){
+  var c=m&&_caVolCache()[m.id];
+  return (c&&c.sa===(m.savedAt||0))?c.v:undefined;
+}
+function caVolPut(id,sa,v){
+  var c=_caVolCache(); c[id]={v:v,sa:sa};
+  try{localStorage.setItem(CA_VOL_CACHE_KEY,JSON.stringify(c));}catch(e){}
+}
+function caFmtVol(v){return (typeof v==='number')?v.toFixed(3)+'%':'—';}
 function caLoadDataAsync(id,cb){
   if(_dataMemCache[id]){cb(_dataMemCache[id]);return;}
   idbGet('data_'+id,function(val){
@@ -13816,7 +13848,12 @@ function CaChartCard(props){
           m.name+_metaDowLabel(m)),
         ce('div',{style:{fontSize:10,color:isHighlight?'#86efac':'#555',marginTop:2}},
           m.analysisDate?m.analysisDate+' · ':'',dateStr)
-      )
+      ),
+      /* 2026-10-23: ボラ率 (前場の1分足の平均値幅率) */
+      props.showVol&&ce('div',{title:'ボラ率: 前場(9:00〜11:30)の1分足の (高値−安値)÷終値 の平均',
+        style:{flexShrink:0,fontSize:11,fontWeight:700,padding:'2px 7px',borderRadius:5,
+          background:'#2a1f0a',color:'#fbbf24',whiteSpace:'nowrap',fontVariantNumeric:'tabular-nums'}},
+        'ボラ '+(props.vol===undefined?'…':caFmtVol(props.vol)))
     ),
 
     /* タグチップ行 (タグがある場合のみ表示) */
@@ -16860,11 +16897,51 @@ function DraftLibrary(props){
     {id:'name_desc', label:'名前 ↓'},
     {id:'name_asc',  label:'名前 ↑'},
     {id:'date_desc', label:'日時 ↓'},
-    {id:'date_asc',  label:'日時 ↑'}
+    {id:'date_asc',  label:'日時 ↑'},
+    /* 2026-10-23: ボラ率 (前場の1分足の平均値幅率) — このときは年月の見出しを外して全日付を1列で並べる */
+    {id:'vol_desc',  label:'ボラ ↓'},
+    {id:'vol_asc',   label:'ボラ ↑'}
   ];
   var s9=useState(function(){try{var v=localStorage.getItem(CA_SORT_KEY);if(v&&SORT_MODES.find(function(m){return m.id===v;}))return v;}catch(e){}return 'name_desc';});
   var sortMode=s9[0],setSortMode=s9[1];
   function changeSortMode(v){setSortMode(v);try{localStorage.setItem(CA_SORT_KEY,v);}catch(e){}}
+  /* 2026-10-23: 表示中の銘柄のチャートのボラ率を計算してキャッシュ (未計算のものだけ・並列3)。
+     この端末に無いチャートは Firebase から読む (チャート本体は保存しない)。読めなかったものはこのセッション中は再試行しない */
+  var sVolV=useState(0); var setVolVer=sVolV[1];
+  var volFailRef=useRef({});
+  useEffect(function(){
+    if(!selTicker)return;
+    var list=meta.filter(function(m){return m.ticker===selTicker&&caVolGet(m)===undefined&&!volFailRef.current[m.id];});
+    if(!list.length)return;
+    var alive=true, i=0, running=0, bumpT=null;
+    function bump(){ if(bumpT)return; bumpT=setTimeout(function(){bumpT=null; if(alive)setVolVer(function(x){return x+1;});},250); }
+    function loadOne(m,cb){
+      caLoadDataAsync(m.id,function(d){
+        if(d&&d.analysisData){cb(true,caCalcVolAm1m(d.analysisData));return;}
+        var cfg=fbCfg||{};
+        if(!cfg.url){cb(false);return;}
+        fetch(cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data/'+m.id+'.json'+caAuthParam(cfg.secret))
+          .then(function(r){return r.ok?r.json():null;})
+          .then(function(fb){ if(fb&&fb.analysisData)cb(true,caCalcVolAm1m(fb.analysisData)); else cb(false); })
+          .catch(function(){cb(false);});
+      });
+    }
+    function next(){
+      while(alive&&running<3&&i<list.length){
+        (function(m){
+          running++;
+          loadOne(m,function(ok,v){
+            running--;
+            if(!alive)return;
+            if(ok)caVolPut(m.id,m.savedAt||0,v); else volFailRef.current[m.id]=true;
+            bump(); next();
+          });
+        })(list[i++]);
+      }
+    }
+    next();
+    return function(){alive=false; if(bumpT)clearTimeout(bumpT);};
+  },[selTicker,meta]);
   /* 2026-04-26: アノテーション横断検索 */
   /* 2026-10-17: 検索から開いたチャートから戻ったら、検索パネルをそのまま復元 (_caSrchKeep・1回使ったら消す) */
   var _kp=useState(function(){var k=_caSrchKeep;_caSrchKeep=null;if(!k&&!props.navOpenId)_caSrchNav=null;return k;})[0]||null;
@@ -18369,6 +18446,13 @@ function DraftLibrary(props){
       case 'name_desc': return (b.name||'').localeCompare(a.name||'','ja');
       case 'name_asc':  return (a.name||'').localeCompare(b.name||'','ja');
       case 'date_asc':  return (a.savedAt||0)-(b.savedAt||0);
+      case 'vol_desc': case 'vol_asc': {
+        /* 未計算・データ無しは常に末尾 (その中は日付の新しい順) */
+        var va=caVolGet(a), vb=caVolGet(b), ha=(typeof va==='number'), hb=(typeof vb==='number');
+        if(ha&&hb&&va!==vb)return sortMode==='vol_desc'?vb-va:va-vb;
+        if(ha!==hb)return ha?-1:1;
+        return _caResolveMetaDate(b).localeCompare(_caResolveMetaDate(a));
+      }
       default:          return (b.savedAt||0)-(a.savedAt||0); // date_desc
     }
   });
@@ -19331,8 +19415,26 @@ function DraftLibrary(props){
             :(function(){
               /* 2026-05-03: 年月見出し付き表示 (A1) + 月単位折り畳み (Q1〜Q5)
                  - charts は既存 sortMode で並び替え済み
+                 - 2026-10-23: ボラ順のときは見出しを外して全日付を1列で並べる
                  - 年月でグルーピング、年月降順 (新しい順)、(日付不明) は末尾
                  - 折り畳み state は expandedYM[selTicker][ym] (未設定 → 最新月のみ展開) */
+              function _card(m){
+                var isHighlight=highlightDate&&m.analysisDate&&m.analysisDate===highlightDate;
+                return ce(CaChartCard,{
+                  key:m.id,
+                  m:m,
+                  isHighlight:!!isHighlight,
+                  highlightDate:highlightDate,
+                  onOpen:openChart,
+                  onDelete:deleteChart,
+                  fbCfg:fbCfg,
+                  /* 2026-10-23: ボラ率 (常に表示。undefined=計算中) */
+                  showVol:true, vol:caVolGet(m),
+                  /* 2026-06-30: サムネカードからこの日をシミュレーション(非ブラインド) */
+                  onStartSim:function(){startSimulation(m);}
+                });
+              }
+              if(sortMode==='vol_desc'||sortMode==='vol_asc')return charts.map(_card);
               var groups={};      /* {ymKey: [m, m, ...]} */
               var orderRef={};    /* {ymKey: 最初に出現した index} */
               charts.forEach(function(m, idx){
@@ -19361,20 +19463,7 @@ function DraftLibrary(props){
                   ce("span",{style:{fontSize:10,color:"#666",fontWeight:400,marginLeft:6}},"("+groups[ym].length+"件)")
                 ));
                 if(!open) return;  /* 折り畳み中はチャートカードを描画しない */
-                groups[ym].forEach(function(m){
-                  var isHighlight=highlightDate&&m.analysisDate&&m.analysisDate===highlightDate;
-                  nodes.push(ce(CaChartCard,{
-                    key:m.id,
-                    m:m,
-                    isHighlight:!!isHighlight,
-                    highlightDate:highlightDate,
-                    onOpen:openChart,
-                    onDelete:deleteChart,
-                    fbCfg:fbCfg,
-                    /* 2026-06-30: サムネカードからこの日をシミュレーション(非ブラインド) */
-                    onStartSim:function(){startSimulation(m);}
-                  }));
-                });
+                groups[ym].forEach(function(m){ nodes.push(_card(m)); });
               });
               return nodes;
             })()
