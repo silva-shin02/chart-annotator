@@ -998,9 +998,12 @@ var _caShapeJumpReq=null;
 
 /* 2026-10-18: 前日終値の水平線の色 */
 var CA_PREV_CLOSE_COL='#9ca3af';
+/* 2026-10-24: バリューエリア (当日 VAH/VAL) の色・前日の目安線 (POC/VAH/VAL/高値/安値) の色 */
+var CA_VA_COL='#86efac';
+var CA_PREV_LV_COLS={poc:'#a78bfa',vah:'#4ade80',val:'#4ade80',high:'#f87171',low:'#60a5fa'};
 /* 2026-06-29: 指標(EMA/VWAP)の表示ON/OFF。既定は全表示=後方互換 */
 function caLoadIndicatorVis(){
-  var def={ema9:true,ema22:true,ema50:true,ema200:true,vwap:true,prevClose:true};
+  var def={ema9:true,ema22:true,ema50:true,ema200:true,vwap:true,prevClose:true,prevLevels:true};
   try{var v=JSON.parse(localStorage.getItem(CA_INDICATOR_VIS_KEY));
     if(v&&typeof v==='object')return Object.assign(def,v);}catch(e){}
   return def;
@@ -1687,7 +1690,8 @@ function DisplaySettingsModal(props){
     {k:'ema9',label:'EMA9',col:'#ffffff'},{k:'ema22',label:'EMA22',col:'#ffa9ff'},
     {k:'ema50',label:'EMA50',col:'#ff00ff'},{k:'ema200',label:'EMA200',col:'#a06bd0'},
     {k:'vwap',label:'VWAP',col:'#ffff00'},
-    {k:'prevClose',label:'前日終値',col:CA_PREV_CLOSE_COL}
+    {k:'prevClose',label:'前日終値',col:CA_PREV_CLOSE_COL},
+    {k:'prevLevels',label:'前日POC/VA/高安',col:CA_PREV_LV_COLS.poc}
   ];
   var CARD={background:"#1a1a1a",borderRadius:10,padding:"10px 12px",border:"1px solid #1e3a5f"};
   var HEAD={fontSize:13,fontWeight:700,color:"#a5b4fc",marginBottom:4};
@@ -1763,7 +1767,7 @@ function DisplaySettingsModal(props){
           /* 2026-06-29 C1: 指標の表示ON/OFF */
           ce("div",{style:CARD},
             ce("div",{style:HEAD},"📈 指標の表示 ON/OFF"),
-            ce("div",{style:DESC},"チャートに重ねる EMA / VWAP / 前日終値の表示を切り替えます（非表示の指標はY軸の自動フィットからも除外。前日終値はフィットに含めません）。"),
+            ce("div",{style:DESC},"チャートに重ねる EMA / VWAP / 前日終値 / 前日の目安線（POC・VAH/VAL・高値/安値）の表示を切り替えます（非表示の指標はY軸の自動フィットからも除外。前日の線はフィットに含めません）。"),
             ce("div",{style:{display:"flex",flexWrap:"wrap",gap:8}},
               INDS.map(function(it){
                 var on=indVis[it.k]!==false;
@@ -5752,7 +5756,30 @@ function caVpAggregate(bars1m, fromTm, toTm, pxPerYen, binPref, src, closeBars){
     levels.push({lo:lo, v:v});
     if(v>maxV){ maxV=v; bandLo=lo; }
   });
-  return {step:step, bin:bin, levels:levels, maxV:maxV, bandLo:bandLo, pocP:pocP, pocV:pocV, total:total, byClose:byClose};
+  var va=caVpValueArea(pocMap, pocP, step);
+  return {step:step, bin:bin, levels:levels, maxV:maxV, bandLo:bandLo, pocP:pocP, pocV:pocV, total:total, byClose:byClose,
+    vah:va?va.vah:null, val:va?va.val:null};
+}
+/* 2026-10-24: バリューエリア (出来高の70%が集まる価格帯)。POC と同じ集計 (pocMap=価格→出来高・POC から除く足を除いたもの) で、
+   POC から1呼値ずつ上下に広げ、隣の上と下のうち出来高の多い方を足していく (同じなら両方)。70% に届いたところの
+   いちばん上の価格=VAH・いちばん下の価格=VAL。出来高の無い値段も 0 として通過する。 */
+var CA_VA_FRAC=0.7;
+function caVpValueArea(pocMap, pocP, step){
+  if(pocP==null||!pocMap)return null;
+  step=step>0?step:1;
+  var keys=Object.keys(pocMap).map(Number); if(!keys.length)return null;
+  var tot=0; keys.forEach(function(k){tot+=pocMap[k];});
+  if(!(tot>0))return null;
+  var lo=Math.min.apply(null,keys), hi=Math.max.apply(null,keys);
+  function vAt(p){ var k=Math.round(p/step)*step; return pocMap[k]||pocMap[Math.round(k*10)/10]||0; }
+  var top=pocP, bot=pocP, acc=vAt(pocP), need=tot*CA_VA_FRAC, guard=0;
+  while(acc<need&&(top<hi-step*0.01||bot>lo+step*0.01)&&guard++<100000){
+    var canU=top<hi-step*0.01, canD=bot>lo+step*0.01;
+    var up=canU?vAt(top+step):-1, dn=canD?vAt(bot-step):-1;
+    if(up>=dn&&canU){ top=Math.round((top+step)*10)/10; acc+=up; }
+    if(dn>=up&&canD&&acc<need){ bot=Math.round((bot-step)*10)/10; acc+=dn; }
+  }
+  return {vah:top, val:bot};
 }
 /* ─── 2026-10-13: 全板風の価格帯別出来高パネル (チャート右端のオーバーレイ) ───────────────
    HyperSBI2 の全板「出来高」列と同じ数え方 = ティック(1分足の vp)を 寄り〜cutTm まで値段ごとに合計 (集計元の切替に関係なく常にティック)。
@@ -6416,6 +6443,22 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   });
   /* 2026-10-18: 前日終値 (prevClose={p,date}) — 価格エリアいっぱいに水平の点線＋左端に「前日終値 価格 (M/D)」。
      画面の上/下に外れているときは線を引かず、その端にラベルだけ ▲/▼ 付きで出す。Y軸フィットには含めない。 */
+  /* 2026-10-24: 前日の目安線 (前日POC / VAH / VAL / 高値 / 安値)。画面内にあるものだけ、価格エリアいっぱいに細い点線＋右寄りにラベル */
+  if(prevClose&&prevClose.lv&&!(_indVis&&_indVis.prevLevels===false)&&!(dim&&dim.thumbnail)){
+    [['poc','前日POC'],['vah','前日VAH'],['val','前日VAL'],['high','前日高値'],['low','前日安値']].forEach(function(it){
+      var pv=prevClose.lv[it[0]]; if(typeof pv!=='number')return;
+      var y=pToY(pv); if(y<priceTop||y>priceBot)return;
+      var col=CA_PREV_LV_COLS[it[0]];
+      ctx.save();
+      ctx.strokeStyle=col; ctx.globalAlpha=0.6; ctx.lineWidth=1; ctx.setLineDash([1,3]);
+      ctx.beginPath(); ctx.moveTo(padL,Math.round(y)+0.5); ctx.lineTo(padL+chartW,Math.round(y)+0.5); ctx.stroke();
+      ctx.setLineDash([]); ctx.globalAlpha=0.9;
+      ctx.font='bold 10px -apple-system,Helvetica,sans-serif';
+      ctx.textAlign='right'; ctx.textBaseline='bottom'; ctx.fillStyle=col;
+      ctx.fillText(it[1]+' '+(pv%1?pv.toFixed(1):Math.round(pv).toLocaleString()),padL+chartW*0.62,y-2);
+      ctx.restore();
+    });
+  }
   if(prevClose&&typeof prevClose.p==='number'&&!(_indVis&&_indVis.prevClose===false)&&!(dim&&dim.thumbnail)){
     var _pcY=pToY(prevClose.p);
     var _pcDm=String(prevClose.date||'').match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -6466,6 +6509,21 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
       ctx.fillStyle='#c4b5fd'; ctx.fillText(_pocTxt,padL+chartW*CA_VP_MAXW_FRAC+6,_pocY-2);
       ctx.restore();
     }
+  }
+  /* 2026-10-24: 当日のバリューエリア (VAH/VAL)。POC と同じ範囲の集計で、POC と同じくつまみ/カーソルに追従 */
+  if(_vp&&_vp.vah!=null&&_vp.val!=null){
+    [['VAH',_vp.vah],['VAL',_vp.val]].forEach(function(it){
+      var y=pToY(it[1]); if(y<priceTop||y>priceBot)return;
+      ctx.save();
+      ctx.strokeStyle=CA_VA_COL; ctx.globalAlpha=0.85; ctx.lineWidth=1; ctx.setLineDash([2,3]);
+      ctx.beginPath(); ctx.moveTo(padL,Math.round(y)+0.5); ctx.lineTo(padL+chartW,Math.round(y)+0.5); ctx.stroke();
+      ctx.setLineDash([]); ctx.globalAlpha=1;
+      ctx.font='bold 10px -apple-system,Helvetica,sans-serif';
+      ctx.textAlign='left'; ctx.textBaseline=(it[0]==='VAH'?'bottom':'top');
+      ctx.fillStyle=CA_VA_COL;
+      ctx.fillText(it[0]+' '+(_vp.step<1?it[1].toFixed(1):String(Math.round(it[1]))),padL+chartW*CA_VP_MAXW_FRAC+6,it[0]==='VAH'?y-2:y+2);
+      ctx.restore();
+    });
   }
   /* 2026-10-08: 帯の長さの平均線。平均 = 出来高のある帯の出来高の合計 ÷ 帯の本数 (空の帯は数えない)。
      帯と同じ縮尺 (最大の帯=描画域の25%) の位置に縦の点線を引く = これより長い帯は平均より多い。
@@ -8212,8 +8270,16 @@ function ImageAnnotator(props){
       if(!d)return null;
       if(cur&&d.date&&!(d.date<cur))return null;   /* 当日以降のチャートは使わない */
       var b=(d.bars_1m&&d.bars_1m.length)?d.bars_1m:(d.bars_5m||[]);
-      for(var i=b.length-1;i>=0;i--){ if(b[i]&&b[i].v>0&&typeof b[i].c==='number')return {p:b[i].c,date:d.date||''}; }
-      return null;
+      var r=null;
+      for(var i=b.length-1;i>=0;i--){ if(b[i]&&b[i].v>0&&typeof b[i].c==='number'){r={p:b[i].c,date:d.date||''};break;} }
+      if(!r)return null;
+      /* 2026-10-24: 前日の目安線 — 高値/安値 (約定した足) と 1日全体の POC/VAH/VAL (ティックがあればティック、無ければ1分終値) */
+      var hi=null, lo=null;
+      b.forEach(function(x){ if(x&&x.v>0){ if(hi==null||x.h>hi)hi=x.h; if(lo==null||x.l<lo)lo=x.l; } });
+      var b1=d.bars_1m||[], hasVp=b1.some(function(x){return x&&x.vp;});
+      var ag=b1.length?caVpAggregate(b1,0,24*60,1,'1',hasVp?'tick':'close',null):null;
+      r.lv={high:hi,low:lo,poc:ag?ag.pocP:null,vah:ag?ag.vah:null,val:ag?ag.val:null};
+      return r;
     }
     return pick(refAnalysis&&refAnalysis.analysisData)||pick(emaSeedData);
   },[analysisData,refAnalysis,emaSeedData]);
@@ -13629,6 +13695,26 @@ function caSnipEffText(s, byId){
 function _caStampGroupKey(p){ return p&&p.snipId?('id:'+p.snipId):('txt:'+((p&&p.text)||'')); }
 /* 全チャートを走査し、矢印(pointer)付きスタンプの配置を収集 (非同期)
    cb(placements[]) : {chartId,ticker,date,tf,tipTm,time,snipId,text,color} */
+/* 2026-10-24: スタンプのその後の値動き。基準 = 矢先の足の終値 (1分足=その1分足 / 5分足=その5分足の最後の1分足)。
+   k=1〜CA_STAMP_FWD_N 本あと(1分足の本数。昼休みはまたぐ)の終値の変化率%、その k 本の間の最大の伸び(高値)・最大の逆行(安値)の%。
+   足が足りない (大引け間際) ときはその k から先は null */
+var CA_STAMP_FWD_N=5;
+function caStampForward(bars1m, tipTm, tf){
+  if(!bars1m||!bars1m.length||typeof tipTm!=='number')return null;
+  var t0=(tf==='5m')?5*Math.round(tipTm/5)+4:Math.round(tipTm);
+  var idx=-1;
+  for(var i=0;i<bars1m.length;i++){ var m=_caVpTm(bars1m[i].t); if(m<=t0)idx=i; else break; }
+  if(idx<0)return null;
+  var base=bars1m[idx].c; if(!(base>0))return null;
+  var chg=[], up=[], dn=[], hi=-Infinity, lo=Infinity;
+  for(var k=1;k<=CA_STAMP_FWD_N;k++){
+    var b=bars1m[idx+k];
+    if(!b||!(b.c>0)){chg.push(null);up.push(null);dn.push(null);continue;}
+    if(b.h>hi)hi=b.h; if(b.l<lo)lo=b.l;
+    chg.push((b.c-base)/base*100); up.push((hi-base)/base*100); dn.push((lo-base)/base*100);
+  }
+  return {base:base, chg:chg, up:up, dn:dn};
+}
 function caCollectStampPlacements(charts, snippetsById, cb){
   charts=charts||[];
   var results=[]; var pending=charts.length;
@@ -13645,7 +13731,8 @@ function caCollectStampPlacements(charts, snippetsById, cb){
               var col=s.color||(snippetsById&&s.snipId&&snippetsById[s.snipId]?snippetsById[s.snipId].color:'#ff9500');
               results.push({chartId:m.id, ticker:m.ticker||'', date:_caResolveMetaDate(m), tf:tf,
                 tipTm:s.pointer.tipTm, time:stampTimeStr(s.pointer.tipTm, tf),
-                snipId:s.snipId||null, text:txt, color:col});
+                snipId:s.snipId||null, text:txt, color:col,
+                fwd:caStampForward(d.analysisData&&d.analysisData.bars_1m, s.pointer.tipTm, tf)});
             }
           });
         });
@@ -15285,6 +15372,21 @@ function CaStampLogModal(props){
 
   var BT={border:'none',cursor:'pointer',fontFamily:'inherit'};
   var total=(placements||[]).length;
+  /* 2026-10-24: 表示中のスタンプの「その後の値動き」集計 (k=1〜5分後)。平均変化率・上昇率(変化>0の割合)・平均の最大伸び/最大逆行 */
+  var fwdStats=useMemo(function(){
+    var rows=[];
+    for(var k=0;k<CA_STAMP_FWD_N;k++){
+      var n=0,sc=0,nu=0,su=0,sd=0;
+      shown.forEach(function(p){
+        var f=p.fwd; if(!f||f.chg[k]==null)return;
+        n++; sc+=f.chg[k]; if(f.chg[k]>0)nu++; su+=f.up[k]; sd+=f.dn[k];
+      });
+      rows.push({k:k+1,n:n,avg:n?sc/n:null,upRate:n?nu/n*100:null,mfe:n?su/n:null,mae:n?sd/n:null});
+    }
+    return rows;
+  },[shown]);
+  function _pct(v,d){ if(v==null)return '—'; return (v>0?'+':'')+v.toFixed(d==null?2:d)+'%'; }
+  function _pcol(v){ return v==null?'#555':v>0?'#f87171':v<0?'#60a5fa':'#aaa'; }
 
   return ReactDOM.createPortal(
     ce('div',{onClick:onClose,
@@ -15292,8 +15394,8 @@ function CaStampLogModal(props){
         display:'flex',alignItems:'center',justifyContent:'center',padding:16}},
       ce('div',{onClick:function(e){e.stopPropagation();},
         style:{background:'#1a1a1a',borderRadius:14,boxShadow:'0 8px 40px rgba(0,0,0,.9)',
-          display:'flex',flexDirection:'column',maxWidth:880,width:'100%',
-          maxHeight:'min(85vh,660px)',overflow:'hidden'}},
+          display:'flex',flexDirection:'column',maxWidth:1080,width:'100%',
+          maxHeight:'min(88vh,760px)',overflow:'hidden'}},
         /* ヘッダー */
         ce('div',{style:{padding:'12px 16px 10px',borderBottom:'1px solid #2a2a2a',
           display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0}},
@@ -15335,6 +15437,27 @@ function CaStampLogModal(props){
               ce('div',{style:{flex:1,overflowY:'auto',padding:'10px 12px'}},
                 ce('div',{style:{fontSize:11,color:'#888',marginBottom:8}},
                   (selKey==='__all__'?'すべて':(groups.map[selKey]?groups.map[selKey].label:''))+' — '+shown.length+'件'),
+                /* 2026-10-24: その後の値動き (矢先の足の終値が基準) */
+                ce('div',{style:{marginBottom:10,background:'#111',border:'1px solid #2a2a2a',borderRadius:8,padding:'8px 10px'}},
+                  ce('div',{style:{fontSize:11,color:'#aaa',fontWeight:700,marginBottom:6}},'その後の値動き（矢先の足の終値から）'),
+                  ce('table',{style:{borderCollapse:'collapse',fontSize:11,width:'100%',fontVariantNumeric:'tabular-nums'}},
+                    ce('thead',null,ce('tr',null,
+                      ['','件数','平均','上昇率','最大の伸び','最大の逆行'].map(function(h,i){
+                        return ce('th',{key:i,style:{textAlign:i?'right':'left',color:'#666',fontWeight:600,padding:'2px 6px'}},h);
+                      }))),
+                    ce('tbody',null,fwdStats.map(function(r){
+                      return ce('tr',{key:r.k,style:{borderTop:'1px solid #222'}},
+                        ce('td',{style:{color:'#ccc',padding:'3px 6px'}},r.k+'分後'),
+                        ce('td',{style:{textAlign:'right',color:'#888',padding:'3px 6px'}},r.n),
+                        ce('td',{style:{textAlign:'right',color:_pcol(r.avg),fontWeight:700,padding:'3px 6px'}},_pct(r.avg,3)),
+                        ce('td',{style:{textAlign:'right',color:'#ddd',padding:'3px 6px'}},r.upRate==null?'—':Math.round(r.upRate)+'%'),
+                        ce('td',{style:{textAlign:'right',color:'#f87171',padding:'3px 6px'}},_pct(r.mfe,3)),
+                        ce('td',{style:{textAlign:'right',color:'#60a5fa',padding:'3px 6px'}},_pct(r.mae,3)));
+                    }))
+                  ),
+                  ce('div',{style:{fontSize:10,color:'#555',marginTop:4}},
+                    '上昇率=終値が基準より上がった割合。最大の伸び/逆行=その分数までの高値/安値の基準からの%の平均。この端末にあるチャートのみ。')
+                ),
                 ce('div',{style:{display:'flex',flexDirection:'column',gap:5}},
                   shown.map(function(p,i){
                     return ce('button',{key:p.chartId+'_'+p.tf+'_'+i,
@@ -15349,6 +15472,15 @@ function CaStampLogModal(props){
                       ce('span',{style:{fontSize:11,color:'#888',minWidth:84,flexShrink:0}},p.date||'日付不明'),
                       selKey==='__all__'&&ce('span',{style:{fontSize:11,color:'#aaa',flex:1,
                         overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},p.text||''),
+                      selKey!=='__all__'&&ce('span',{style:{flex:1}}),
+                      /* 2026-10-24: 1〜5分後の変化率と、5分間の最大の伸び/逆行 */
+                      ce('span',{title:'1〜5分後の変化率',style:{display:'flex',gap:6,fontSize:10,flexShrink:0,fontVariantNumeric:'tabular-nums'}},
+                        (p.fwd?p.fwd.chg:[]).map(function(v,k){
+                          return ce('span',{key:k,style:{color:_pcol(v),minWidth:44,textAlign:'right'}},_pct(v));
+                        })),
+                      p.fwd&&ce('span',{title:'5分間の最大の伸び / 最大の逆行',style:{fontSize:10,flexShrink:0,color:'#888',fontVariantNumeric:'tabular-nums'}},
+                        ce('span',{style:{color:'#f87171'}},_pct(p.fwd.up[CA_STAMP_FWD_N-1])),' / ',
+                        ce('span',{style:{color:'#60a5fa'}},_pct(p.fwd.dn[CA_STAMP_FWD_N-1]))),
                       ce('span',{style:{fontSize:10,color:'#555',flexShrink:0}},p.tf)
                     );
                   })
