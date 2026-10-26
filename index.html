@@ -1003,7 +1003,9 @@ var CA_VA_COL='#86efac';
 var CA_PREV_LV_COLS={poc:'#a78bfa',vah:'#4ade80',val:'#4ade80',high:'#f87171',low:'#60a5fa'};
 /* 2026-06-29: 指標(EMA/VWAP)の表示ON/OFF。既定は全表示=後方互換 */
 function caLoadIndicatorVis(){
-  var def={ema9:true,ema22:true,ema50:true,ema200:true,vwap:true,prevClose:true,prevLevels:true};
+  /* 2026-10-26: 2026-10-24 に足した線 (当日 VAH/VAL・前日 POC/VAH/VAL/高値/安値) は1本ずつ切替・既定は非表示 (ユーザー指定) */
+  var def={ema9:true,ema22:true,ema50:true,ema200:true,vwap:true,prevClose:true,
+    vah:false,val:false,prevPoc:false,prevVah:false,prevVal:false,prevHigh:false,prevLow:false};
   try{var v=JSON.parse(localStorage.getItem(CA_INDICATOR_VIS_KEY));
     if(v&&typeof v==='object')return Object.assign(def,v);}catch(e){}
   return def;
@@ -1691,7 +1693,10 @@ function DisplaySettingsModal(props){
     {k:'ema50',label:'EMA50',col:'#ff00ff'},{k:'ema200',label:'EMA200',col:'#a06bd0'},
     {k:'vwap',label:'VWAP',col:'#ffff00'},
     {k:'prevClose',label:'前日終値',col:CA_PREV_CLOSE_COL},
-    {k:'prevLevels',label:'前日POC/VA/高安',col:CA_PREV_LV_COLS.poc}
+    {k:'vah',label:'VAH',col:CA_VA_COL},{k:'val',label:'VAL',col:CA_VA_COL},
+    {k:'prevPoc',label:'前日POC',col:CA_PREV_LV_COLS.poc},
+    {k:'prevVah',label:'前日VAH',col:CA_PREV_LV_COLS.vah},{k:'prevVal',label:'前日VAL',col:CA_PREV_LV_COLS.val},
+    {k:'prevHigh',label:'前日高値',col:CA_PREV_LV_COLS.high},{k:'prevLow',label:'前日安値',col:CA_PREV_LV_COLS.low}
   ];
   var CARD={background:"#1a1a1a",borderRadius:10,padding:"10px 12px",border:"1px solid #1e3a5f"};
   var HEAD={fontSize:13,fontWeight:700,color:"#a5b4fc",marginBottom:4};
@@ -1767,7 +1772,7 @@ function DisplaySettingsModal(props){
           /* 2026-06-29 C1: 指標の表示ON/OFF */
           ce("div",{style:CARD},
             ce("div",{style:HEAD},"📈 指標の表示 ON/OFF"),
-            ce("div",{style:DESC},"チャートに重ねる EMA / VWAP / 前日終値 / 前日の目安線（POC・VAH/VAL・高値/安値）の表示を切り替えます（非表示の指標はY軸の自動フィットからも除外。前日の線はフィットに含めません）。"),
+            ce("div",{style:DESC},"チャートに重ねる EMA / VWAP / 前日終値 / バリューエリア（VAH・VAL。価格帯別出来高の表示中のみ）/ 前日の目安線（POC・VAH・VAL・高値・安値）の表示を切り替えます（非表示の指標はY軸の自動フィットからも除外。前日の線・VAH/VAL はフィットに含めません）。"),
             ce("div",{style:{display:"flex",flexWrap:"wrap",gap:8}},
               INDS.map(function(it){
                 var on=indVis[it.k]!==false;
@@ -6444,8 +6449,9 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   /* 2026-10-18: 前日終値 (prevClose={p,date}) — 価格エリアいっぱいに水平の点線＋左端に「前日終値 価格 (M/D)」。
      画面の上/下に外れているときは線を引かず、その端にラベルだけ ▲/▼ 付きで出す。Y軸フィットには含めない。 */
   /* 2026-10-24: 前日の目安線 (前日POC / VAH / VAL / 高値 / 安値)。画面内にあるものだけ、価格エリアいっぱいに細い点線＋右寄りにラベル */
-  if(prevClose&&prevClose.lv&&!(_indVis&&_indVis.prevLevels===false)&&!(dim&&dim.thumbnail)){
-    [['poc','前日POC'],['vah','前日VAH'],['val','前日VAL'],['high','前日高値'],['low','前日安値']].forEach(function(it){
+  if(prevClose&&prevClose.lv&&!(dim&&dim.thumbnail)){
+    [['poc','前日POC','prevPoc'],['vah','前日VAH','prevVah'],['val','前日VAL','prevVal'],['high','前日高値','prevHigh'],['low','前日安値','prevLow']].forEach(function(it){
+      if(!(_indVis&&_indVis[it[2]]===true))return;   /* 2026-10-26: 設定で1本ずつ切替 (既定は非表示) */
       var pv=prevClose.lv[it[0]]; if(typeof pv!=='number')return;
       var y=pToY(pv); if(y<priceTop||y>priceBot)return;
       var col=CA_PREV_LV_COLS[it[0]];
@@ -6512,7 +6518,8 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   }
   /* 2026-10-24: 当日のバリューエリア (VAH/VAL)。POC と同じ範囲の集計で、POC と同じくつまみ/カーソルに追従 */
   if(_vp&&_vp.vah!=null&&_vp.val!=null){
-    [['VAH',_vp.vah],['VAL',_vp.val]].forEach(function(it){
+    [['VAH',_vp.vah,'vah'],['VAL',_vp.val,'val']].forEach(function(it){
+      if(!(_indVis&&_indVis[it[2]]===true))return;   /* 2026-10-26: 設定で1本ずつ切替 (既定は非表示) */
       var y=pToY(it[1]); if(y<priceTop||y>priceBot)return;
       ctx.save();
       ctx.strokeStyle=CA_VA_COL; ctx.globalAlpha=0.85; ctx.lineWidth=1; ctx.setLineDash([2,3]);
