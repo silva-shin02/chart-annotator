@@ -5816,10 +5816,11 @@ function CaVpLadder(props){
     }
     var keys=Object.keys(map).map(Number); if(!keys.length)return null;
     var lo=Math.min.apply(null,keys), hi=Math.max.apply(null,keys);
-    var rows=[], maxV=0, pocP=null;
-    for(var p=hi;p>=lo;p-=rs){ var v=map[p]||0; rows.push({p:p,v:v}); if(v>maxV){maxV=v;pocP=p;} }
+    var rows=[], maxV=0, pocP=null, sumV=0, nV=0;
+    for(var p=hi;p>=lo;p-=rs){ var v=map[p]||0; rows.push({p:p,v:v}); if(v>maxV){maxV=v;pocP=p;} if(v>0){sumV+=v;nV++;} }
     if(curP!=null)curP=Math.round(curP/rs)*rs;
-    return {rows:rows,maxV:maxV,pocP:pocP,curP:curP,rs:rs};
+    /* 2026-10-30: 平均 = 出来高のある値段の合計 ÷ その値段の数 (チャートの帯の平均線と同じ数え方。空の値段は数えない) */
+    return {rows:rows,maxV:maxV,pocP:pocP,curP:curP,rs:rs,avgV:nV?sumV/nV:0};
   },[bars,cut,ladMode,bStep]);
   /* 2026-10-14: 十字カーソルの価格 (親の cursorSubRef 経由で DataChart から直接届く。null=カーソル無し) */
   var sHovP=useState(null); var hovP=sHovP[0],setHovP=sHovP[1];
@@ -5875,6 +5876,9 @@ function CaVpLadder(props){
           boxShadow:opt.sel?'inset 0 0 0 1.5px #22d3ee':(opt.hov&&opt.cur?'inset 3px 0 0 #e8e070':'none')}},
       ce('div',{style:{flex:1,position:'relative',textAlign:'right',paddingRight:6,fontSize:12,lineHeight:RH+'px',color:'#e8e070',overflow:'hidden'}},
         w>0&&ce('div',{style:{position:'absolute',left:2,top:5,height:RH-10,width:w+'%',background:'#6b6b1f'}}),
+        /* 2026-10-30: 平均線 (横棒と同じ縮尺の位置に琥珀色の点線。値段の行だけ) */
+        opt.avgLine&&model&&model.maxV>0&&model.avgV>0&&ce('div',{style:{position:'absolute',top:0,bottom:0,
+          left:'calc(2px + '+Math.min(100,model.avgV/model.maxV*100)+'%)',borderLeft:'1px dashed rgba(245,158,11,0.9)',pointerEvents:'none'}}),
         ce('span',{style:{position:'relative'}},v>0?v.toLocaleString():'')),
       ce('div',{style:{width:62,flexShrink:0,textAlign:'center',fontSize:12,lineHeight:RH+'px',borderLeft:'1px solid #26262a',
         color:opt.hov?'#fff':(opt.labelCol||'#4ade80'),fontWeight:(opt.bold||opt.hov)?700:400}},label)
@@ -5910,7 +5914,8 @@ function CaVpLadder(props){
         style:{flex:1,minWidth:0,margin:0,accentColor:'#8b5cf6',cursor:'pointer',touchAction:'none'}}),
       ce('button',{onClick:function(){ if(cut!=null)props.onSetTime(cut+1); },title:'1分進める',style:stepBtnSt},'→')),
     ce('div',{style:{display:'flex',height:18,flexShrink:0,fontSize:10,color:'#888',borderBottom:'1px solid #2a2a2a'}},
-      ce('div',{style:{flex:1,textAlign:'center',lineHeight:'18px'}},'出来高'),
+      ce('div',{style:{flex:1,textAlign:'center',lineHeight:'18px'}},'出来高',
+        model&&model.avgV>0&&ce('span',{title:'出来高のある値段の平均 (点線の位置)',style:{color:'#f59e0b',marginLeft:4}},'平均 '+Math.round(model.avgV).toLocaleString())),
       ce('div',{style:{width:62,textAlign:'center',lineHeight:'18px',borderLeft:'1px solid #26262a'}},'値段')),
     !model
       ?ce('div',{style:{padding:12,fontSize:11,color:'#777'}},ladMode==='bar'?'この足の約定がありません':'この時刻までの約定がありません')
@@ -5920,7 +5925,7 @@ function CaVpLadder(props){
             style:{flex:1,minHeight:0,overflowY:'auto',overscrollBehavior:'contain',WebkitOverflowScrolling:'touch',touchAction:'pan-y'}},
           model.rows.map(function(r){
             return cellRow(r.p,(r.p%1?r.p.toFixed(1):Math.round(r.p).toLocaleString()),r.v,{
-              cur:r.p===model.curP, sel:r.p===selP, hov:r.p===(ladHovP!=null?ladHovP:hovRowP),
+              cur:r.p===model.curP, sel:r.p===selP, hov:r.p===(ladHovP!=null?ladHovP:hovRowP), avgLine:true,
               onEnter:function(){ setLadHovP(r.p); },
               labelCol:r.p===model.pocP?'#c4b5fd':null, bold:r.p===model.pocP,
               onClick:function(){ if(props.onSelect)props.onSelect(r.p===selP?null:r.p); },
