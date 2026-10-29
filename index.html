@@ -996,6 +996,8 @@ function caSetShapeMemo(id,html){
 /* 記録タップ→チャートを開いた後に撮影範囲へジャンプするための一時指示 (ImageAnnotator が消費) */
 var _caShapeJumpReq=null;
 
+/* 2026-10-29: 足の中の値段別出来高を描く、足1本の幅の下限 (px)。これより縮小していると描かない */
+var CA_FP_MIN_SLOT=30;
 /* 2026-10-18: 前日終値の水平線の色 */
 var CA_PREV_CLOSE_COL='#9ca3af';
 /* 2026-10-24: バリューエリア (当日 VAH/VAL) の色・前日の目安線 (POC/VAH/VAL/高値/安値) の色 */
@@ -1005,7 +1007,8 @@ var CA_PREV_LV_COLS={poc:'#a78bfa',vah:'#4ade80',val:'#4ade80',high:'#f87171',lo
 function caLoadIndicatorVis(){
   /* 2026-10-26: 2026-10-24 に足した線 (当日 VAH/VAL・前日 POC/VAH/VAL/高値/安値) は1本ずつ切替・既定は非表示 (ユーザー指定) */
   var def={ema9:true,ema22:true,ema50:true,ema200:true,vwap:true,prevClose:true,
-    vah:false,val:false,prevPoc:false,prevVah:false,prevVal:false,prevHigh:false,prevLow:false};
+    vah:false,val:false,prevPoc:false,prevVah:false,prevVal:false,prevHigh:false,prevLow:false,
+    footprint:true};
   try{var v=JSON.parse(localStorage.getItem(CA_INDICATOR_VIS_KEY));
     if(v&&typeof v==='object')return Object.assign(def,v);}catch(e){}
   return def;
@@ -1696,7 +1699,8 @@ function DisplaySettingsModal(props){
     {k:'vah',label:'VAH',col:CA_VA_COL},{k:'val',label:'VAL',col:CA_VA_COL},
     {k:'prevPoc',label:'前日POC',col:CA_PREV_LV_COLS.poc},
     {k:'prevVah',label:'前日VAH',col:CA_PREV_LV_COLS.vah},{k:'prevVal',label:'前日VAL',col:CA_PREV_LV_COLS.val},
-    {k:'prevHigh',label:'前日高値',col:CA_PREV_LV_COLS.high},{k:'prevLow',label:'前日安値',col:CA_PREV_LV_COLS.low}
+    {k:'prevHigh',label:'前日高値',col:CA_PREV_LV_COLS.high},{k:'prevLow',label:'前日安値',col:CA_PREV_LV_COLS.low},
+    {k:'footprint',label:'足の中の出来高(拡大時)',col:'#facc15'}
   ];
   var CARD={background:"#1a1a1a",borderRadius:10,padding:"10px 12px",border:"1px solid #1e3a5f"};
   var HEAD={fontSize:13,fontWeight:700,color:"#a5b4fc",marginBottom:4};
@@ -5795,11 +5799,17 @@ function caVpValueArea(pocMap, pocP, step){
 function CaVpLadder(props){
   var bars=props.bars||[], cut=props.cutTm, selP=props.selP;
   var RH=20;
+  /* 2026-10-29: 表示の切替 'cum'=寄り〜集計時刻の累計 / 'bar'=集計時刻の足1本だけ (5分足表示ならその5分足) */
+  var sLM=useState(function(){try{return localStorage.getItem('ca_vp_lad_mode_v1')==='bar'?'bar':'cum';}catch(e){return 'cum';}});
+  var ladMode=sLM[0], setLadMode=function(v){sLM[1](v);try{localStorage.setItem('ca_vp_lad_mode_v1',v);}catch(e){}};
+  var bStep=props.barStep||1;
+  var barFrom=(cut==null)?null:(bStep>1?bStep*Math.floor(cut/bStep):cut), barTo=(barFrom==null)?null:barFrom+bStep-1;
   var model=useMemo(function(){
     var rs=Math.max(1,caVpTickStep(bars));
     var map={}, curP=null;
     for(var i=0;i<bars.length;i++){
-      var b=bars[i], m=_caVpTm(b.t); if(cut!=null&&m>cut)continue;
+      var b=bars[i], m=_caVpTm(b.t); if(cut!=null&&m>cut&&!(ladMode==='bar'&&m<=barTo))continue;
+      if(ladMode==='bar'&&barFrom!=null&&(m<barFrom||m>barTo))continue;
       if(b.v>0&&b.c!=null)curP=b.c;
       var a=b.vp; if(!a)continue;
       for(var j=0;j<a.length;j+=2){ var k=Math.round(a[j]/rs)*rs; map[k]=(map[k]||0)+a[j+1]; }
@@ -5810,7 +5820,7 @@ function CaVpLadder(props){
     for(var p=hi;p>=lo;p-=rs){ var v=map[p]||0; rows.push({p:p,v:v}); if(v>maxV){maxV=v;pocP=p;} }
     if(curP!=null)curP=Math.round(curP/rs)*rs;
     return {rows:rows,maxV:maxV,pocP:pocP,curP:curP,rs:rs};
-  },[bars,cut]);
+  },[bars,cut,ladMode,bStep]);
   /* 2026-10-14: 十字カーソルの価格 (親の cursorSubRef 経由で DataChart から直接届く。null=カーソル無し) */
   var sHovP=useState(null); var hovP=sHovP[0],setHovP=sHovP[1];
   /* 2026-10-14: 全板パネル上でマウスを乗せている行 (青くするだけ。中央寄せ/スクロールはしない) */
@@ -5880,7 +5890,15 @@ function CaVpLadder(props){
         background:'rgba(12,12,14,0.95)',borderLeft:'1px solid #333',boxShadow:'-4px 0 12px rgba(0,0,0,.5)',
         fontVariantNumeric:'tabular-nums',userSelect:'none',WebkitUserSelect:'none'}},
     ce('div',{style:{display:'flex',alignItems:'center',padding:'4px 8px',borderBottom:'1px solid #2a2a2a',flexShrink:0}},
-      ce('span',{style:{flex:1,fontSize:11,fontWeight:700,color:'#ccc'}},'全板 出来高（寄り〜'+hhmm(cut)+'）'),
+      ce('span',{style:{flex:1,fontSize:11,fontWeight:700,color:'#ccc',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},
+        ladMode==='bar'?('この足 '+hhmm(barFrom)+(bStep>1?'〜'+hhmm(barTo):'')):('寄り〜'+hhmm(cut))),
+      /* 2026-10-29: 累計 / この足 の切替 */
+      ['cum','bar'].map(function(md){
+        var on=ladMode===md;
+        return ce('button',{key:md,onClick:function(){setLadMode(md);},title:md==='cum'?'寄りから集計時刻までの合計':'集計時刻の足1本だけ',
+          style:{border:'1px solid '+(on?'#8b5cf6':'#333'),background:on?'#2e1f5c':'#1a1a1a',color:on?'#ddd6fe':'#888',
+            fontSize:10,fontWeight:700,borderRadius:4,padding:'1px 5px',marginRight:3,cursor:'pointer',flexShrink:0}},md==='cum'?'累計':'この足');
+      }),
       ce('button',{onClick:props.onClose,title:'閉じる',
         style:{border:'none',background:'none',color:'#777',fontSize:14,cursor:'pointer',padding:'0 2px',lineHeight:1}},'✕')),
     /* 2026-10-14: 集計時刻のスライダー + ←→(1分ずつ)。チャートのつまみと同じ親の vpSetTime
@@ -5895,7 +5913,7 @@ function CaVpLadder(props){
       ce('div',{style:{flex:1,textAlign:'center',lineHeight:'18px'}},'出来高'),
       ce('div',{style:{width:62,textAlign:'center',lineHeight:'18px',borderLeft:'1px solid #26262a'}},'値段')),
     !model
-      ?ce('div',{style:{padding:12,fontSize:11,color:'#777'}},'この時刻までの約定がありません')
+      ?ce('div',{style:{padding:12,fontSize:11,color:'#777'}},ladMode==='bar'?'この足の約定がありません':'この時刻までの約定がありません')
       :ce(Fragment,null,
         cellRow('__over','OVER',over,{labelCol:'#ddd'}),
         ce('div',{ref:scRef,onScroll:updVis,onMouseLeave:function(){setLadHovP(null);},
@@ -6378,6 +6396,42 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
   }
   drawBarSet(visibleBars,'cur');
   if(hasRef)drawBarSet(visibleRefBars,'ref');
+  /* 2026-10-29: 足の中の値段別出来高 (フットプリント風)。拡大して足1本の幅が CA_FP_MIN_SLOT px 以上のときだけ、
+     各足の左端から値段ごとの出来高を横棒で重ねる (長さ=その足の中で一番出来た値段を足の幅いっぱい)。一番出来た値段は黄。
+     行の高さが足りれば株数も書く。当日側のみ・1分足の vp (5分足はその5本を合算)。設定の指標 ON/OFF「足の中の出来高」 */
+  (function(){
+    if(dim&&dim.thumbnail)return;
+    var iv=caLoadIndicatorVis(); if(iv&&iv.footprint===false)return;
+    var slot=(chartW/uSpan)*_baseStep; if(!(slot>=CA_FP_MIN_SLOT))return;
+    var b1=(data&&data.bars_1m)||[]; if(!b1.length)return;
+    var stp=caVpTickStep(b1), rowH=Math.max(1,stp*pxPerYen-1);
+    var byTm={}; b1.forEach(function(x){ if(x&&x.vp)byTm[_caVpTm(x.t)]=x.vp; });
+    ctx.save();
+    ctx.beginPath(); ctx.rect(padL,priceTop,chartW,priceH); ctx.clip();
+    ctx.font='9px -apple-system,Helvetica,sans-serif'; ctx.textBaseline='middle'; ctx.textAlign='left';
+    visibleBars.forEach(function(b){
+      var t0=_caVpTm(b.t), map={}, mx=0, mxP=null;
+      for(var k=0;k<_baseStep;k++){
+        var a=byTm[t0+k]; if(!a)continue;
+        for(var j=0;j<a.length;j+=2){ map[a[j]]=(map[a[j]]||0)+a[j+1]; }
+      }
+      Object.keys(map).forEach(function(p){ if(map[p]>mx){mx=map[p];mxP=+p;} });
+      if(!(mx>0))return;
+      var x0=Math.round(minToX(t0,'cur')-barW/2), wMax=slot*0.92;
+      Object.keys(map).forEach(function(pk){
+        var p=+pk, v=map[pk], y=pToY(p);
+        if(y<priceTop-rowH||y>priceBot+rowH)return;
+        var w=Math.max(1,v/mx*wMax);
+        ctx.fillStyle=(p===mxP)?'rgba(250,204,21,0.55)':'rgba(255,255,255,0.28)';
+        ctx.fillRect(x0,y-rowH/2,w,rowH);
+        if(rowH>=11){
+          ctx.fillStyle=(p===mxP)?'#fde68a':'rgba(255,255,255,0.85)';
+          ctx.fillText(v>=10000?(Math.round(v/1000)/10+'万'):String(v),x0+2,y);
+        }
+      });
+    });
+    ctx.restore();
+  })();
   /* 2026-09-17: 指定時刻より右(集計外)を暗くする — 出来高エリア分 (価格エリア分は指標線のあと・書き込みの前) */
   if(_vpDimCol){
     var _vdx=Math.max(padL,_vpCutX);
@@ -10848,6 +10902,7 @@ function ImageAnnotator(props){
             bars:((simMode?simDisplayData:emaContinuedData)||{}).bars_1m||[],
             top:metaRowH,
             cutTm:vpLadderCut(),
+            barStep:(!stackMode&&analysisTf==='5m')?5:1,   /* 2026-10-29: 「この足」の足の長さ */
             selP:vpLadSel,
             cursorSubRef:vpLadCurSubRef,
             onSelect:setVpLadSel,
