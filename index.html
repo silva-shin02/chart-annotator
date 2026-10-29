@@ -1008,7 +1008,7 @@ function caLoadIndicatorVis(){
   /* 2026-10-26: 2026-10-24 に足した線 (当日 VAH/VAL・前日 POC/VAH/VAL/高値/安値) は1本ずつ切替・既定は非表示 (ユーザー指定) */
   var def={ema9:true,ema22:true,ema50:true,ema200:true,vwap:true,prevClose:true,
     vah:false,val:false,prevPoc:false,prevVah:false,prevVal:false,prevHigh:false,prevLow:false,
-    footprint:true};
+    fp2:false};   /* 2026-10-30: 足の中の出来高はいったん既定オフ (ユーザー指定)。旧キー footprint は使わない (保存済みの ON を引き継がないため) */
   try{var v=JSON.parse(localStorage.getItem(CA_INDICATOR_VIS_KEY));
     if(v&&typeof v==='object')return Object.assign(def,v);}catch(e){}
   return def;
@@ -1700,7 +1700,7 @@ function DisplaySettingsModal(props){
     {k:'prevPoc',label:'前日POC',col:CA_PREV_LV_COLS.poc},
     {k:'prevVah',label:'前日VAH',col:CA_PREV_LV_COLS.vah},{k:'prevVal',label:'前日VAL',col:CA_PREV_LV_COLS.val},
     {k:'prevHigh',label:'前日高値',col:CA_PREV_LV_COLS.high},{k:'prevLow',label:'前日安値',col:CA_PREV_LV_COLS.low},
-    {k:'footprint',label:'足の中の出来高(拡大時)',col:'#facc15'}
+    {k:'fp2',label:'足の中の出来高(拡大時)',col:'#facc15'}
   ];
   var CARD={background:"#1a1a1a",borderRadius:10,padding:"10px 12px",border:"1px solid #1e3a5f"};
   var HEAD={fontSize:13,fontWeight:700,color:"#a5b4fc",marginBottom:4};
@@ -6401,7 +6401,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
      行の高さが足りれば株数も書く。当日側のみ・1分足の vp (5分足はその5本を合算)。設定の指標 ON/OFF「足の中の出来高」 */
   (function(){
     if(dim&&dim.thumbnail)return;
-    var iv=caLoadIndicatorVis(); if(iv&&iv.footprint===false)return;
+    var iv=caLoadIndicatorVis(); if(!(iv&&iv.fp2===true))return;
     var slot=(chartW/uSpan)*_baseStep; if(!(slot>=CA_FP_MIN_SLOT))return;
     var b1=(data&&data.bars_1m)||[]; if(!b1.length)return;
     var stp=caVpTickStep(b1), rowH=Math.max(1,stp*pxPerYen-1);
