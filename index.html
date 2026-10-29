@@ -5704,8 +5704,9 @@ function _caVpTm(t){ var s=String(t).split(':'); return (+s[0])*60+(+s[1]); }
 /* 2026-10-30: 呼値は値段の範囲で変わる (TOPIX500: 〜1,000円 0.1 / 〜3,000円 0.5 / 3,000円超 1 …、それ以外: 〜3,000円 1 / 〜5,000円 5 …)。
    TOPIX500 かどうかはデータに無いので、区切り(CA_TICK_BOUNDS・その値段「以下」が同じ区間)ごとに、その日の約定値段から刻みを判定する。
    約定の無い区間は、いちばん近い下の区間 (無ければ上の区間) の刻みを使う */
-var CA_TICK_BOUNDS=[1000,3000,5000,10000,30000,50000,100000,300000,500000,1000000,3000000,5000000,10000000,30000000,50000000];
-var CA_TICK_MAX=[1,1,5,10,10];
+/* 2026-10-31 (ユーザー指定): 区切りは3,000円だけ (3,000円以下 / 3,000円超)。3,000円ちょうどは下の区間 (東証の呼値表どおり) */
+var CA_TICK_BOUNDS=[3000];
+var CA_TICK_MAX=[1];
 function _caTickSeg(p){ for(var i=0;i<CA_TICK_BOUNDS.length;i++){ if(p<=CA_TICK_BOUNDS[i]+1e-9)return i; } return CA_TICK_BOUNDS.length; }
 function _caStepOfPrices(ps){
   var allHalf=true, allInt=true, all5=true, all10=true;
@@ -5723,8 +5724,7 @@ function caVpTickFn(bars1m){
   var segP={};
   (bars1m||[]).forEach(function(b){ var a=b&&b.vp; if(!a)return; for(var j=0;j<a.length;j+=2){ var g=_caTickSeg(a[j]); (segP[g]=segP[g]||[]).push(a[j]); } });
   var stepBy={}, keys=Object.keys(segP).map(Number).sort(function(x,y){return x-y;});
-  /* 約定が少ないと「全部10の倍数」等で粗く誤判定するので、その区間で取りうる一番粗い呼値で頭打ち
-     (〜3,000円は最大1円 / 〜5,000円は5円 / 〜30,000円は10円) */
+  /* 約定が少ないと「全部10の倍数」等で粗く誤判定するので、3,000円以下は最大1円で頭打ち */
   keys.forEach(function(g){ var st=_caStepOfPrices(segP[g]), mx=CA_TICK_MAX[g]; stepBy[g]=(mx!=null)?Math.min(st,mx):st; });
   return function(p){
     var g=_caTickSeg(p); if(stepBy[g]!=null)return stepBy[g];
