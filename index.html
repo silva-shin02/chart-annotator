@@ -359,10 +359,28 @@ function ColorPicker(props){
   }
 
   var GRID={display:"flex",flexWrap:"wrap",gap:8,justifyContent:"center"};
+  /* 2026-10-31: props.showMore=true (タグの色) のとき、クイック色の右に「自由な色」(端末の色選択) と「…」(プリセット/カスタム/履歴) を出す。
+     自由な色は選び終えた時 (change) だけ確定 (ドラッグ中に保存・同期が連打されないよう) */
+  var freeRef=useRef(null);
+  useEffect(function(){
+    var el=freeRef.current; if(!el)return;
+    function h(){ var c=el.value; onChange(c); onHistory(c); if(!quickColors.includes(c))onQuickColors([c].concat(quickColors).slice(0,9)); }
+    el.addEventListener('change',h);
+    return function(){el.removeEventListener('change',h);};
+  });
 
   return ce(Fragment,null,
     // Quick color dots
-    ce("div",{style:{display:"flex",gap:IS_TOUCH?10:8,alignItems:"center"}},
+    ce("div",{style:{display:"flex",gap:IS_TOUCH?10:8,alignItems:"center",flexWrap:props.showMore?"wrap":"nowrap"}},
+      props.showMore&&ce("label",{key:'__free',title:"好きな色を選ぶ",
+        style:{position:"relative",width:QSZ,height:QSZ,borderRadius:"50%",cursor:"pointer",flexShrink:0,order:99,
+          background:"conic-gradient(red,yellow,lime,cyan,blue,magenta,red)",border:"2px solid rgba(255,255,255,.5)",boxSizing:"border-box"}},
+        ce("input",{ref:freeRef,type:"color",defaultValue:/^#[0-9a-f]{6}$/i.test(value||'')?value:'#ff0000',
+          style:{position:"absolute",opacity:0,width:1,height:1,left:0,top:0}})),
+      props.showMore&&ce("span",{key:'__more',title:"プリセット・カスタム・履歴から選ぶ",
+        onClick:function(){setEditingSlot(null);setCustomVal(/^#[0-9a-f]{6}$/i.test(value||'')?value:'#ff0000');setTab("custom");setOpen(true);},
+        style:{order:100,height:QSZ,padding:"0 9px",borderRadius:QSZ/2,display:"flex",alignItems:"center",cursor:"pointer",flexShrink:0,
+          background:"#2a2a2a",color:"#ccc",fontSize:12,fontWeight:700,border:"1px solid #444",boxSizing:"border-box",whiteSpace:"nowrap"}},"その他…"),
       quickColors.map(function(c,i){
         var isA=value===c;
         return ce("span",{key:i,onClick:function(){onQClick(c,i);},
@@ -13547,7 +13565,7 @@ function CaTagSelector(props){
           onMouseDown:function(e){e.preventDefault();},onClick:function(){deleteTag(d.id);}},'×')
       ),
       isEdCol&&ce('div',{style:{margin:'6px 0 4px',padding:'8px 10px',background:'#222',borderRadius:8,border:'1px solid #2a2a2a'}},
-        ce(ColorPicker,{value:d.color,
+        ce(ColorPicker,{value:d.color,showMore:true,
           onChange:function(c){changeTagColor(d.id,c);},
           history:tagCH,onHistory:pushTagCH,quickColors:tagQC,onQuickColors:saveTagQC})
       )
@@ -13914,7 +13932,7 @@ function TagManagerPage(props){
       editColorDef&&ce('div',{style:{margin:'4px 0 8px',padding:'10px 12px',
         background:'#1a1a1a',borderRadius:8,border:'1px solid #2a2a2a'}},
         ce('div',{style:{fontSize:11,color:'#888',marginBottom:8}},'"'+editColorDef.name+'" の色'),
-        ce(ColorPicker,{value:editColorDef.color,
+        ce(ColorPicker,{value:editColorDef.color,showMore:true,
           onChange:function(c){changeTagColor(editColorId,c);},
           history:tagCH,onHistory:pushTagCH,quickColors:tagQC,onQuickColors:saveTagQC})
       ),
