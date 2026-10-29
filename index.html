@@ -706,7 +706,8 @@ var CA_PEN_ONLY_KEY='ca_pen_only_v1';
 /* 2026-07-07: 価格軸グリッドの最小刻み (5 or 10円)。既定10=従来。5でグリッド線/ラベルを5円刻みで表示 */
 var CA_PRICE_GRID_STEP_KEY='ca_price_grid_step_v1';
 /* 2026-08-03: シミュ開始時に「寄り付きから何分ぶん」を開示済みにしておくか (分)。0=従来の0本から。既定15 */
-var CA_SIM_START_MIN_KEY='ca_sim_start_min_v1';
+/* 2026-10-30: 既定を「寄り付き1本目」に変更 (ユーザー指定)。保存済みの旧値(既定15)を引き継がないようキーを v2 に */
+var CA_SIM_START_MIN_KEY='ca_sim_start_min_v2';
 /* 2026-09-17: 価格帯別出来高の表示ON/OFF・集計モード ('visible'=表示範囲 / 'until'=寄り〜指定時刻)。全チャート共通 */
 var CA_VP_ON_KEY='ca_vp_on_v1';
 var CA_VP_MODE_KEY='ca_vp_mode_v1';
@@ -1054,11 +1055,11 @@ function caSaveDefaultTf(t){
 function caLoadSimStartMin(){
   try{
     var v=localStorage.getItem(CA_SIM_START_MIN_KEY);
-    if(v===null||v==='')return 15;
+    if(v===null||v==='')return 1;
     var n=parseInt(v,10);
-    if(isNaN(n)||n<0)return 15;
+    if(isNaN(n)||n<0)return 1;
     return n>360?360:n;
-  }catch(e){return 15;}
+  }catch(e){return 1;}
 }
 function caSaveSimStartMin(n){
   var v=parseInt(n,10);
@@ -1859,7 +1860,7 @@ function DisplaySettingsModal(props){
               "練習モードを開いた直後に、寄り付きから何分ぶんの足を表示済みにしておくか。",ce("br",null),
               "寄り付き = その日の最初に出来高が付いた足。特別気配で寄りが遅れた日も、実際に寄ってからの経過で揃います。"),
             ce("div",{style:{display:"flex",gap:6,flexWrap:"wrap"}},
-              [{v:0,label:'0本'},{v:5,label:'5分'},{v:10,label:'10分'},{v:15,label:'15分'},{v:30,label:'30分'},{v:60,label:'60分'}].map(function(o){
+              [{v:0,label:'0本'},{v:1,label:'1本目'},{v:5,label:'5分'},{v:10,label:'10分'},{v:15,label:'15分'},{v:30,label:'30分'},{v:60,label:'60分'}].map(function(o){
                 var sel=simStartMin===o.v;
                 return ce("button",{key:o.v,onClick:function(){updateSimStartMin(o.v);},
                   style:{flex:"1 1 62px",padding:"9px 6px",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer",
@@ -1868,7 +1869,9 @@ function DisplaySettingsModal(props){
               })
             ),
             ce("div",{style:{fontSize:11,color:"#777",marginTop:8}},
-              simStartMin>0
+              simStartMin===1
+                ?"寄り付きの1本目だけを表示した状態で始まります"
+                :simStartMin>0
                 ?("寄り付きから "+simStartMin+"分ぶん (1分足で"+simStartMin+"本) を表示した状態で始まります")
                 :"当日足0本 (前日チャートのみ) から始まります")
           )
@@ -8037,7 +8040,7 @@ function ImageAnnotator(props){
   useEffect(function(){
     if(simMode&&analysisData&&!simInitRef.current){
       simInitRef.current=true;
-      setSimCutoffTm(simInitialCutoff(analysisData));   /* 2026-08-03: 既定=寄りから15分ぶん開示済み (設定で変更可・0で従来の0本) */
+      setSimCutoffTm(simInitialCutoff(analysisData));   /* 2026-08-03: 寄りから◯分ぶん開示済み (設定で変更可・0で0本)。2026-10-30〜既定は寄り付き1本目 */
       loadPrevChart(true,true);           /* strictOnly + silent */
     }
   },[simMode,analysisData]);
