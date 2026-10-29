@@ -5701,6 +5701,39 @@ function DataChart(props){
 function caVpHasData(d){ return !!(d&&d.vp_ver&&Array.isArray(d.bars_1m)); }
 function _caVpTm(t){ var s=String(t).split(':'); return (+s[0])*60+(+s[1]); }
 /* 当日の約定価格から呼値の刻みを推定 (10 / 5 / 1 / 0.5 / 0.1)。棒の刻みはこれ未満にしない */
+/* 2026-10-30: 呼値は値段の範囲で変わる (TOPIX500: 〜1,000円 0.1 / 〜3,000円 0.5 / 3,000円超 1 …、それ以外: 〜3,000円 1 / 〜5,000円 5 …)。
+   TOPIX500 かどうかはデータに無いので、区切り(CA_TICK_BOUNDS・その値段「以下」が同じ区間)ごとに、その日の約定値段から刻みを判定する。
+   約定の無い区間は、いちばん近い下の区間 (無ければ上の区間) の刻みを使う */
+var CA_TICK_BOUNDS=[1000,3000,5000,10000,30000,50000,100000,300000,500000,1000000,3000000,5000000,10000000,30000000,50000000];
+var CA_TICK_MAX=[1,1,5,10,10];
+function _caTickSeg(p){ for(var i=0;i<CA_TICK_BOUNDS.length;i++){ if(p<=CA_TICK_BOUNDS[i]+1e-9)return i; } return CA_TICK_BOUNDS.length; }
+function _caStepOfPrices(ps){
+  var allHalf=true, allInt=true, all5=true, all10=true;
+  ps.forEach(function(p){
+    if(Math.abs(p*2-Math.round(p*2))>1e-6)allHalf=false;
+    if(Math.abs(p-Math.round(p))>1e-6)allInt=false;
+    else { var r=Math.round(p); if(r%5!==0)all5=false; if(r%10!==0)all10=false; }
+  });
+  if(!allHalf)return 0.1;
+  if(!allInt)return 0.5;
+  /* 1銘柄で1,000円以上の刻み(5円/10円…)は、その区間の約定が全部その倍数のときだけ */
+  return all10?10:all5?5:1;
+}
+function caVpTickFn(bars1m){
+  var segP={};
+  (bars1m||[]).forEach(function(b){ var a=b&&b.vp; if(!a)return; for(var j=0;j<a.length;j+=2){ var g=_caTickSeg(a[j]); (segP[g]=segP[g]||[]).push(a[j]); } });
+  var stepBy={}, keys=Object.keys(segP).map(Number).sort(function(x,y){return x-y;});
+  /* 約定が少ないと「全部10の倍数」等で粗く誤判定するので、その区間で取りうる一番粗い呼値で頭打ち
+     (〜3,000円は最大1円 / 〜5,000円は5円 / 〜30,000円は10円) */
+  keys.forEach(function(g){ var st=_caStepOfPrices(segP[g]), mx=CA_TICK_MAX[g]; stepBy[g]=(mx!=null)?Math.min(st,mx):st; });
+  return function(p){
+    var g=_caTickSeg(p); if(stepBy[g]!=null)return stepBy[g];
+    var lo=null, hi=null; keys.forEach(function(k){ if(k<g)lo=k; else if(hi==null)hi=k; });
+    return (lo!=null)?stepBy[lo]:(hi!=null)?stepBy[hi]:1;
+  };
+}
+/* 1つ下の行の値段 (区切りをまたぐと刻みが変わる: 3001 → 3000 → 2999.5) */
+function caVpPrevRow(p,tfn){ return Math.round((p-tfn(p-1e-6))*10)/10; }
 /* 2026-10-30: 値段を呼値(rs)の行にまとめる (0.5円/0.1円刻みでも小数の誤差が出ないよう0.1円で丸める) */
 function caVpRowP(p,rs){ return Math.round(Math.round(p/rs)*rs*10)/10; }
 function caVpTickStep(bars1m){
@@ -5781,20 +5814,36 @@ function caVpAggregate(bars1m, fromTm, toTm, pxPerYen, binPref, src, closeBars){
     var v=pocMap[k];
     if(v>pocV){ pocV=v; pocP=+k; }
   });
-  Object.keys(map).forEach(function(k){
-    var p=+k, v=map[k];
-    /* 2026-09-29: HyperSBI2 と同じ右閉じ (lo, lo+bin] = 価格が帯の上端に来る。
-       1円刻みなら価格 C の帯は [C-1, C]。実データ(5016 2026-09-29)で9本とも一致を確認済み (close)。
-       2026-09-30: tick も同じ切り方にする (切替えても帯の境目が動かない) */
-    var idx=Math.ceil((p-step*0.01)/bin)-1;   /* 小数価格の境界誤差よけ */
-    bins[idx]=(bins[idx]||0)+v;
-  });
   var levels=[], maxV=0, bandLo=null;
-  Object.keys(bins).forEach(function(k){
-    var v=bins[k], lo=Math.round((+k)*bin*10)/10;
-    levels.push({lo:lo, v:v});
-    if(v>maxV){ maxV=v; bandLo=lo; }
-  });
+  if(binPref==='1'){
+    /* 2026-10-30: 呼値ごとの帯。値段の範囲で呼値が変わる日 (3,000円をまたぐ等) は帯の高さも範囲ごとに変わる。
+       帯 = (価格−その呼値, 価格] (価格が帯の上端) */
+    var tfn=caVpTickFn(bars1m), tops={};
+    Object.keys(map).forEach(function(k){
+      var p=+k, s=tfn(p), top=caVpRowP(p,s);
+      if(!tops[top])tops[top]={v:0,h:s};
+      tops[top].v+=map[k];
+    });
+    Object.keys(tops).forEach(function(k){
+      var t=tops[k], lo=Math.round((+k-t.h)*10)/10;
+      levels.push({lo:lo, v:t.v, h:t.h});
+      if(t.v>maxV){ maxV=t.v; bandLo=lo; }
+    });
+  }else{
+    Object.keys(map).forEach(function(k){
+      var p=+k, v=map[k];
+      /* 2026-09-29: HyperSBI2 と同じ右閉じ (lo, lo+bin] = 価格が帯の上端に来る。
+         1円刻みなら価格 C の帯は [C-1, C]。実データ(5016 2026-09-29)で9本とも一致を確認済み (close)。
+         2026-09-30: tick も同じ切り方にする (切替えても帯の境目が動かない) */
+      var idx=Math.ceil((p-step*0.01)/bin)-1;   /* 小数価格の境界誤差よけ */
+      bins[idx]=(bins[idx]||0)+v;
+    });
+    Object.keys(bins).forEach(function(k){
+      var v=bins[k], lo=Math.round((+k)*bin*10)/10;
+      levels.push({lo:lo, v:v, h:bin});
+      if(v>maxV){ maxV=v; bandLo=lo; }
+    });
+  }
   var va=caVpValueArea(pocMap, pocP, step);
   return {step:step, bin:bin, levels:levels, maxV:maxV, bandLo:bandLo, pocP:pocP, pocV:pocV, total:total, byClose:byClose,
     vah:va?va.vah:null, val:va?va.val:null};
@@ -5835,24 +5884,26 @@ function CaVpLadder(props){
   var bStep=props.barStep||1;
   var barFrom=(cut==null)?null:(bStep>1?bStep*Math.floor(cut/bStep):cut), barTo=(barFrom==null)?null:barFrom+bStep-1;
   var model=useMemo(function(){
-    /* 2026-10-30: 行は呼値ごと (0.5円・0.1円の銘柄もその刻み。旧: 1円未満は1円にまとめていた) */
-    var rs=caVpTickStep(bars);
+    /* 2026-10-30: 行は呼値ごと (0.5円・0.1円の銘柄もその刻み。旧: 1円未満は1円にまとめていた)。
+       値段の範囲で呼値が変わる日 (3,000円をまたぐ等) は、範囲ごとの刻みで行を作る (caVpTickFn) */
+    var rs=caVpTickStep(bars), tfn=caVpTickFn(bars);
     var map={}, curP=null;
     for(var i=0;i<bars.length;i++){
       var b=bars[i], m=_caVpTm(b.t); if(cut!=null&&m>cut&&!(ladMode==='bar'&&m<=barTo))continue;
       if(ladMode==='bar'&&barFrom!=null&&(m<barFrom||m>barTo))continue;
       if(b.v>0&&b.c!=null)curP=b.c;
       var a=b.vp; if(!a)continue;
-      for(var j=0;j<a.length;j+=2){ var k=caVpRowP(a[j],rs); map[k]=(map[k]||0)+a[j+1]; }
+      for(var j=0;j<a.length;j+=2){ var k=caVpRowP(a[j],tfn(a[j])); map[k]=(map[k]||0)+a[j+1]; }
     }
     var keys=Object.keys(map).map(Number); if(!keys.length)return null;
     var lo=Math.min.apply(null,keys), hi=Math.max.apply(null,keys);
     var rows=[], maxV=0, pocP=null, sumV=0, nV=0;
-    var nR=Math.round((hi-lo)/rs);
-    for(var ri=0;ri<=nR;ri++){ var p=caVpRowP(hi-ri*rs,rs), v=map[p]||0; rows.push({p:p,v:v}); if(v>maxV){maxV=v;pocP=p;} if(v>0){sumV+=v;nV++;} }
-    if(curP!=null)curP=caVpRowP(curP,rs);
+    for(var p=hi, guard=0; p>=lo-1e-9&&guard<200000; p=caVpPrevRow(p,tfn), guard++){
+      var v=map[p]||0; rows.push({p:p,v:v}); if(v>maxV){maxV=v;pocP=p;} if(v>0){sumV+=v;nV++;}
+    }
+    if(curP!=null)curP=caVpRowP(curP,tfn(curP));
     /* 2026-10-30: 平均 = 出来高のある値段の合計 ÷ その値段の数 (チャートの帯の平均線と同じ数え方。空の値段は数えない) */
-    return {rows:rows,maxV:maxV,pocP:pocP,curP:curP,rs:rs,avgV:nV?sumV/nV:0};
+    return {rows:rows,maxV:maxV,pocP:pocP,curP:curP,rs:rs,tfn:tfn,avgV:nV?sumV/nV:0};
   },[bars,cut,ladMode,bStep]);
   /* 2026-10-14: 十字カーソルの価格 (親の cursorSubRef 経由で DataChart から直接届く。null=カーソル無し) */
   var sHovP=useState(null); var hovP=sHovP[0],setHovP=sHovP[1];
@@ -5878,7 +5929,7 @@ function CaVpLadder(props){
     updVis();
   },[curP,nRows]);
   /* 2026-10-14: 十字カーソルの値段の行を中央へ。カーソルが消えたら (チャート外・出来高域・価格軸・全板の上) 現在値=黄の行を中央へ戻す */
-  var hovRowP=(model&&hovP!=null)?caVpRowP(hovP,model.rs):null;
+  var hovRowP=(model&&hovP!=null)?caVpRowP(hovP,model.tfn(hovP)):null;
   useEffect(function(){
     var el=scRef.current; if(!el||!model)return;
     var tgt=(hovRowP!=null)?hovRowP:model.curP; if(tgt==null)return;
@@ -6397,7 +6448,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
       _vp.levels.forEach(function(lv){
         /* 2026-09-29: HyperSBI2 は価格 C の帯を [C-刻み, C] に描く (価格が帯の上端)。
            2026-09-30: tick も同じ位置に揃える */
-        var yT=pToY(lv.lo+_vp.bin), yB=pToY(lv.lo);
+        var yT=pToY(lv.lo+(lv.h||_vp.bin)), yB=pToY(lv.lo);
         if(yB<priceTop||yT>priceBot)return;
         /* 帯が十分太いときだけ1pxの隙間。細いときに隙間を入れると縞模様になり山の形が読めない */
         var h=yB-yT; if(h>=CA_VP_AUTO_MIN_PX){ yT+=0.5; h-=1; }
@@ -6630,7 +6681,7 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     var _avgV=_vp.total/_vp.levels.length;
     var _avgX=Math.round(padL+Math.max(1,_avgV/_vp.maxV*chartW*CA_VP_MAXW_FRAC))+0.5;
     var _loP=Infinity, _hiP=-Infinity;
-    _vp.levels.forEach(function(lv){ if(lv.lo<_loP)_loP=lv.lo; if(lv.lo+_vp.bin>_hiP)_hiP=lv.lo+_vp.bin; });
+    _vp.levels.forEach(function(lv){ if(lv.lo<_loP)_loP=lv.lo; if(lv.lo+(lv.h||_vp.bin)>_hiP)_hiP=lv.lo+(lv.h||_vp.bin); });
     var _avgYt=Math.max(priceTop,pToY(_hiP)), _avgYb=Math.min(priceBot,pToY(_loP));
     if(_avgYb>_avgYt){
       ctx.save();
@@ -6651,14 +6702,14 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
      (点の大きさ = その足でのその値段の出来高。5分足ペインは1分足の vp を5分ごとに合算して足の位置に) */
   if(vpOpt&&vpOpt.on&&vpOpt.selP!=null&&!isThumbnail&&caVpHasData(data)){
     var _sp=vpOpt.selP, _spY=pToY(_sp);
-    var _spRs=caVpTickStep(data.bars_1m);   /* 2026-10-30: 全板の行と同じ呼値ごと */
+    var _spTf=caVpTickFn(data.bars_1m);   /* 2026-10-30: 全板の行と同じ呼値ごと (値段の範囲ごとの刻み) */
     var _spTo=(_vpTo!=null)?_vpTo:1e9;
     var _spB={}, _spMax=0;
     data.bars_1m.forEach(function(b){
       var a=b&&b.vp; if(!a)return;
       var m=_caVpTm(b.t); if(m>_spTo)return;
       var v=0;
-      for(var j=0;j<a.length;j+=2){ if(caVpRowP(a[j],_spRs)===_sp)v+=a[j+1]; }
+      for(var j=0;j<a.length;j+=2){ if(caVpRowP(a[j],_spTf(a[j]))===_sp)v+=a[j+1]; }
       if(!(v>0))return;
       var k=(tf==='5m')?5*Math.floor(m/5):m;
       _spB[k]=(_spB[k]||0)+v; if(_spB[k]>_spMax)_spMax=_spB[k];
