@@ -708,6 +708,8 @@ var CA_PRICE_GRID_STEP_KEY='ca_price_grid_step_v1';
 /* 2026-08-03: シミュ開始時に「寄り付きから何分ぶん」を開示済みにしておくか (分)。0=従来の0本から。既定15 */
 /* 2026-10-30: 既定を「寄り付き1本目」に変更 (ユーザー指定)。保存済みの旧値(既定15)を引き継がないようキーを v2 に */
 var CA_SIM_START_MIN_KEY='ca_sim_start_min_v2';
+/* 2026-10-30: シミュ開始時に前日チャートを自動で並べるか (既定=並べない・ユーザー指定) */
+var CA_SIM_PREV_REF_KEY='ca_sim_prev_ref_v1';
 /* 2026-09-17: 価格帯別出来高の表示ON/OFF・集計モード ('visible'=表示範囲 / 'until'=寄り〜指定時刻)。全チャート共通 */
 var CA_VP_ON_KEY='ca_vp_on_v1';
 var CA_VP_MODE_KEY='ca_vp_mode_v1';
@@ -727,7 +729,7 @@ var CA_VP_MAXW_FRAC=0.40;
 var CA_VP_SRC_UI=true;
 var CA_SYNC_PREF_KEYS=[CA_PRICE_PX_KEY,CA_AUTO_PAN_KEY,CA_CHART_BG_KEY,CA_TICKER_CODES_KEY,
   CA_INDICATOR_VIS_KEY,CA_FIT_MODE_KEY,CA_DEFAULT_TF_KEY,CA_DRAW_DEFAULTS_KEY,CA_PEN_ONLY_KEY,
-  CA_PRICE_GRID_STEP_KEY,CA_SIM_START_MIN_KEY,CA_VP_ON_KEY,CA_VP_MODE_KEY,CA_VP_BIN_KEY,CA_VP_SRC_KEY,CA_VP_AVG_KEY,
+  CA_PRICE_GRID_STEP_KEY,CA_SIM_START_MIN_KEY,CA_SIM_PREV_REF_KEY,CA_VP_ON_KEY,CA_VP_MODE_KEY,CA_VP_BIN_KEY,CA_VP_SRC_KEY,CA_VP_AVG_KEY,
   'ca_search_words_v1','scalping_annot_presets_v1','annot_quickcolors_v1'];
 var CA_PREF_EVENTS={};
 CA_PREF_EVENTS[CA_PRICE_PX_KEY]='ca_price_px_changed';
@@ -1060,6 +1062,12 @@ function caLoadSimStartMin(){
     if(isNaN(n)||n<0)return 1;
     return n>360?360:n;
   }catch(e){return 1;}
+}
+function caLoadSimPrevRef(){ try{return localStorage.getItem(CA_SIM_PREV_REF_KEY)==='1';}catch(e){return false;} }
+function caSaveSimPrevRef(on){
+  try{localStorage.setItem(CA_SIM_PREV_REF_KEY,on?'1':'0');}catch(e){caStorageWarn();}
+  caPrefPush(CA_SIM_PREV_REF_KEY);
+  return !!on;
 }
 function caSaveSimStartMin(n){
   var v=parseInt(n,10);
@@ -1635,6 +1643,7 @@ function DisplaySettingsModal(props){
   function updateDefTf(t){var s=(t==='5m'||t==='stack')?t:'1m';setDefTf(s);caSaveDefaultTf(s);}
   /* 2026-08-03: シミュ開始時の開示量 (寄り付きから何分ぶん) */
   var sSS=useState(caLoadSimStartMin()); var simStartMin=sSS[0],setSimStartMin=sSS[1];
+  var sSPR=useState(caLoadSimPrevRef()); var simPrevRef=sSPR[0],setSimPrevRef=sSPR[1];
   function updateSimStartMin(n){setSimStartMin(caSaveSimStartMin(n));}
   /* 2026-06-29 C2: 描画の既定値 */
   var sDD=useState(caLoadDrawDefaults()); var drawDef=sDD[0],setDrawDef=sDD[1];
@@ -1873,7 +1882,21 @@ function DisplaySettingsModal(props){
                 ?"寄り付きの1本目だけを表示した状態で始まります"
                 :simStartMin>0
                 ?("寄り付きから "+simStartMin+"分ぶん (1分足で"+simStartMin+"本) を表示した状態で始まります")
-                :"当日足0本 (前日チャートのみ) から始まります")
+                :"当日足0本から始まります")
+          ),
+          /* 2026-10-30: シミュで前日チャートを並べるか (既定=並べない) */
+          ce("div",{style:CARD},
+            ce("div",{style:HEAD},"▶ シミュレーションで前日チャートを並べる"),
+            ce("div",{style:DESC},"練習モードを開いたとき、前日の足を当日の左に自動で並べるか。並べなくても、エディタの「前日チャート」ボタンで後から出せます。"),
+            ce("div",{style:{display:"flex",gap:6}},
+              [{v:false,label:'並べない'},{v:true,label:'並べる'}].map(function(o){
+                var sel=simPrevRef===o.v;
+                return ce("button",{key:String(o.v),onClick:function(){setSimPrevRef(caSaveSimPrevRef(o.v));},
+                  style:{flex:1,padding:"9px 6px",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer",
+                    borderRadius:8,border:"1px solid "+(sel?"#6366F1":"#3a3a3a"),
+                    background:sel?"#26204d":"#2a2a2a",color:sel?"#c4b5fd":"#aaa"}},o.label+(sel?" ✓":""));
+              })
+            )
           )
         ),
 
@@ -8041,7 +8064,8 @@ function ImageAnnotator(props){
     if(simMode&&analysisData&&!simInitRef.current){
       simInitRef.current=true;
       setSimCutoffTm(simInitialCutoff(analysisData));   /* 2026-08-03: 寄りから◯分ぶん開示済み (設定で変更可・0で0本)。2026-10-30〜既定は寄り付き1本目 */
-      loadPrevChart(true,true);           /* strictOnly + silent */
+      /* 2026-10-30: 前日チャートの自動連結は設定で ON のときだけ (既定 OFF)。「前日チャート」ボタンで後から並べられる */
+      if(caLoadSimPrevRef())loadPrevChart(true,true);           /* strictOnly + silent */
     }
   },[simMode,analysisData]);
   /* キーボード ←/→ でコマ送り (テキスト入力中は無効) */
@@ -8377,7 +8401,9 @@ function ImageAnnotator(props){
     });
   }
   useEffect(function(){
-    if(simMode||refAnalysis)return;        /* これらは描画側で連続化される */
+    /* これらは描画側で連続化される。2026-10-30: シミュ中も読む (前日チャートを並べないとき、前日終値の線に使う。
+       シミュの EMA 表示は emaContinuedData を通らないので連続化には使われない) */
+    if(refAnalysis)return;
     if(emaSeedTriedRef.current)return;     /* 1チャートにつき1回だけ試行 */
     if(!analysisData)return;
     emaSeedTriedRef.current=true;
@@ -9623,7 +9649,7 @@ function ImageAnnotator(props){
         analysisData && ce("button",{
           onClick:function(){
             if(refAnalysis){setRefAnalysis(null);}
-            else{loadPrevChart();}
+            else{loadPrevChart(!!simMode);}   /* 2026-10-30: シミュ中は過去日だけ (先の日のチャートを出さない) */
           },
           style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",
             background:refAnalysis?"#16a34a":"#7c3aed",
