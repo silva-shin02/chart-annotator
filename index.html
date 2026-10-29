@@ -7758,6 +7758,9 @@ function ImageAnnotator(props){
   function vpLadCursorP(p){ var f=vpLadCurSubRef.current; if(f)f(p); }
   function vpLadderCut(){
     var r=vpRange(); if(r.hi==null)return null;
+    /* 2026-10-30 (ユーザー指定): シミュ中は全板を「いま表示している足(開示済みの最後の約定足)まで」で集計。
+       カーソル/固定/表示中央には合わせない。全板に渡す足は当日分 (simDisplayData) だけなので前日分は入らない */
+    if(simMode)return r.hi;
     var o=vpOptNow();
     if(o&&o.untilTm!=null)return o.untilTm;
     /* 2026-10-14: 表示範囲モードで固定もカーソルも無い = 上のチャートの表示範囲の中央の足まで (チャートの縦線とそろえる) */
