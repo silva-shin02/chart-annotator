@@ -7634,7 +7634,8 @@ function ImageAnnotator(props){
   /* 2026-09-17: 価格帯別出来高。ON/OFF と集計モードは全チャート共通(localStorage)。
      指定時刻 vpUntil は null=「最新の足に追従」(シミュでは開示が進むと一緒に伸びる)。数値=スライダーで固定した時刻(分) */
   var sVpOn=useState(caLoadVpOn); var vpOn=sVpOn[0],setVpOn=sVpOn[1];
-  var sVpMode=useState(caLoadVpMode); var vpMode=sVpMode[0],setVpMode=sVpMode[1];
+  /* 2026-11-01 (ユーザー指定): 集計モードはチャートを開くたびに「表示範囲」から始める (切替は記憶しない・端末間で同期しない) */
+  var sVpMode=useState('visible'); var vpMode=sVpMode[0],setVpMode=sVpMode[1];
   var sVpSrc=useState(caLoadVpSrc); var vpSrc=sVpSrc[0],setVpSrc=sVpSrc[1];   /* 集計元 'tick'|'close' */
   /* 2026-10-13: 全板パネル (オーバーレイ) の開閉と、パネルで選んだ値段 (チャートに水平線+約定した足の点) */
   /* 2026-10-14: 全板パネルは既定で開いた状態 (✕/「全板」ボタンで閉じられる。エディタを開き直すとまた開く) */
@@ -10362,7 +10363,7 @@ function ImageAnnotator(props){
                   }
                   /* 2026-10-14: 固定していないときの説明文「寄り〜カーソルの足（右クリックで固定）」「寄り〜つまみの時刻（つまみを動かすと固定）」は廃止 (tail=undefined) */
                   return ce(Fragment,null,
-                    seg([['visible','表示範囲'],['until','指定時刻まで']],vpMode,function(k){setVpMode(k);caSaveVpMode(k);}),
+                    seg([['visible','表示範囲'],['until','指定時刻まで']],vpMode,function(k){setVpMode(k);}),
                     /* 2026-10-14: 帯の刻みは1円固定 (自動/1円/5円/10円 の切替は廃止・vpOptNow で bin:'1') */
                     /* 2026-09-29: 集計元。ティック=実際に約定した価格の分布 / 1分終値=HyperSBI2 と同じ積み方。
                        CA_VP_SRC_UI=false の間は出さない (1分終値に固定) */
