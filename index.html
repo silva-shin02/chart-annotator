@@ -14166,6 +14166,14 @@ function caLoadSnEvents(date,cb){
    時間のずれは範囲の長さの3割まで許す DTW (Sakoe-Chiba 帯)。距離 = 経路上の平均二乗差。
    点数 = 一番似ている日 100% / 中央値の日 50% になるよう指数で換算 (相対的な点数) */
 var CA_SIM_KEYS=['c','ema9','ema22','ema50','ema200','vwap'];
+/* 2026-10-31: 前日終値からのギャップ (寄りの始値 vs 前日の最後の約定足の終値, %)。区分のしきい値 (%) */
+var CA_GAP_SMALL=1, CA_GAP_BIG=3;
+function caGapCat(g){
+  if(g==null||!isFinite(g))return null;
+  if(g<=-CA_GAP_BIG)return 'bgd'; if(g<=-CA_GAP_SMALL)return 'gd';
+  if(g>=CA_GAP_BIG)return 'bgu'; if(g>=CA_GAP_SMALL)return 'gu'; return 'flat';
+}
+var CA_GAP_LABEL={bgd:'大幅GD',gd:'GD',flat:'ほぼ同値',gu:'GU',bgu:'大幅GU'};
 var CA_SIM_BAND=0.3;
 /* bars1m → {series:[[6値]...], openTm, i0} 。endSpec={kind:'am'}|{kind:'off',off:N(寄りからの分)} */
 function caSimSeries(bars1m, endSpec){
@@ -14181,7 +14189,7 @@ function caSimSeries(bars1m, endSpec){
     if(!(x.c>0))continue;
     out.push(CA_SIM_KEYS.map(function(k){ var v=(k==='c')?x.c:x[k]; if(v==null||!(v>0))v=x.c; return (v-p0)/p0*100; }));
   }
-  return out.length?{series:out, openTm:t0}:null;
+  return out.length?{series:out, openTm:t0, p0:p0}:null;
 }
 function caSimDtw(a,b){
   var n=a.length, m=b.length; if(!n||!m)return Infinity;
@@ -14250,6 +14258,22 @@ function CaSimilarModal(props){
   var curOff=(endSpec.kind==='am')?maxOff:Math.min(maxOff,endSpec.off);
   function hhmm(t){return Math.floor(t/60)+':'+('0'+(t%60)).slice(-2);}
   var sSort=useState('sim'); var sortBy=sSort[0],setSortBy=sSort[1];
+  /* 2026-10-31: 各日のギャップ% = 寄りの始値 ÷ 前の日付のチャートの最後の約定足の終値 −1 (前の日付が読めない/無い日は null) */
+  var gapById=useMemo(function(){
+    var list=charts.slice().sort(function(a,b){return _caResolveMetaDate(a).localeCompare(_caResolveMetaDate(b));});
+    var out={}, prevC=null, prevD=null;
+    list.forEach(function(m){
+      var bb=barsById[m.id], d=_caResolveMetaDate(m);
+      var ss=bb?caSimSeries(bb,{kind:'off',off:1}):null;
+      out[m.id]=(ss&&prevC>0&&prevD&&prevD<d)?(ss.p0/prevC-1)*100:null;
+      if(bb){ for(var i=bb.length-1;i>=0;i--){ if(bb[i]&&bb[i].v>0&&bb[i].c>0){prevC=bb[i].c;prevD=d;break;} } }
+      else { prevC=null; prevD=null; }   /* 読めない/読み込み中の日の次は不明にする (1日飛ばしの終値を使わない) */
+    });
+    return out;
+  },[barsById]);
+  var baseGap=gapById[base.id], baseCat=caGapCat(baseGap);
+  /* 絞り込み: 'all' | 'same'(基準と同じ区分) | 区分 */
+  var sGF=useState('all'); var gapF=sGF[0],setGapF=sGF[1];
   var results=useMemo(function(){
     var bs=caSimSeries(baseBars,endSpec); if(!bs)return [];
     var rows=[];
@@ -14257,15 +14281,23 @@ function CaSimilarModal(props){
       if(m.id===base.id)return;
       var bb=barsById[m.id]; if(bb===undefined)return;
       var ss=caSimSeries(bb,endSpec); if(!ss){rows.push({m:m,d:Infinity});return;}
-      rows.push({m:m,d:caSimDtw(bs.series,ss.series)});
+      var dd=caSimDtw(bs.series,ss.series), ga=gapById[base.id], gb=gapById[m.id];
+      /* ギャップを7本目の線として加える (寄りからずっと一定の値=前日終値の位置)。どちらかが不明なら6本だけで比べる */
+      if(ga!=null&&gb!=null&&isFinite(dd)){ var gd=(-ga/(1+ga/100))-(-gb/(1+gb/100)); dd=(dd*CA_SIM_KEYS.length+gd*gd)/(CA_SIM_KEYS.length+1); }
+      rows.push({m:m,d:dd});
     });
     var ds=rows.map(function(r){return r.d;}).filter(function(d){return isFinite(d);}).sort(function(a,b){return a-b;});
     var dmin=ds.length?ds[0]:0, dmed=ds.length?ds[Math.floor(ds.length/2)]:0;
     var sc=Math.max(1e-9,dmed-dmin);
     rows.forEach(function(r){ r.score=isFinite(r.d)?Math.round(100*Math.exp(-Math.LN2*(r.d-dmin)/sc)):null; });
     return rows;
-  },[barsById,baseBars,endSpec.kind,endSpec.off]);
-  var sorted=results.slice().sort(function(a,b){
+  },[barsById,baseBars,endSpec.kind,endSpec.off,gapById]);
+  var shownRows=results.filter(function(r){
+    if(gapF==='all')return true;
+    var c=caGapCat(gapById[r.m.id]);
+    return gapF==='same'?(baseCat!=null&&c===baseCat):(c===gapF);
+  });
+  var sorted=shownRows.slice().sort(function(a,b){
     if(sortBy==='sim'){ var x=(a.score==null?-1:a.score), y=(b.score==null?-1:b.score); if(x!==y)return y-x; }
     var da=_caResolveMetaDate(a.m), db=_caResolveMetaDate(b.m);
     return sortBy==='old'?da.localeCompare(db):db.localeCompare(da);
@@ -14274,8 +14306,9 @@ function CaSimilarModal(props){
   function pill(on){return Object.assign({},BT,{fontSize:11,fontWeight:700,padding:'4px 10px',borderRadius:6,
     background:on?'#2563eb':'#222',color:on?'#fff':'#999',border:'1px solid '+(on?'#3b82f6':'#333')});}
   function thumbOf(m){return _thumbMemCache[m.id]||m.thumbUrl||m.thumb||null;}
+  function gapTxt(m){ var g=gapById[m.id]; if(g==null)return ''; return CA_GAP_LABEL[caGapCat(g)]+' '+(g>0?'+':'')+g.toFixed(1)+'%'; }
   function card(m,label,labelCol){
-    var tu=thumbOf(m);
+    var tu=thumbOf(m), gt=gapTxt(m), gc=caGapCat(gapById[m.id]);
     return ce('button',{key:m.id,onClick:function(){onOpenChart(m.id);onClose();},
         style:Object.assign({},BT,{background:'#141414',border:'1px solid #2a2a2a',borderRadius:8,padding:0,overflow:'hidden',
           display:'flex',flexDirection:'column',textAlign:'left',width:'100%'})},
@@ -14284,6 +14317,8 @@ function CaSimilarModal(props){
       ce('div',{style:{display:'flex',alignItems:'center',gap:6,padding:'6px 8px'}},
         ce('span',{style:{flex:1,fontSize:12,fontWeight:700,color:'#ddd',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},
           (_caResolveMetaDate(m)||m.name)+_metaDowLabel(m)),
+        gt&&ce('span',{title:'前日終値からのギャップ',style:{fontSize:10,fontWeight:700,whiteSpace:'nowrap',fontVariantNumeric:'tabular-nums',
+          color:(gc==='bgd'||gc==='gd')?'#60a5fa':(gc==='bgu'||gc==='gu')?'#f87171':'#aaa'}},gt),
         ce('span',{style:{fontSize:12,fontWeight:700,color:labelCol,fontVariantNumeric:'tabular-nums',whiteSpace:'nowrap'}},label)));
   }
   var total=charts.length;
@@ -14314,7 +14349,14 @@ function CaSimilarModal(props){
             [['sim','似ている順'],['new','新しい順'],['old','古い順']].map(function(it){
               return ce('button',{key:it[0],onClick:function(){setSortBy(it[0]);},style:pill(sortBy===it[0])},it[1]);
             }),
-            ce('span',{style:{fontSize:10,color:'#666',marginLeft:4}},'形＝終値・EMA9/22/50/200・VWAP の寄りからの%（時間のずれは範囲の3割まで許す）。%は一番似ている日=100・中央値=50 の相対値'))),
+            ce('span',{style:{fontSize:10,color:'#666',marginLeft:4}},'形＝終値・EMA9/22/50/200・VWAP・前日終値の位置 の寄りからの%（時間のずれは範囲の3割まで許す）。%は一番似ている日=100・中央値=50 の相対値')),
+          /* 2026-10-31: ギャップの区分で絞り込み (区分: |GAP|<1% ほぼ同値 / 1〜3% GU・GD / 3%以上 大幅) */
+          ce('div',{style:{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}},
+            ce('span',{style:{fontSize:11,color:'#888'}},'ギャップ'),
+            [['all','すべて'],['same','基準と同じ'+(baseCat?'（'+CA_GAP_LABEL[baseCat]+'）':'')],['bgd','大幅GD'],['gd','GD'],['flat','ほぼ同値'],['gu','GU'],['bgu','大幅GU']].map(function(it){
+              return ce('button',{key:it[0],onClick:function(){setGapF(it[0]);},disabled:(it[0]==='same'&&!baseCat),style:pill(gapF===it[0])},it[1]);
+            }),
+            ce('span',{style:{fontSize:10,color:'#666',marginLeft:4}},'前日終値→寄り。±'+CA_GAP_SMALL+'%未満=ほぼ同値 / '+CA_GAP_BIG+'%以上=大幅。前の日付のチャートが無い日は区分なし'))),
         ce('div',{style:{flex:1,overflowY:'auto',padding:'12px 16px'}},
           baseBars===undefined
             ?ce('div',{style:{padding:40,textAlign:'center',color:'#777',fontSize:13}},'読み込み中…')
