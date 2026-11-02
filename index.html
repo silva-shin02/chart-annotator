@@ -8694,6 +8694,7 @@ function ImageAnnotator(props){
       if(!sid&&hit.tipTm!=null&&st.pointer&&st.pointer.tipTm===hit.tipTm){ sid=st.id||null; if(tm==null)tm=hit.tipTm; }
     });
     if(tm==null&&hit.tipTm!=null)tm=hit.tipTm;
+    if(tm==null&&hit.tm!=null)tm=hit.tm;   /* 2026-11-02: チャートを探す の場面の時刻 */
     if(tm==null)return;
     /* 1枚表示でヒットの足種が違うときは切り替えてから */
     if(!stackMode&&analysisTf!==tfh){ setAnalysisTf(tfh); setTimeout(function(){focusSearchHit(hit);},350); return; }
@@ -14910,6 +14911,293 @@ function PatRangeBox(props){
       'ホイール=拡大 / 枠=移動・端=範囲 / 背景=スクロール')
   );
 }
+/* ─── 2026-11-02: 🧭 チャートを探す (ホーム) ───────────────────────
+   条件 (タグ・ギャップ区分・場面) を満たすチャートの「その場面」を、前後を切り出したサムネで一覧する。
+   対象 = この端末 (IDB) にあるチャート・前場 (9:00〜11:30)。
+   場面「長期指標線に下から初タッチ」: 50EMA / 200EMA (両方選ぶとそれぞれ別の場面)・1分足 / 5分足。
+     EMA は画面と同じ値 (取り込みで助走済みならそのまま・未助走なら前の日付のチャートから連続計算＝エディタの emaContinuedData と同じ)。
+     「下にいる」= 前の足の高値が線より下 (寄りの足は始値が線より下)。その状態から高値が線に届いた (ヒゲ含む) 最初の足が場面。
+     寄りが線の上の日は、一度下に行ってからの初タッチ。
+   ギャップ = 類似チャートと同じ (寄りの始値 ÷ 前の日付のチャートの最後の約定足の終値 −1)。前の日付のチャートがこの端末に無い日は不明。
+   サムネ = 場面の前20本・後20本 (5分足は5分足の本数・前場の中だけ)。drawDataChart のサムネモードで描く (指標線・自分の書き込み込み)。
+   開くと場面を画面中央へ (focusSearchHit の hit.tm)。上端の「◀ n/N ▶ 一覧へ」で前後の場面へ。戻るとこの画面を復元 (_caFindKeep)。 */
+var CA_FIND_LINES=[['ema50','50EMA','#ff00ff'],['ema200','200EMA','#a06bd0']];
+var CA_FIND_BEFORE=20, CA_FIND_AFTER=20;
+var _caFindKeep=null;
+function caFindAmEnd(tf){ return tf==='5m'?685:690; }   /* 前場の最後の足の開始分 */
+function caFindTouch(bars, key, tf){
+  var amEnd=caFindAmEnd(tf), started=false, below=false;
+  for(var i=0;i<(bars||[]).length;i++){
+    var b=bars[i]; if(!b||!b.t)continue;
+    var tm=_caVpTm(b.t); if(tm<540)continue; if(tm>amEnd)break;
+    if(!(b.v>0)||!(b.h>0))continue;
+    var L=b[key]; if(L==null||!(L>0))continue;
+    if(!started){ started=true; if(b.o>0&&b.o<L){ if(b.h>=L)return {tm:tm}; below=true; } continue; }
+    if(below&&b.h>=L)return {tm:tm};
+    below=(b.h<L);
+  }
+  return null;
+}
+function caFindSlimBars(arr){
+  return (arr||[]).map(function(b){
+    return {t:b.t,o:b.o,h:b.h,l:b.l,c:b.c,v:b.v,ema9:b.ema9,ema22:b.ema22,ema50:b.ema50,ema200:b.ema200,vwap:b.vwap};
+  });
+}
+function caFindDrawThumb(canvas, wrap, info, sc, snippetsById){
+  var tf=sc.tf, bars=tf==='5m'?info.b5:info.b1; if(!bars||!bars.length)return;
+  var amEnd=caFindAmEnd(tf);
+  var am=bars.filter(function(b){var t=_caVpTm(b.t);return t>=540&&t<=amEnd;});
+  var j=-1; for(var i=0;i<am.length;i++){ if(_caVpTm(am[i].t)===sc.tm){j=i;break;} }
+  if(j<0)return;
+  var s0=Math.max(0,j-CA_FIND_BEFORE), s1=Math.min(am.length-1,j+CA_FIND_AFTER);
+  var t0=_caVpTm(am[s0].t), t1=_caVpTm(am[s1].t);
+  var mn=Infinity, mx=-Infinity;
+  for(var k=s0;k<=s1;k++){
+    var b=am[k]; if(b.v>0&&b.h>0){ if(b.l<mn)mn=b.l; if(b.h>mx)mx=b.h; }
+    var lv=b[sc.key]; if(lv>0){ if(lv<mn)mn=lv; if(lv>mx)mx=lv; }
+  }
+  if(!isFinite(mn)||!isFinite(mx))return;
+  var pad=Math.max(1,(mx-mn)*0.06); mn-=pad; mx+=pad;
+  var W=Math.max(120,Math.round(wrap.clientWidth||260)), H=Math.max(80,Math.round(wrap.clientHeight||170));
+  /* 書き込みは切り出した範囲に掛かるものだけ (水平線は価格が範囲内なら) */
+  var strokes=((info.strokes&&info.strokes[tf])||[]).filter(function(s){
+    if(!s||(s.side||'cur')!=='cur'||!s.anchors||!s.anchors.length)return false;
+    var tp=s.type||s.tool;
+    if(tp==='horizontal'){ var p=s.anchors[0].p; return p>=mn&&p<=mx; }
+    return s.anchors.some(function(a){return a&&a.tm>=t0-1&&a.tm<=t1+(tf==='5m'?5:1);});
+  });
+  var dim={w:W,h:H,thumbnail:true,thumbView:{uS:t0-540,uSpan:Math.max(1,t1-t0),pMin:mn,pMax:mx}};
+  var lay={current:null}, gapVis=(tf==='5m'?5:1);
+  var origDPR=window.devicePixelRatio;
+  try{Object.defineProperty(window,'devicePixelRatio',{value:Math.min(2,origDPR||1),configurable:true});}catch(e){}
+  try{
+    canvas.style.width=W+'px'; canvas.style.height=H+'px';
+    drawDataChart(canvas,bars,{bars_1m:info.b1,bars_5m:info.b5},dim,tf,{uS:0,uE:0},0,{min:mn,max:mx},lay,
+      strokes,null,null,null,null,gapVis,null,null,null,snippetsById,null,null);
+    var L=lay.current, ctx=canvas.getContext('2d');
+    if(L&&ctx){
+      function xOf(tm){ return L.padL+L.halfBarPx+((tm-540)-L.uS)/L.uSpan*L.innerW; }
+      function yOf(p){ return L.priceTop+(L.dpmax-p)*L.pxPerYen; }
+      var col=(CA_FIND_LINES.filter(function(x){return x[0]===sc.key;})[0]||[])[2]||'#ff00ff';
+      ctx.save();
+      ctx.beginPath(); ctx.rect(L.padL,L.priceTop,L.chartW,L.priceBot-L.priceTop); ctx.clip();
+      /* 場面の足を帯で */
+      var bw=Math.max(5,L.innerW/L.uSpan*gapVis);
+      var xs=xOf(sc.tm);
+      ctx.fillStyle='rgba(56,189,248,0.20)';
+      ctx.fillRect(xs-bw/2,L.priceTop,bw,L.priceBot-L.priceTop);
+      /* 条件の線を太く */
+      ctx.strokeStyle=col; ctx.lineWidth=2.6; ctx.globalAlpha=0.95; ctx.setLineDash([]);
+      ctx.beginPath(); var st=false;
+      for(var q=s0;q<=s1;q++){ var v=am[q][sc.key]; if(!(v>0))continue; var x=xOf(_caVpTm(am[q].t)), y=yOf(v);
+        if(!st){ctx.moveTo(x,y);st=true;} else ctx.lineTo(x,y); }
+      ctx.stroke();
+      ctx.restore();
+      /* 場面の足の下に ▲ */
+      var bj=am[j], yl=Math.min(L.priceBot-2,yOf(bj.l)+4);
+      ctx.save(); ctx.fillStyle='#38bdf8';
+      ctx.beginPath(); ctx.moveTo(xs,yl); ctx.lineTo(xs-5,yl+8); ctx.lineTo(xs+5,yl+8); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+  }catch(e){console.warn('[find thumb]',e);}
+  finally{ try{Object.defineProperty(window,'devicePixelRatio',{value:origDPR,configurable:true});}catch(e){} }
+}
+function CaFindSceneCard(props){
+  var sc=props.sc, info=props.info, m=sc.m;
+  var wrapRef=useRef(null), cvRef=useRef(null), drawnRef=useRef(false);
+  useEffect(function(){
+    var wrap=wrapRef.current; if(!wrap)return;
+    function draw(){ if(drawnRef.current||!cvRef.current)return; drawnRef.current=true; caFindDrawThumb(cvRef.current,wrap,info,sc,props.snippetsById); }
+    if(typeof IntersectionObserver==='undefined'){ draw(); return; }
+    var io=new IntersectionObserver(function(es){ es.forEach(function(e){ if(e.isIntersecting){ draw(); io.disconnect(); } }); },{rootMargin:'300px'});
+    io.observe(wrap);
+    return function(){io.disconnect();};
+  },[]);
+  var g=info.gap, gc=caGapCat(g);
+  var lineLbl=(CA_FIND_LINES.filter(function(x){return x[0]===sc.key;})[0]||[])[1]||sc.key;
+  var hh=Math.floor(sc.tm/60)+':'+('0'+(sc.tm%60)).slice(-2);
+  return ce('button',{onClick:props.onOpen,'data-find-key':props.k,
+      style:{border:'1px solid '+(props.last?'#3b82f6':'#2a2a2a'),boxShadow:props.last?'0 0 0 1px #3b82f6':'none',cursor:'pointer',fontFamily:'inherit',
+        background:'#141414',borderRadius:8,padding:0,overflow:'hidden',display:'flex',flexDirection:'column',textAlign:'left',width:'100%'}},
+    ce('div',{ref:wrapRef,style:{width:'100%',height:170,background:'#0b0b0b'}},ce('canvas',{ref:cvRef,style:{display:'block'}})),
+    ce('div',{style:{display:'flex',alignItems:'center',gap:6,padding:'6px 8px 2px'}},
+      ce('span',{style:{flex:1,fontSize:12,fontWeight:700,color:'#ddd',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},(m.ticker||'')),
+      g!=null&&ce('span',{title:'前日終値からのギャップ',style:{fontSize:10,fontWeight:700,whiteSpace:'nowrap',fontVariantNumeric:'tabular-nums',
+        color:(gc==='bgd'||gc==='gd')?'#60a5fa':(gc==='bgu'||gc==='gu')?'#f87171':'#aaa'}},CA_GAP_LABEL[gc]+' '+(g>0?'+':'')+g.toFixed(1)+'%')),
+    ce('div',{style:{display:'flex',alignItems:'center',gap:6,padding:'0 8px 7px',fontSize:11,color:'#aaa',fontVariantNumeric:'tabular-nums'}},
+      ce('span',null,(_caResolveMetaDate(m)||'')+_metaDowLabel(m)),
+      ce('b',{style:{color:'#38bdf8'}},hh),
+      ce('span',{style:{color:'#ddd'}},lineLbl+'（'+(sc.tf==='5m'?'5分足':'1分足')+'）')));
+}
+function CaFindModal(props){
+  var charts=props.charts||[], init=props.initial||{};
+  var onClose=props.onClose||function(){};
+  var sI=useState({}); var infoById=sI[0],setInfoById=sI[1];
+  var sD=useState(0); var nDone=sD[0],setNDone=sD[1];
+  var sR=useState(false); var ready=sR[0],setReady=sR[1];
+  /* この端末のデータを読み、前日 (EMA の種・ギャップ) を付けて場面を求める */
+  useEffect(function(){
+    var alive=true, list=charts.slice(), i=0, running=0, raw={}, done=0, bumpT=null;
+    function bump(){ if(!bumpT)bumpT=setTimeout(function(){bumpT=null; if(alive)setNDone(done);},200); }
+    function finish(){
+      if(!alive)return;
+      var byT={};
+      list.forEach(function(m){ (byT[m.ticker||'']||(byT[m.ticker||'']=[])).push(m); });
+      var out={};
+      Object.keys(byT).forEach(function(tk){
+        var arr=byT[tk].map(function(m){return {m:m,d:_caResolveMetaDate(m)||''};}).sort(function(a,b){return a.d.localeCompare(b.d);});
+        arr.forEach(function(x,ix){
+          var r=raw[x.m.id]; if(!r)return;
+          /* 前の日付 (当日より前で一番近い日付) のチャート */
+          var pv=null; for(var k=ix-1;k>=0;k--){ if(arr[k].d&&arr[k].d<x.d){pv=arr[k];break;} }
+          var pr=pv?raw[pv.m.id]:null;
+          function warmed(a){ if(!a||!a.length)return false; var b=a[0]; return !(b.ema9===b.ema22&&b.ema22===b.ema50&&b.ema50===b.ema200); }
+          var b1=r.b1, b5=r.b5;
+          if(pr&&!(warmed(b5)||warmed(b1))){ b1=computeEnhancedBars(b1,pr.b1); b5=computeEnhancedBars(b5,pr.b5); }
+          var gap=null;
+          if(pr){
+            var p0=null, pc=null;
+            for(var q=0;q<b1.length;q++){ if(b1[q]&&b1[q].v>0){p0=b1[q].o||b1[q].c;break;} }
+            for(var q2=pr.b1.length-1;q2>=0;q2--){ var z=pr.b1[q2]; if(z&&z.v>0&&z.c>0){pc=z.c;break;} }
+            if(p0>0&&pc>0)gap=(p0/pc-1)*100;
+          }
+          var touch={'1m':{},'5m':{}};
+          CA_FIND_LINES.forEach(function(ln){ touch['1m'][ln[0]]=caFindTouch(b1,ln[0],'1m'); touch['5m'][ln[0]]=caFindTouch(b5,ln[0],'5m'); });
+          out[x.m.id]={b1:b1,b5:b5,strokes:r.strokes,gap:gap,touch:touch};
+        });
+      });
+      setInfoById(out); setNDone(done); setReady(true);
+    }
+    function next(){
+      while(alive&&running<4&&i<list.length){
+        (function(m){ running++;
+          caLoadDataAsync(m.id,function(d){
+            running--; if(!alive)return;
+            var ad=d&&d.analysisData;
+            if(ad&&ad.bars_1m&&ad.bars_1m.length)
+              raw[m.id]={b1:caFindSlimBars(ad.bars_1m),b5:caFindSlimBars(ad.bars_5m),strokes:migrateAnalysisStrokes(d.analysisStrokes,'cur')};
+            done++; bump();
+            if(done>=list.length)finish(); else next();
+          });
+        })(list[i++]);
+      }
+    }
+    if(!list.length)finish(); else next();
+    return function(){alive=false; if(bumpT)clearTimeout(bumpT);};
+  },[]);
+  /* 条件 */
+  var sTg=useState(init.selTags||[]); var selTags=sTg[0],setSelTags=sTg[1];
+  var sGc=useState(init.gapCats||[]); var gapCats=sGc[0],setGapCats=sGc[1];
+  var sLn=useState(init.lines||{ema50:true,ema200:true}); var lines=sLn[0],setLines=sLn[1];
+  var sTf=useState(init.tf||'1m'); var tf=sTf[0],setTf=sTf[1];
+  var sSo=useState(init.sort||'new'); var sortBy=sSo[0],setSortBy=sSo[1];
+  var listRef=useRef(null);
+  var tagDefs=useMemo(function(){ try{return caLoadTagDefs()||[];}catch(e){return [];} },[]);
+  var tagMap=useMemo(function(){ try{return caLoadTagMap()||{};}catch(e){return {};} },[]);
+  var snippetsById=useMemo(function(){ var mm={}; try{(caLoadSnippets()||[]).forEach(function(sn){if(sn&&sn.id)mm[sn.id]=sn;});}catch(e){} return mm; },[]);
+  function toggleIn(arr,v){ return arr.indexOf(v)>=0?arr.filter(function(x){return x!==v;}):arr.concat([v]); }
+  var scenes=useMemo(function(){
+    var out=[];
+    if(!ready)return out;
+    charts.forEach(function(m){
+      var inf=infoById[m.id]; if(!inf)return;
+      if(selTags.length){ var ts=tagMap[m.id]||[]; if(!selTags.every(function(t){return ts.indexOf(t)>=0;}))return; }
+      if(gapCats.length){ var c=caGapCat(inf.gap); if(!c||gapCats.indexOf(c)<0)return; }
+      CA_FIND_LINES.forEach(function(ln){
+        if(!lines[ln[0]])return;
+        var h=inf.touch[tf][ln[0]]; if(!h)return;
+        out.push({m:m,tf:tf,key:ln[0],tm:h.tm,d:_caResolveMetaDate(m)||''});
+      });
+    });
+    out.sort(function(a,b){
+      if(sortBy==='ticker'){ var c0=String(a.m.ticker||'').localeCompare(String(b.m.ticker||'')); if(c0)return c0; }
+      var c1=(sortBy==='old')?a.d.localeCompare(b.d):b.d.localeCompare(a.d); if(c1)return c1;
+      return a.tm-b.tm;
+    });
+    if(sortBy==='ticker'){
+      /* 銘柄別: 銘柄ごとの最新日付が新しい順に並べ、銘柄の中は新しい順 */
+      var latest={}; out.forEach(function(s){ var t=s.m.ticker||''; if(!latest[t]||s.d>latest[t])latest[t]=s.d; });
+      out.sort(function(a,b){
+        var ta=a.m.ticker||'', tb=b.m.ticker||'';
+        if(ta!==tb){ var c=latest[tb].localeCompare(latest[ta]); return c||ta.localeCompare(tb); }
+        var c2=b.d.localeCompare(a.d); return c2||(a.tm-b.tm);
+      });
+    }
+    return out;
+  },[ready,infoById,selTags,gapCats,lines,tf,sortBy]);
+  function skey(s){ return s.m.id+'|'+s.tf+'|'+s.key; }
+  /* 戻ってきたときのスクロール位置 */
+  useEffect(function(){
+    if(!ready||!init.scroll)return;
+    var t=setTimeout(function(){ if(listRef.current)listRef.current.scrollTop=init.scroll; },60);
+    return function(){clearTimeout(t);};
+  },[ready]);
+  function openAt(ix){
+    var nav=scenes.map(function(s){return {id:s.m.id,hit:{tf:s.tf,tm:s.tm}};});
+    var keep={selTags:selTags,gapCats:gapCats,lines:lines,tf:tf,sort:sortBy,
+      scroll:(listRef.current?listRef.current.scrollTop:0),lastKey:skey(scenes[ix])};
+    if(props.onOpenScene)props.onOpenScene(nav,ix,keep);
+  }
+  var BT={border:'none',cursor:'pointer',fontFamily:'inherit'};
+  function pill(on,col){return Object.assign({},BT,{fontSize:11,fontWeight:700,padding:'4px 10px',borderRadius:6,
+    background:on?(col||'#2563eb'):'#222',color:on?'#fff':'#999',border:'1px solid '+(on?(col||'#3b82f6'):'#333')});}
+  function row(label,kids){
+    return ce('div',{style:{display:'flex',alignItems:'flex-start',gap:8,flexWrap:'wrap'}},
+      ce('div',{style:{fontSize:11,color:'#888',minWidth:150,paddingTop:5}},label),
+      ce('div',{style:{flex:1,display:'flex',gap:5,flexWrap:'wrap',minWidth:0}},kids));
+  }
+  var total=charts.length, nCharts={}; scenes.forEach(function(s){nCharts[s.m.id]=1;});
+  var anyLine=CA_FIND_LINES.some(function(ln){return lines[ln[0]];});
+  /* 一覧 (銘柄別は見出しを挟む) */
+  var gridKids=[], curTk=null, cell=[];
+  function flushGrid(){ if(cell.length){ gridKids.push(ce('div',{key:'g'+gridKids.length,style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))',gap:10}},cell)); cell=[]; } }
+  scenes.forEach(function(s,ix){
+    if(sortBy==='ticker'&&s.m.ticker!==curTk){
+      flushGrid(); curTk=s.m.ticker;
+      gridKids.push(ce('div',{key:'h'+ix,style:{fontSize:12,fontWeight:700,color:'#ddd',margin:(gridKids.length?'12px':'0')+' 0 6px'}},(s.m.ticker||'')));
+    }
+    var k=skey(s);
+    cell.push(ce(CaFindSceneCard,{key:k+'|'+s.tm,k:k,sc:s,info:infoById[s.m.id],snippetsById:snippetsById,last:init.lastKey===k,onOpen:function(){openAt(ix);}}));
+  });
+  flushGrid();
+  return ReactDOM.createPortal(
+    ce('div',{onClick:onClose,style:{position:'fixed',inset:0,background:'rgba(0,0,0,.78)',zIndex:10500,display:'flex',alignItems:'center',justifyContent:'center',padding:16}},
+      ce('div',{onClick:function(e){e.stopPropagation();},
+          style:{background:'#1a1a1a',borderRadius:14,boxShadow:'0 8px 40px rgba(0,0,0,.9)',display:'flex',flexDirection:'column',
+            maxWidth:1200,width:'100%',maxHeight:'min(92vh,1000px)',overflow:'hidden'}},
+        ce('div',{style:{padding:'12px 16px 10px',borderBottom:'1px solid #2a2a2a',display:'flex',alignItems:'center',gap:8,flexShrink:0}},
+          ce('div',{style:{flex:1,fontWeight:700,fontSize:14,color:'#fff'}},'🧭 チャートを探す',
+            ce('span',{style:{color:'#888',fontWeight:400,fontSize:12,marginLeft:8}},'この端末のチャート・前場'),
+            !ready&&ce('span',{style:{color:'#fbbf24',fontWeight:400,fontSize:12,marginLeft:8}},'読み込み中 '+nDone+'/'+total)),
+          ce('button',{onClick:onClose,style:Object.assign({},BT,{background:'none',color:'#888',fontSize:18,padding:'0 4px'})},'✕')),
+        ce('div',{style:{padding:'10px 16px',borderBottom:'1px solid #2a2a2a',display:'flex',flexDirection:'column',gap:8,flexShrink:0,maxHeight:'40vh',overflowY:'auto'}},
+          row('タグ（すべて付いている）',
+            tagDefs.length?tagDefs.map(function(t){
+              var on=selTags.indexOf(t.id)>=0;
+              return ce('button',{key:t.id,onClick:function(){setSelTags(toggleIn(selTags,t.id));},style:pill(on,t.color||'#4f46e5')},t.name);
+            }):[ce('span',{key:'n',style:{fontSize:11,color:'#666',paddingTop:5}},'タグがありません')]),
+          row('ギャップ（自動判定・どれか）',
+            ['bgd','gd','flat','gu','bgu'].map(function(c){
+              return ce('button',{key:c,onClick:function(){setGapCats(toggleIn(gapCats,c));},style:pill(gapCats.indexOf(c)>=0)},CA_GAP_LABEL[c]);
+            })),
+          row('場面：長期指標線に下から初タッチ',
+            CA_FIND_LINES.map(function(ln){
+              return ce('button',{key:ln[0],onClick:function(){var nl=Object.assign({},lines);nl[ln[0]]=!lines[ln[0]];setLines(nl);},style:pill(!!lines[ln[0]])},ln[1]);
+            }).concat([ce('span',{key:'sp',style:{width:10}}),
+              ce('button',{key:'1m',onClick:function(){setTf('1m');},style:pill(tf==='1m')},'1分足'),
+              ce('button',{key:'5m',onClick:function(){setTf('5m');},style:pill(tf==='5m')},'5分足')])),
+          row('並び順',
+            [['new','新しい順'],['old','古い順'],['ticker','銘柄別']].map(function(it){
+              return ce('button',{key:it[0],onClick:function(){setSortBy(it[0]);},style:pill(sortBy===it[0])},it[1]);
+            }).concat([ce('span',{key:'cnt',style:{fontSize:12,color:'#ddd',paddingTop:4,marginLeft:8}},
+              ready?(scenes.length+' 場面（'+Object.keys(nCharts).length+' チャート）'):'')]))),
+        ce('div',{ref:listRef,style:{flex:1,overflowY:'auto',padding:'12px 16px'}},
+          !ready?ce('div',{style:{color:'#888',fontSize:12,padding:20,textAlign:'center'}},'読み込み中…')
+          :!anyLine?ce('div',{style:{color:'#888',fontSize:12,padding:20,textAlign:'center'}},'場面の線（50EMA / 200EMA）を選んでください')
+          :!scenes.length?ce('div',{style:{color:'#888',fontSize:12,padding:20,textAlign:'center'}},'条件に合う場面はありません')
+          :gridKids))),
+    document.body);
+}
 function PatternSearchModal(props){
   var open=props.open, onClose=props.onClose, meta=props.meta||[], fbCfg=props.fbCfg||{};
   var tickersList=props.tickers||[];  /* 2026-05-03: 対象銘柄選択用 */
@@ -17804,6 +18092,10 @@ function DraftLibrary(props){
   var sTagM=useState(false); var tagModalOpen=sTagM[0],setTagModalOpen=sTagM[1];
   /* スタンプ記録モーダル */
   var sStL=useState(false); var stampLogOpen=sStL[0],setStampLogOpen=sStL[1];
+  /* 2026-11-02: チャートを探す。場面から開いたチャートから戻ったら条件・スクロール位置ごと復元 (_caFindKeep)。
+     エディタの ◀▶ で別のチャートへ移る途中 (navOpenId あり) は消費しない */
+  var _fk=useState(function(){var k=_caFindKeep; if(k&&!props.navOpenId){_caFindKeep=null;return k;} return null;})[0]||null;
+  var sFind=useState(!!_fk); var findOpen=sFind[0],setFindOpen=sFind[1];
   /* 2026-07-07: チャート形状モーダル */
   var sShpP=useState(false); var shapePageOpen=sShpP[0],setShapePageOpen=sShpP[1];
   /* 2026-04-30: パターン検索 (Phase 1: 寄り天) */
@@ -17871,6 +18163,12 @@ function DraftLibrary(props){
   var sImportLog=useState([]); var importLog=sImportLog[0],setImportLog=sImportLog[1];
   /* 2026-10-17: 検索結果からチャートを開く。検索パネルの状態を _caSrchKeep に、結果の並びを _caSrchNav に残す
      (エディタの ◀▶ で前後の結果へ・「一覧へ」/終了で戻るとこの状態の検索パネルに戻る) */
+  function openFromFind(navList,idx,keep){
+    var it=navList[idx]; if(!it)return;
+    _caFindKeep=keep; _caSrchKeep=null;
+    _caSrchNav={list:navList,idx:idx,label:'チャートを探す'};
+    openChart(it.id);
+  }
   function openFromSearch(navList,idx){
     var it=navList[idx]; if(!it)return;
     _caSrchKeep={tab:searchTab,query:searchQuery,results:searchResults,selTagIds:selTagIds,tagMode:tagMode,tagGroupBy:tagGroupBy,
@@ -20154,6 +20452,11 @@ function DraftLibrary(props){
             style:Object.assign({},BT,{fontSize:11,fontWeight:700,padding:"5px 10px",borderRadius:7,
               background:"#b45309",color:"#fff"})},
             "📍 スタンプ記録"),
+          /* 2026-11-02: チャートを探す (条件に合う場面をサムネで一覧) */
+          ce("button",{onClick:function(){_caFindKeep=null;setFindOpen(true);},
+            style:Object.assign({},BT,{fontSize:11,fontWeight:700,padding:"5px 10px",borderRadius:7,
+              background:"#0f766e",color:"#fff"})},
+            "🧭 チャートを探す"),
           /* 2026-10-18: 「📐 チャート形状」(形状カタログ) ボタンは廃止 (ユーザー指定。形状登録ボタンと一緒に) */
           /* シミュレーション (銘柄・日付を選んで練習モードで開く) */
           ce("button",{onClick:function(){setSimPickerOpen(true);},
@@ -20339,6 +20642,13 @@ function DraftLibrary(props){
         charts:selTicker?meta.filter(function(m){return m.ticker===selTicker;}):meta,
         onOpenChart:function(id){openChart(id);},
         onClose:function(){setTagModalOpen(false);}
+      }),
+      /* 2026-11-02: チャートを探す (常に全チャート対象・この端末のデータのみ) */
+      findOpen&&ce(CaFindModal,{
+        charts:meta,
+        initial:_fk,
+        onOpenScene:function(nav,ix,keep){openFromFind(nav,ix,keep);},
+        onClose:function(){_caFindKeep=null;setFindOpen(false);}
       }),
       /* スタンプ記録モーダル (常に全チャート対象) */
       stampLogOpen&&ce(CaStampLogModal,{
