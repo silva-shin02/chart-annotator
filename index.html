@@ -1709,6 +1709,12 @@ function DisplaySettingsModal(props){
       var K=['t','o','h','l','c','v','ema9','ema22','ema50','ema200','vwap'];
       rec.barCols=K;
       rec.bars_1m=(ad.bars_1m||[]).map(function(b){return K.map(function(k){var v=b[k];return (v==null)?null:v;});});
+      /* 2026-11-02: 8/20以降(SN の VAP 方式)のチャートだけ、前場(〜11:30)の足のティック値段別出来高 vp も入れる (VAP ラインの分析用・{t:vp}) */
+      if(rec.date>='2026-08-20'){
+        var vpm={};
+        (ad.bars_1m||[]).forEach(function(b){ if(b&&b.t&&Array.isArray(b.vp)&&b.vp.length&&_caVpTm(b.t)<=690)vpm[b.t]=b.vp; });
+        rec.vp_1m=vpm;
+      }
       var info={};
       Object.keys(ad).forEach(function(k){ var v=ad[k]; if(v==null||typeof v!=='object')info[k]=v; });
       rec.info=info;
@@ -2115,7 +2121,7 @@ function DisplaySettingsModal(props){
           ce("div",{style:CARD},
             ce("div",{style:HEAD},"📊 分析用に全チャートを書き出す"),
             ce("div",{style:DESC},
-              "全銘柄・全日付の1分足（OHLC・出来高・EMA・VWAP）と、書き込み（線・矢印・テキスト・スタンプなど）、スタンプ定義、タグ、チャートメモ、Scalping Notebook のデータ（トレード記録など）を1つのJSONに書き出します。この端末に無いチャートは Firebase から読みます。",ce("br",null),
+              "全銘柄・全日付の1分足（OHLC・出来高・EMA・VWAP）と、書き込み（線・矢印・テキスト・スタンプなど）、スタンプ定義、タグ、チャートメモ、Scalping Notebook のデータ（トレード記録など）、8/20以降の前場のティック値段別出来高を1つのJSONに書き出します。この端末に無いチャートは Firebase から読みます。",ce("br",null),
               "値動きの傾向の分析用です（復元には使えません。Secret は含みません）。"),
             ce("button",{onClick:doAnalysisExport,disabled:!!(anaExp&&anaExp.run),
               style:{width:"100%",padding:"11px 0",fontSize:13,fontWeight:700,borderRadius:10,border:"none",
