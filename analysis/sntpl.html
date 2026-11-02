@@ -1,0 +1,164 @@
+<title>SNエントリー 状況別成績</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: 1カラムの検証ノート。上=全体の成績と絞り込み、中=状況ごとの表（2列のカード）、下=スルーした記録と一覧 */
+:root{
+  --bg:#f5f7f8; --panel:#ffffff; --ink:#18232d; --mute:#5b6874; --line:#dbe1e6;
+  --acc:#2563a6; --accSoft:#e5eef8; --win:#c0392b; --lose:#1e8449; --warn:#9a6b00;
+  --sans:"BIZ UDPGothic","Hiragino Sans","Yu Gothic UI",system-ui,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#11161b; --panel:#192029; --ink:#e2e8ee; --mute:#98a4b0; --line:#2b343e;
+  --acc:#7fb0ea; --accSoft:#1f2f42; --win:#ff8a7a; --lose:#5fd08a; --warn:#e2b54a; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#11161b; --panel:#192029; --ink:#e2e8ee; --mute:#98a4b0; --line:#2b343e;
+  --acc:#7fb0ea; --accSoft:#1f2f42; --win:#ff8a7a; --lose:#5fd08a; --warn:#e2b54a; color-scheme:dark}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.6}
+.wrap{max-width:1120px;margin:0 auto;padding-block:20px 48px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:16px}
+h1{font-size:22px;margin:0;text-wrap:balance} h2{font-size:15px;margin:0 0 6px;text-wrap:balance} h3{font-size:13.5px;margin:0 0 4px}
+.sub{color:var(--mute);font-size:12.5px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 16px;min-width:0}
+.row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.lab{font-size:12px;color:var(--mute);min-width:5em}
+button.chip{font:inherit;font-size:12.5px;padding:3px 10px;border-radius:999px;border:1px solid var(--line);background:transparent;color:var(--ink);cursor:pointer}
+button.chip[aria-pressed="true"]{background:var(--acc);border-color:var(--acc);color:var(--panel)}
+button.chip:focus-visible,select:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+select{font:inherit;font-size:13px;padding:4px 8px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--ink)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}
+.kpi{border:1px solid var(--line);border-radius:6px;padding:8px 10px}
+.kpi .k{font-size:11.5px;color:var(--mute)} .kpi .v{font-family:var(--mono);font-size:20px;font-weight:600}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px}
+.card{min-width:0}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;font-size:13px}
+th,td{border-bottom:1px solid var(--line);padding:5px 6px;text-align:right;white-space:nowrap}
+th{font-size:11.5px;color:var(--mute);font-weight:700}
+th:first-child,td:first-child{text-align:left;white-space:normal}
+tr.few td{opacity:.45}
+.pos{color:var(--win);font-weight:700} .neg{color:var(--lose);font-weight:700}
+.hl{background:var(--accSoft)}
+.note{font-size:12px;color:var(--mute);line-height:1.75}
+.note b{color:var(--ink)}
+.mono{font-family:var(--mono)}
+.bar{display:inline-block;height:8px;border-radius:2px;background:var(--acc);vertical-align:middle;opacity:.55}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+<div class="wrap">
+  <header>
+    <h1>SNエントリー 状況別成績</h1>
+    <div class="sub" id="meta"></div>
+  </header>
+  <section class="panel">
+    <div class="row" style="margin-bottom:8px"><span class="lab">シグナル</span><span class="row" id="tags"></span></div>
+    <div class="row"><span class="lab">銘柄</span><select id="stk"></select></div>
+  </section>
+  <section class="panel">
+    <h2 id="sumTitle">全体の成績</h2>
+    <div class="kpis" id="kpis"></div>
+    <div class="sub" style="margin-top:8px">損益は SN の記録帳と同じ計算（最終損益・100株換算・EP＝水準線＋採用VAP値・ホールド判断込み）。勝率と平均損益は EP が成立した記録だけ、未達率は全記録で数えます。</div>
+  </section>
+  <section class="panel">
+    <h2>状況ごとの成績</h2>
+    <div class="sub" style="margin-bottom:10px">状況は CA の1分足から、シグナルの時刻より前の足だけで判定（その足自体の出来高だけは、その足を含む）。<b>平均損益</b>が全体より200円以上よい/悪い行を色付け。10件未満の行は薄く表示（ぶれが大きい）。</div>
+    <div class="cards" id="cards"></div>
+  </section>
+  <section class="panel">
+    <h2>スルーした記録（入っていたら）</h2>
+    <div class="sub" style="margin-bottom:8px">SN で「スルー」にした記録を、同じ計算で入っていた場合の成績。スルーの判断が損益を守ったかの確認用。</div>
+    <div class="scroll"><table id="thru"></table></div>
+  </section>
+  <section class="panel">
+    <h2>記録の一覧</h2>
+    <div class="row" style="margin-bottom:6px"><span class="lab">並び</span><select id="sort"><option value="d">新しい順</option><option value="p">損益が大きい順</option><option value="pa">損益が小さい順</option></select><span class="sub" id="ln"></span></div>
+    <div class="scroll"><table id="list"></table></div>
+  </section>
+  <section class="panel note" id="defs"></section>
+</div>
+<script id="data" type="application/json">__DATA__</script>
+<script>
+(function(){
+var R=JSON.parse(document.getElementById('data').textContent);
+var S={tag:'',stk:'',sort:'d'};
+function b(v,edges,labels){for(var i=0;i<edges.length;i++)if(v<edges[i])return labels[i];return labels[labels.length-1];}
+var F=[
+ ['シグナルの種類（SN）',function(r){return r.tag;}],
+ ['①底抜け（SNの詳細）',function(r){return r.b;}],
+ ['②起点（SNの詳細）',function(r){return r.k;}],
+ ['VAP値（読み値）',function(r){return r.vap===0?'0円':b(r.vap,[3,6],['1〜2円','3〜5円','6円以上']);}],
+ ['前日終値→寄り（ギャップ）',function(r){return r.gcat;},['大幅GD','GD','ほぼ同値','GU','大幅GU','前日不明']],
+ ['寄り足（1分足）',function(r){return '寄り足 '+r.yori;}],
+ ['寄り足（5分足）',function(r){return '5分足寄り足 '+r.yori5;}],
+ ['時間帯',function(r){return r.tb;},['9:00-9:10','9:10-9:30','9:30-10:00','10:00-10:30','10:30-11:30','後場']],
+ ['寄りから何本目',function(r){return b(r.nOpen,[16,31,61],['15本以内','16〜30本','31〜60本','61本以降']);},['15本以内','16〜30本','31〜60本','61本以降']],
+ ['VWAPとの位置（直前の足の終値）',function(r){return r.vwap;}],
+ ['EMAの並び（9/22/50/200）',function(r){return r.order;},['上昇並び','混在','下降並び']],
+ ['9EMAと200EMA',function(r){return r.e9;}],
+ ['前日終値との位置',function(r){return r.vsPrev;}],
+ ['寄り値との位置',function(r){return r.vsOpen;}],
+ ['その日ここまでの値幅（高値−安値）',function(r){return b(r.rangeP,[2,4],['2%未満','2〜4%','4%以上']);},['2%未満','2〜4%','4%以上']],
+ ['直近10本の平均値幅',function(r){return b(r.atr,[5,10,20],['5円未満','5〜10円','10〜20円','20円以上']);},['5円未満','5〜10円','10〜20円','20円以上']],
+ ['シグナルの足の出来高（直近20本の平均比）',function(r){return r.volx==null?'—':b(r.volx,[1,2],['平均未満','1〜2倍','2倍以上']);},['平均未満','1〜2倍','2倍以上','—']],
+ ['5分足の確定足（分の1の位が4・9）',function(r){return r.fiveEnd?'確定足':'確定足でない';}],
+ ['水準線が大RN±10円',function(r){return r.rn?'大RN±10円':'それ以外';}],
+ ['GU＋寄りから22EMAの上で推移中',function(r){return r.gu22?'当てはまる':'当てはまらない';}],
+ ['寄りから9EMAを一度も割っていない',function(r){return r.e9hold?'当てはまる':'当てはまらない';}]
+];
+function st(L){var ok=L.filter(function(r){return r.j==='ok'&&r.pnl!=null;});var w=ok.filter(function(r){return r.pnl>0;}).length;var sum=ok.reduce(function(a,r){return a+r.pnl;},0);
+  return {n:L.length,e:ok.length,miss:L.filter(function(r){return r.j==='miss';}).length,w:w,sum:sum,avg:ok.length?sum/ok.length:null};}
+function yen(v){return v==null?'—':(v>0?'+':'')+Math.round(v).toLocaleString()+'円';}
+function pc(a,n){return n?Math.round(a/n*100)+'%':'—';}
+function cls(v){return v==null?'':v>0?'pos':v<0?'neg':'';}
+function chip(host,items,cur,on){host.innerHTML='';items.forEach(function(it){var x=document.createElement('button');x.type='button';x.className='chip';x.setAttribute('aria-pressed',String(it[0]===cur));x.textContent=it[1];x.onclick=function(){on(it[0]);};host.appendChild(x);});}
+function render(){
+  var base=R.filter(function(r){return (!S.stk||r.st===S.stk);});
+  var tc={};base.filter(function(r){return r.g==='data';}).forEach(function(r){tc[r.tag]=(tc[r.tag]||0)+1;});
+  chip(document.getElementById('tags'),[['','すべて']].concat(Object.keys(tc).sort(function(a,b){return tc[b]-tc[a];}).map(function(t){return [t,t+' '+tc[t]];})),S.tag,function(v){S.tag=v;render();});
+  var D=base.filter(function(r){return r.g==='data'&&(!S.tag||r.tag===S.tag);});
+  var T=base.filter(function(r){return r.g==='thru'&&(!S.tag||r.tag===S.tag);});
+  var A=st(D);
+  document.getElementById('sumTitle').textContent='全体の成績 — '+(S.tag||'全シグナル')+' / '+(S.stk||'全銘柄');
+  document.getElementById('kpis').innerHTML=[['記録',A.n+'件'],['EP成立',A.e+'件'],['未達率',pc(A.miss,A.n)],['勝率',pc(A.w,A.e)],['平均損益',yen(A.avg)],['合計',yen(A.sum)]].map(function(k){return '<div class="kpi"><div class="k">'+k[0]+'</div><div class="v">'+k[1]+'</div></div>';}).join('');
+  var cards='';
+  F.forEach(function(f){
+    var g={};D.forEach(function(r){var k=f[1](r);(g[k]=g[k]||[]).push(r);});
+    var keys=f[2]?f[2].filter(function(k){return g[k];}):Object.keys(g).sort(function(a,b){return g[b].length-g[a].length;});
+    if(keys.length<2&&!f[2])return;
+    var mx=Math.max.apply(null,keys.map(function(k){return g[k].length;}));
+    var h='<table><tr><th>'+f[0]+'</th><th>記録</th><th>未達</th><th>勝率</th><th>平均損益</th><th>合計</th></tr>';
+    keys.forEach(function(k){var s=st(g[k]);var d=(s.avg!=null&&A.avg!=null)?s.avg-A.avg:null;var mark=(s.e>=10&&d!=null&&Math.abs(d)>=200);
+      h+='<tr class="'+(s.n<10?'few':'')+(mark?' hl':'')+'"><td>'+k+'<br><span class="bar" style="width:'+(s.n/mx*80)+'px"></span></td><td>'+s.n+'</td><td>'+pc(s.miss,s.n)+'</td><td>'+pc(s.w,s.e)+'</td><td class="'+(mark?cls(d):'')+'">'+yen(s.avg)+'</td><td>'+yen(s.sum)+'</td></tr>';});
+    h+='</table>';
+    cards+='<div class="card scroll">'+h+'</div>';
+  });
+  document.getElementById('cards').innerHTML=cards;
+  /* thru */
+  var tg={'全体':T};T.forEach(function(r){(r.thr.length?r.thr:['理由なし']).forEach(function(x){(tg['理由: '+x]=tg['理由: '+x]||[]).push(r);});});
+  var th='<tr><th>スルーした記録</th><th>記録</th><th>未達</th><th>入っていたら 勝率</th><th>平均損益</th><th>合計</th></tr>';
+  Object.keys(tg).forEach(function(k){var s=st(tg[k]);th+='<tr class="'+(s.n<10?'few':'')+'"><td>'+k+'</td><td>'+s.n+'</td><td>'+pc(s.miss,s.n)+'</td><td>'+pc(s.w,s.e)+'</td><td class="'+cls(s.avg)+'">'+yen(s.avg)+'</td><td>'+yen(s.sum)+'</td></tr>';});
+  document.getElementById('thru').innerHTML=th;
+  /* list */
+  var L=D.concat(T).slice();
+  if(S.sort==='d')L.sort(function(a,b){return (b.d+b.t).localeCompare(a.d+a.t);});else if(S.sort==='p')L.sort(function(a,b){return (b.pnl==null?-1e9:b.pnl)-(a.pnl==null?-1e9:a.pnl);});else L.sort(function(a,b){return (a.pnl==null?1e9:a.pnl)-(b.pnl==null?1e9:b.pnl);});
+  document.getElementById('ln').textContent=L.length+'件';
+  var lh='<tr><th>日付</th><th>時刻</th><th>銘柄</th><th>シグナル</th><th>水準線</th><th>VAP値</th><th>結果</th><th>損益</th><th>ギャップ</th><th>寄り足</th><th>VWAP</th><th>EMA</th><th>寄りから</th></tr>';
+  L.forEach(function(r){lh+='<tr><td>'+(r.g==='thru'?'（スルー）':'')+r.d+'</td><td>'+r.t+'</td><td>'+r.st+'</td><td>'+r.tag+'</td><td class="mono">'+(r.lv==null?'—':r.lv)+'</td><td class="mono">'+r.vap+(r.adj?'（'+(r.adj>0?'+':'')+r.adj+'）':'')+'</td><td>'+(r.j==='ok'?'EP成立':'未達')+'</td><td class="'+cls(r.pnl)+'">'+yen(r.pnl)+'</td><td>'+(r.gap==null?'—':(r.gap>0?'+':'')+r.gap.toFixed(1)+'%')+'</td><td>'+r.yori+'</td><td>'+r.vwap.replace('VWAPの','')+'</td><td>'+r.order+'</td><td>'+r.nOpen+'本</td></tr>';});
+  document.getElementById('list').innerHTML=lh;
+}
+var sk={};R.forEach(function(r){sk[r.st]=(sk[r.st]||0)+1;});
+var ss=document.getElementById('stk');ss.innerHTML='<option value="">全銘柄</option>'+Object.keys(sk).sort(function(a,b){return sk[b]-sk[a];}).map(function(s){return '<option value="'+s+'">'+s+'（'+sk[s]+'）</option>';}).join('');
+ss.onchange=function(){S.stk=ss.value;render();};
+var so=document.getElementById('sort');so.onchange=function(){S.sort=so.value;render();};
+var ds=R.map(function(r){return r.d;}).sort();var days={};R.forEach(function(r){days[r.d]=1;});
+document.getElementById('meta').textContent='Scalping Notebook の記録（'+ds[0]+'〜'+ds[ds.length-1]+'・'+Object.keys(days).length+'日・VAP方式の記録のみ）に、CA の1分足から当時の状況を付けて比べたもの。';
+document.getElementById('defs').innerHTML='<h2 style="color:var(--ink)">定義</h2>'+
+ '<b>対象</b>：SN の記録のうち 8/20以降・VAP値入力済み・EP起算方式（scheme 2/3）。<b>データ算入</b>＝SN の「データに算入」（スルー以外）。スルーは別枠。<br>'+
+ '<b>損益</b>：SN 本体の計算関数（_epResolve / _elHoldFinalParts）をそのまま実行した値。×見送りは損益なし。<br>'+
+ '<b>ギャップ</b>：寄りの始値 ÷ CA にある同じ銘柄の前の日付の最後の約定足の終値 −1（±1%未満＝ほぼ同値、3%以上＝大幅）。<br>'+
+ '<b>VWAP・EMA・前日終値・寄り値との位置</b>：シグナル時刻の1本前の足の終値で判定。EMA・VWAP は取り込み時の値。<br>'+
+ '<b>寄りから何本目</b>：寄り足からシグナルの足までの1分足の本数（出来高のある足）。<b>平均値幅</b>：直前10本の（高値−安値）の平均。<br>'+
+ '<b>大RN</b>：100円の倍数。<b>注意</b>：件数が少ない区分の差は偶然の範囲のことが多いので、気になる区分は一覧で日付を開いて確認してください。';
+render();
+})();
+</script>

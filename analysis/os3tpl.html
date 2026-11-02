@@ -1,0 +1,253 @@
+<title>逆張り空売り 手法探索</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: 上=前提と操作、中=手法ごとの成績表（並べ替え・前半/後半）、下=選んだ手法の場面一覧 */
+:root{
+  --bg:#f4f6f8; --panel:#fff; --ink:#17212b; --mute:#5a6773; --line:#d9e0e6;
+  --acc:#1f5fa8; --accSoft:#e4edf8; --win:#c0392b; --lose:#1e8449; --ok:#0f766e;
+  --sans:"BIZ UDPGothic","Hiragino Sans","Yu Gothic UI",system-ui,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#10151a; --panel:#18202a; --ink:#e1e7ed; --mute:#97a3af; --line:#2a333d;
+  --acc:#80b1ec; --accSoft:#1e2e42; --win:#ff8a7a; --lose:#5fd08a; --ok:#4fd1c5; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#10151a; --panel:#18202a; --ink:#e1e7ed; --mute:#97a3af; --line:#2a333d;
+  --acc:#80b1ec; --accSoft:#1e2e42; --win:#ff8a7a; --lose:#5fd08a; --ok:#4fd1c5; color-scheme:dark}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.6}
+.wrap{max-width:1180px;margin:0 auto;padding-block:20px 48px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:16px}
+h1{font-size:22px;margin:0;text-wrap:balance} h2{font-size:15px;margin:0 0 6px}
+.sub{color:var(--mute);font-size:12.5px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 16px;min-width:0}
+.ctrls{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px 18px}
+.row{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+.lab{font-size:12px;color:var(--mute);width:100%}
+button.chip{font:inherit;font-size:12.5px;padding:3px 10px;border-radius:999px;border:1px solid var(--line);background:transparent;color:var(--ink);cursor:pointer}
+button.chip[aria-pressed="true"]{background:var(--acc);border-color:var(--acc);color:var(--panel)}
+button.chip:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;font-size:13px}
+th,td{border-bottom:1px solid var(--line);padding:5px 7px;text-align:right;white-space:nowrap}
+th{font-size:11.5px;color:var(--mute);font-weight:700;position:sticky;top:0;background:var(--panel)}
+th:first-child,td:first-child{text-align:left;white-space:normal;min-width:15em}
+tbody tr{cursor:pointer} tbody tr:hover{background:var(--accSoft)} tr.sel{background:var(--accSoft);outline:2px solid var(--acc);outline-offset:-2px}
+.pos{color:var(--win);font-weight:700} .neg{color:var(--lose);font-weight:700}
+.stab{color:var(--ok);font-weight:700}
+.fam{font-size:11px;color:var(--mute)}
+.note{font-size:12px;color:var(--mute);line-height:1.8} .note b{color:var(--ink)}
+.mono{font-family:var(--mono)}
+.tblwrap{max-height:70vh;overflow:auto}
+:root{--line-c:#d97706;--ep-c:#c0392b;--stop-c:#7c3aed;--vap-c:#94a3b8;--up-c:#c0392b;--dn-c:#1e8449;--grid:#e5e9ee}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--line-c:#f59e0b;--ep-c:#ff7b6b;--stop-c:#b794f4;--vap-c:#55657a;--up-c:#ff7b6b;--dn-c:#5fd08a;--grid:#26303b}}
+:root[data-theme="dark"]{--line-c:#f59e0b;--ep-c:#ff7b6b;--stop-c:#b794f4;--vap-c:#55657a;--up-c:#ff7b6b;--dn-c:#5fd08a;--grid:#26303b}
+.gal{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px}
+.mt{font-size:11.5px;margin-top:6px}.mt th,.mt td{padding:3px 4px}.mt th:first-child,.mt td:first-child{min-width:0}.mt tr[data-k]{cursor:pointer}.mt tr[data-k]:hover{background:var(--accSoft)}tr.few td{opacity:.5}
+.card{border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:0}
+.card h3{font-size:13px;margin:0 0 2px}.card p{font-size:11.5px;color:var(--mute);margin:4px 0 0;line-height:1.6}
+.card svg,#mc svg{width:100%;height:auto;display:block}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px}
+.legend{display:flex;flex-wrap:wrap;gap:10px;font-size:11.5px;color:var(--mute);margin-top:6px}
+.legend i{display:inline-block;width:14px;height:3px;margin-right:4px;vertical-align:middle}
+#list tbody tr,#list tr{cursor:pointer}
+</style>
+<div class="wrap">
+  <header>
+    <h1>逆張り空売り 手法探索</h1>
+    <div class="sub" id="meta"></div>
+  </header>
+  <section class="panel">
+    <h2>手法の図鑑（模式図）</h2>
+    <div class="sub" style="margin-bottom:10px">どの手法も「ラインを割って下にいる → 戻ってきてラインを超える（OS1） → ラインの上の高VAP帯の上端−1円（EP）に売り指値 → H1/H2で買い戻し」。違うのはラインの作り方です。図の右の横棒は価格帯別出来高。</div>
+    <div class="sub" id="galSet" style="margin-bottom:8px"></div><div class="gal" id="gal"></div>
+  </section>
+  <section class="panel ctrls" aria-label="条件">
+    <div class="row"><span class="lab">決済</span><span class="row" id="c_exit"></span></div>
+    <div class="row"><span class="lab">同じラインのOS</span><span class="row" id="c_os"></span></div>
+    <div class="row"><span class="lab">ラインの有効期間（できてからOS1まで）</span><span class="row" id="c_win"></span></div>
+    <div class="row"><span class="lab">高VAPの基準（平均の何倍で帯が始まるか）</span><span class="row" id="c_rh"></span></div>
+    <div class="row"><span class="lab">高めが途切れる基準（平均の何倍を下回ったら）</span><span class="row" id="c_rc"></span></div>
+    <div class="row"><span class="lab">時間帯（OS1の時刻）</span><span class="row" id="c_tb"></span></div>
+    <div class="row"><span class="lab">ラインの種類</span><span class="row" id="c_fam"></span></div>
+    <div class="row"><span class="lab">並べ替え ／ 約定が何件以上を表示</span><span class="row" id="c_sort"></span><span class="row" id="c_min"></span></div>
+  </section>
+  <section class="panel">
+    <h2>手法ごとの成績（100株あたり）</h2>
+    <div class="sub" style="margin-bottom:8px">行を押すと、下に場面の一覧（高VAP×2・途切れ×1.0・前場中の設定）が出ます。<span class="stab">◎</span>＝前半・後半の両方で平均がプラス（約定10件以上ずつ）。</div>
+    <div class="scroll tblwrap"><table id="tbl"></table></div>
+  </section>
+  <section class="panel">
+    <h2 id="lt">場面の一覧</h2>
+    <div class="sub" id="ls">表の行を押してください。</div>
+    <div class="two">
+      <div class="scroll" style="max-height:520px;overflow:auto"><table id="list"></table></div>
+      <div><div class="sub" id="mcT">一覧の行を押すと、その場面の1分足を描きます。</div><div id="mc"></div>
+        <div class="legend"><span><i style="background:var(--line-c)"></i>ライン</span><span><i style="background:var(--ep-c)"></i>EP</span><span><i style="background:var(--stop-c)"></i>損切り（EP+15円）</span><span><i style="background:var(--vap-c)"></i>VAP（OS1直前・寄りから）</span><span>▼ OS1　● 約定　◆ 決済</span></div></div>
+    </div>
+  </section>
+  <section class="panel note" id="defs"></section>
+</div>
+<script id="data" type="application/json">__DATA__</script>
+<script>
+(function(){
+var D=JSON.parse(document.getElementById('data').textContent);
+var R=D.rows; /* [typ,osno,win,rh,rc,tb,half,nsig,nfill, w0,l0,s0, w1,l1,s1, w2,l2,s2, w3,l3,s3] */
+var S={exit:0,os:'1回目',win:'前場中',rh:2,rc:1,tb:{},fam:'',sort:'avg',min:15,sel:null};
+['9:00-9:30','9:30-10:00','10:00-10:30','10:30-11:30'].forEach(function(t){S.tb[t]=true;});
+function fam(t){if(t.indexOf('底抜け')===0)return '底抜けライン';if(t.indexOf('寄り足')===0)return '寄り足ライン';if(t.indexOf('前日')===0)return '前日終値・高安値';
+ if(t.indexOf('底つき')===0||t.indexOf('RN')>=0)return 'RN・底つき';if(t.indexOf('山頂')===0)return '山頂';if(t.indexOf('浮き足')===0)return '浮き足連続OS';return 'POC・高VAP';}
+function lbl(t){return t.replace(/ e9 /,' 9EMA ').replace(/ e22 /,' 22EMA ').replace(/ e50 /,' 50EMA ').replace(/ e200 /,' 200EMA ').replace(/ vwap /,' VWAP ').replace('本数','上で確定').replace(/(\d+)$/,function(m,a,o,s){return s.indexOf('上で確定')>=0?a+'本':m;});}
+function chips(id,items,cur,on){var h=document.getElementById(id);h.innerHTML='';items.forEach(function(it){var b=document.createElement('button');b.type='button';b.className='chip';b.setAttribute('aria-pressed',String(typeof cur==='function'?cur(it[0]):it[0]===cur));b.textContent=it[1];b.onclick=function(){on(it[0]);render();};h.appendChild(b);});}
+function yen(v){return v==null?'—':(v>0?'+':'')+Math.round(v).toLocaleString();}
+function cls(v){return v==null?'':v>0?'pos':v<0?'neg':'';}
+
+var NS='http://www.w3.org/2000/svg';
+function svgEl(tag,a){var e=document.createElementNS(NS,tag);for(var k in a)e.setAttribute(k,a[k]);return e;}
+/* bars:[[o,h,l,c]], opt:{lines:[{y,label,col,dash}], ep, stop, vap:[[p,v]], mean, marks:{os,e,x}, curve:[y...] } */
+function candleSvg(bars,opt,W,H){
+  var svg=svgEl('svg',{viewBox:'0 0 '+W+' '+H,role:'img'});
+  var pad={l:8,r:(opt.vap?70:8),t:10,b:14},cw=(W-pad.l-pad.r)/bars.length;
+  var lo=Infinity,hi=-Infinity;bars.forEach(function(b){lo=Math.min(lo,b[2]);hi=Math.max(hi,b[1]);});
+  (opt.lines||[]).forEach(function(l){lo=Math.min(lo,l.y);hi=Math.max(hi,l.y);});
+  if(opt.ep!=null){hi=Math.max(hi,opt.ep);} if(opt.stop!=null&&opt.showStop)hi=Math.max(hi,opt.stop);
+  var span=(hi-lo)||1;lo-=span*0.06;hi+=span*0.08;
+  function Y(p){return pad.t+(hi-p)/(hi-lo)*(H-pad.t-pad.b);}
+  function X(i){return pad.l+cw*(i+0.5);}
+  var css=getComputedStyle(document.documentElement);function C(n){return css.getPropertyValue(n).trim();}
+  if(opt.vap&&opt.vap.length){var mx=0;opt.vap.forEach(function(v){mx=Math.max(mx,v[1]);});var x0=W-pad.r+6,bw=pad.r-10;
+    var step=opt.vapStep||1;
+    opt.vap.forEach(function(v){if(v[0]<lo||v[0]>hi)return;var h=Math.max(1.2,(H-pad.t-pad.b)/(hi-lo)*step*0.85);svg.appendChild(svgEl('rect',{x:x0,y:Y(v[0])-h/2,width:v[1]/mx*bw,height:h,fill:(v[2]?C('--line-c'):C('--vap-c')),opacity:v[2]?0.85:0.7}));});
+    if(opt.mean){[1,2].forEach(function(k){var xm=x0+opt.mean*k/mx*bw;if(xm<W){svg.appendChild(svgEl('line',{x1:xm,x2:xm,y1:pad.t,y2:H-pad.b,stroke:C('--mute'),'stroke-dasharray':'2 2','stroke-width':0.8}));var tx=svgEl('text',{x:xm+1,y:H-3,'font-size':8,fill:C('--mute')});tx.textContent=k===1?'平均':'×2';svg.appendChild(tx);}});}}
+  if(opt.curve){var d='';opt.curve.forEach(function(y,i){if(y==null)return;d+=(d?'L':'M')+X(i)+' '+Y(y);});svg.appendChild(svgEl('path',{d:d,fill:'none',stroke:C('--acc'),'stroke-width':1.5,opacity:0.8}));}
+  if(opt.curve2){var d2='';opt.curve2.forEach(function(y,i){if(y==null)return;d2+=(d2?'L':'M')+X(i)+' '+Y(y);});svg.appendChild(svgEl('path',{d:d2,fill:'none',stroke:C('--ok'),'stroke-width':1.5,opacity:0.8}));}
+  function hline(y,col,dash,label,from){if(y==null)return;svg.appendChild(svgEl('line',{x1:from!=null?X(from)-cw/2:pad.l,x2:W-pad.r,y1:Y(y),y2:Y(y),stroke:col,'stroke-width':1.3,'stroke-dasharray':dash||''}));
+    if(label){var tx=svgEl('text',{x:(from!=null?X(from)-cw/2:pad.l)+2,y:Y(y)-3,'font-size':9,fill:col,'font-weight':700});tx.textContent=label;svg.appendChild(tx);}}
+  (opt.lines||[]).forEach(function(l){hline(l.y,l.col||C('--line-c'),l.dash||'5 3',l.label,l.from);});
+  if(opt.band){svg.appendChild(svgEl('rect',{x:pad.l,width:W-pad.r-pad.l,y:Y(opt.band[1]),height:Math.max(1,Y(opt.band[0])-Y(opt.band[1])),fill:C('--line-c'),opacity:0.13}));}
+  if(opt.ep!=null)hline(opt.ep,C('--ep-c'),'',opt.epLabel||'EP');
+  if(opt.stop!=null&&opt.showStop)hline(opt.stop,C('--stop-c'),'2 3','損切り');
+  bars.forEach(function(b,i){var up=b[3]>=b[0],col=up?C('--up-c'):C('--dn-c');
+    svg.appendChild(svgEl('line',{x1:X(i),x2:X(i),y1:Y(b[1]),y2:Y(b[2]),stroke:col,'stroke-width':1}));
+    var y0=Y(Math.max(b[0],b[3])),y1=Y(Math.min(b[0],b[3]));svg.appendChild(svgEl('rect',{x:X(i)-cw*0.32,y:y0,width:cw*0.64,height:Math.max(1,y1-y0),fill:up?'transparent':col,stroke:col,'stroke-width':1}));
+    if(opt.hl&&opt.hl.indexOf(i)>=0)svg.appendChild(svgEl('rect',{x:X(i)-cw*0.48,y:pad.t,width:cw*0.96,height:H-pad.t-pad.b,fill:C('--acc'),opacity:0.08}));});
+  var m=opt.marks||{};
+  function mk(i,p,sym,col,label){if(i==null)return;var tx=svgEl('text',{x:X(i),y:p,'font-size':10,'text-anchor':'middle',fill:col,'font-weight':700});tx.textContent=sym;svg.appendChild(tx);
+    if(label){var t2=svgEl('text',{x:X(i),y:p-10,'font-size':8.5,'text-anchor':'middle',fill:col});t2.textContent=label;svg.appendChild(t2);}}
+  if(m.os!=null)mk(m.os,Y(bars[m.os][1])-4,'▼',C('--acc'),'OS1');
+  if(m.e!=null)mk(m.e,Y(opt.ep)+3.5,'●',C('--ep-c'));
+  (m.x||[]).forEach(function(x,k){if(x==null)return;var nm=['終値','H1','H2'][x[2]];mk(x[0],Y(bars[x[0]][3])+3.5,'◆',x[1]?C('--stop-c'):C('--ink'),null);});
+  if(m.c!=null){var tx=svgEl('text',{x:X(m.c),y:H-3,'font-size':8.5,'text-anchor':'middle',fill:C('--mute')});tx.textContent='ライン確定';svg.appendChild(tx);}
+  return svg;
+}
+function mini(s){
+  var host=document.getElementById('mc');host.innerHTML='';
+  document.getElementById('mcT').textContent=s.d+' '+s.tk+'　OS1 '+s.t+'　ライン '+s.L+' → EP '+s.ep+'（'+['EP足の終値','H1','H2','H1→含み益ならH2'][S.exit]+'で '+yen(s.p[S.exit])+'円）';
+  var bars=s.bars.map(function(b){return [b[1],b[2],b[3],b[4]];});
+  var top=s.ep+1; var vap=s.vp.map(function(v){return [v[0],v[1],(v[0]>=s.L-1e-9&&v[0]<=top+1e-9)?1:0];});
+  var tk=s.L>3000?1:0.5;
+  var xs=[];var ex=s.x[S.exit];if(ex)xs.push([ex[0],ex[1],S.exit]);
+  host.appendChild(candleSvg(bars,{lines:[{y:s.L,label:'ライン '+s.L}],ep:s.ep,stop:s.ep+15,showStop:true,vap:vap,vapStep:tk,mean:s.mean,marks:{os:s.os,e:s.e,x:xs,c:s.c},hl:[s.e]},560,300));
+  var lab=document.createElement('div');lab.className='sub';lab.style.marginTop='4px';
+  lab.textContent=s.bars[0][0]+' 〜 '+s.bars[s.bars.length-1][0]+'。右の横棒の色付き＝ラインからEP+1円までの高VAP帯。';host.appendChild(lab);
+}
+/* 模式図: 合成の足 */
+function synth(seq){var b=[],p=seq[0];for(var i=1;i<seq.length;i++){var c=seq[i][0],w=seq[i][1]||1.2,o=p;b.push([o,Math.max(o,c)+w,Math.min(o,c)-w,c]);p=c;}return b;}
+var GAL=[
+ {k:'底抜けライン',t:'底抜けライン（EMA・VWAP）',pred:function(k){return k.indexOf('底抜け')===0;},p:'指標線で「底支え」（ヒゲで貫いて実体は上／割って次の足で復帰／割って底つきサイン→復帰）が◯回 → 実体で割って次の足も続落。ラインはその足の指標線の値段。戻ってきてOS1→上の高VAP帯でEP。',
+  seq:[[100],[102],[103.5],[104],[104.8],[105.5],[103.6,1],[101.5],[100.5],[101.5],[103],[104.8,1.2],[106.4,1.5],[105.4],[103.5]],curve:[99,100.2,101.2,102,102.8,103.5,104,104.3,104.4,104.4,104.4,104.5,104.6,104.7,104.7],L:104.1,band:[104.1,107],ep:106,os:11,e:12,c:7},
+ {k:'寄り足ライン',t:'寄り足ライン（1分・5分、陽線/陰線別）',pred:function(k){return k.indexOf('寄り足')===0;},p:'寄り足（最初の足）の実体高値・実体安値・ヒゲ先のどれかをライン。割って下で確定したあと、戻ってきてOS1→上の高VAP帯でEP。',
+  seq:[[106],[103,1.4],[102.4],[101],[100],[100.6],[102],[103.4,1],[104.5,1.5],[103.4],[102]],L:103,band:[103,105.3],ep:104.3,os:7,e:8,c:2,hl0:[0]},
+ {k:'前日終値・高安値',t:'前日終値・前日高値・前日安値',pred:function(k){return k.indexOf('前日')===0;},p:'前日の値段がライン。ギャップダウンで下から始まった日（窓埋め）や、割ったあとに戻ってきてOS1→上の高VAP帯でEP。',
+  seq:[[97],[98],[97.4],[98.6],[99.6],[100.8],[102.4,1.4],[101.4],[100]],L:101,band:[101,103.2],ep:102.2,os:5,e:6,lbl:'前日終値'},
+ {k:'RN・底つき',t:'RN（大100円・中50円）と 底つき(新)',pred:function(k){return k==='大RN'||k==='中RN'||k.indexOf('底つき(新)')===0;},p:'RNを上から割ったらライン。底つき(新)は、割ったときRN±10円に平均×◯以上の高VAPがあるもの（反発あり/なしで分ける）。',
+  seq:[[103],[102.4],[101.2],[100.8],[99.2,1],[98],[97.4],[98.6],[100],[101.6,1.4],[100.4],[99]],L:100,band:[100,102.3],ep:101.3,os:8,e:9,c:4,lbl:'大RN',rnBand:true},
+ {k:'RN・底つき',t:'底つき(旧)',pred:function(k){return k.indexOf('底つき(旧)')===0;},p:'下ヒゲの長い底（底つきサイン）→ 9EMAの上で3本定着 → その底を割ったらライン（底の値段）。戻ってきてOS1→上の高VAP帯でEP。',
+  seq:[[103],[101.5],[100.4,2.6],[101.6],[102.6],[103.2],[102.4],[101],[99.6],[98.8],[99.6],[100.8],[102,1.4],[101],[99.8]],L:99.4,band:[99.4,101.6],ep:100.6,os:11,e:12,c:8},
+ {k:'山頂',t:'山頂（実体の頂点）',pred:function(k){return k.indexOf('山頂')===0;},p:'前後5本で一番高い足の実体の頂点がライン。下げたあと戻ってきてOS1→上の高VAP帯でEP。',
+  seq:[[100],[102],[104],[105.2],[104],[102.6],[101.4],[100.6],[101.6],[103],[104.4],[105.8,1.4],[104.8],[103.4]],L:105.2,band:[105.2,106.8],ep:105.8,os:10,e:11,c:8},
+ {k:'POC・高VAP',t:'POC・高VAP帯',pred:function(k){return k==='POC'||k.indexOf('高VAP')===0;},p:'その時点のPOC（出来高最大の値段）や高VAP（平均×2・×3）の値段を下に割ったらライン。戻ってきてOS1→上の高VAP帯でEP。',
+  seq:[[104],[103.6],[104.2],[103.8],[104.1],[102.6],[101.6],[101],[102],[103.2],[104.4,1.2],[105.3,1.3],[104.2],[103]],L:103.8,band:[103.8,105.5],ep:104.5,os:10,e:11,c:5},
+ {k:'浮き足連続OS',t:'浮き足連続OS',pred:function(k){return k.indexOf('浮き足')===0;},p:'直近15本の安値（起点）から、EMA・VWAP・POC・高VAP・RN・寄り足ライン・前日終値のうち2本以上を上抜け、最上部ラインを超えた足がOS1。前足が浮いている／途中でラインに足をつけない、の条件で分ける。',
+  seq:[[100],[99],[98.6,1],[99.8],[101],[102.2],[103.4],[104.6,1],[105.8,1.3],[104.6],[103.2]],L:104.2,band:[104.2,106.3],ep:105.3,os:7,e:8,lines2:[{y:100.3,label:'VWAP'},{y:102.4,label:'22EMA'}]}
+];
+function gallery(){var g=document.getElementById('gal');g.innerHTML='';
+  GAL.forEach(function(x){var c=document.createElement('div');c.className='card';var h=document.createElement('h3');h.textContent=x.t;c.appendChild(h);
+    var bars=synth(x.seq);var vap=[];for(var p=Math.floor(x.L-6);p<=x.L+6;p+=0.5){var inb=p>=x.band[0]-1e-9&&p<=x.band[1]+1e-9;vap.push([p,inb?(p<x.band[0]+0.6?90:70):(20+((p*7)%5)*6),inb?1:0]);}
+    var lines=[{y:x.L,label:x.lbl||'ライン'}].concat((x.lines2||[]).map(function(l){return {y:l.y,label:l.label,col:getComputedStyle(document.documentElement).getPropertyValue('--mute').trim(),dash:'3 3'};}));
+    var xs=[[x.e+1,false,1]];
+    c.appendChild(candleSvg(bars,{lines:lines,ep:x.ep,vap:vap,vapStep:0.5,mean:40,curve:x.curve,marks:{os:x.os,e:x.e,x:xs,c:x.c},hl:x.hl0||[]},300,170));
+    var p=document.createElement('p');p.textContent=x.p;c.appendChild(p);var tb=document.createElement('div');tb.id='gt'+GAL.indexOf(x);tb.className='scroll';c.appendChild(tb);g.appendChild(c);});}
+
+function aggr(pred){var g={},xi=S.exit;
+  R.forEach(function(r){
+    if(S.os!=='両方'&&r[1]!==S.os)return; if(r[2]!==S.win||r[3]!==S.rh||r[4]!==S.rc||!S.tb[r[5]])return;
+    if(!pred(r[0]))return;
+    var G=g[r[0]]||(g[r[0]]={sig:0,fill:0,w:0,l:0,s:0,h:{前半:{n:0,s:0},後半:{n:0,s:0}}});
+    G.sig+=r[7];G.fill+=r[8];G.w+=r[9+xi*3];G.l+=r[10+xi*3];G.s+=r[11+xi*3];G.h[r[6]].n+=r[8];G.h[r[6]].s+=r[11+xi*3];
+  });return g;}
+function stable(G){var a=G.h['前半'],b=G.h['後半'];return a.n>=10&&b.n>=10&&a.s>0&&b.s>0;}
+function cardTables(){
+  GAL.forEach(function(x,ci){var host=document.getElementById('gt'+ci);if(!host)return;
+    var g=aggr(x.pred);var ks=Object.keys(g).filter(function(k){return g[k].fill>0;}).sort(function(a,b){return g[b].s/g[b].fill-g[a].s/g[a].fill;});
+    var tot={fill:0,s:0,w:0};ks.forEach(function(k){tot.fill+=g[k].fill;tot.s+=g[k].s;tot.w+=g[k].w;});
+    var h='<table class="mt"><tr><th>手法</th><th>約定</th><th>勝率</th><th>平均</th><th>合計</th><th></th></tr>';
+    ks.forEach(function(k){var G=g[k],av=G.s/G.fill;h+='<tr class="'+(G.fill<15?'few':'')+'" data-k="'+k.replace(/"/g,'&quot;')+'"><td>'+short(k)+'</td><td>'+G.fill+'</td><td>'+Math.round(G.w/G.fill*100)+'%</td><td class="'+cls(av)+'">'+yen(av)+'</td><td class="'+cls(G.s)+'">'+yen(G.s)+'</td><td>'+(stable(G)?'<span class="stab">◎</span>':'')+'</td></tr>';});
+    if(!ks.length)h+='<tr><td colspan="6">この条件では約定なし</td></tr>';
+    h+='</table>';host.innerHTML=h;
+    host.querySelectorAll('tr[data-k]').forEach(function(tr){tr.onclick=function(){S.sel=tr.dataset.k;S.selS=null;render();document.getElementById('lt').scrollIntoView({behavior:'smooth'});};});
+  });
+  var cs=document.getElementById('galSet');if(cs)cs.textContent='カードの表は、下の操作（決済：'+['EP足の終値','H1','H2','H1→含み益ならH2'][S.exit]+'・'+S.os+'・'+S.win+'・高VAP×'+S.rh+'・途切れ×'+S.rc+'）に連動。平均の高い順。薄い行＝約定15件未満。◎＝前半・後半とも平均プラス（10件以上ずつ）。行を押すと場面の一覧へ。';
+}
+function short(k){var s=lbl(k);return s.replace(/^底抜け /,'').replace(/^寄り足/,'').replace(/^浮き足連続OS /,'').replace(/^底つき\(新\) /,'').replace(/^底つき\(旧\) /,'');}
+
+function render(){
+  chips('c_exit',[[0,'EP足の終値（1足内撤退）'],[1,'H1（1本後の終値）'],[2,'H2（2本後の終値）'],[3,'H1→含み益ならH2']],S.exit,function(v){S.exit=v;});
+  chips('c_os',[['1回目','1回目'],['2回目以降','2回目以降'],['両方','両方']],S.os,function(v){S.os=v;});
+  chips('c_win',[['30本','30本以内'],['60本','60本以内'],['前場中','前場中ずっと']],S.win,function(v){S.win=v;});
+  chips('c_rh',[[1.5,'×1.5'],[2,'×2'],[3,'×3']],S.rh,function(v){S.rh=v;if(S.rc>v)S.rc=1;});
+  chips('c_rc',[[1,'×1.0'],[1.2,'×1.2'],[1.5,'×1.5'],[2,'×2.0']].filter(function(x){return x[0]<=S.rh&&!(S.rh===1.5&&x[0]===2)&&!(S.rh===2&&x[0]===1.2)&&!(S.rh===3&&x[0]===1.2);}),S.rc,function(v){S.rc=v;});
+  chips('c_tb',[['9:00-9:30','9:00〜9:30'],['9:30-10:00','9:30〜10:00'],['10:00-10:30','10:00〜10:30'],['10:30-11:30','10:30〜11:30']],function(k){return !!S.tb[k];},function(v){S.tb[v]=!S.tb[v];});
+  chips('c_fam',[['','すべて'],['底抜けライン','底抜けライン'],['寄り足ライン','寄り足ライン'],['前日終値・高安値','前日終値・高安値'],['RN・底つき','RN・底つき'],['山頂','山頂'],['POC・高VAP','POC・高VAP'],['浮き足連続OS','浮き足連続OS']],S.fam,function(v){S.fam=v;});
+  chips('c_sort',[['avg','平均'],['sum','合計'],['win','勝率'],['n','約定件数']],S.sort,function(v){S.sort=v;});
+  chips('c_min',[[5,'5件'],[15,'15件'],[30,'30件']],S.min,function(v){S.min=v;});
+  var g=aggr(function(typ){return !S.fam||fam(typ)===S.fam;});
+  var rows=Object.keys(g).map(function(k){var G=g[k];return {k:k,G:G,avg:G.fill?G.s/G.fill:null,win:G.fill?G.w/G.fill:null};}).filter(function(x){return x.G.fill>=S.min;});
+  rows.sort(function(a,b){if(S.sort==='avg')return b.avg-a.avg;if(S.sort==='sum')return b.G.s-a.G.s;if(S.sort==='win')return b.win-a.win;return b.G.fill-a.G.fill;});
+  var h='<thead><tr><th>手法（ライン）</th><th>シグナル</th><th>約定</th><th>未達</th><th>勝率</th><th>平均</th><th>合計</th><th>前半 平均（件）</th><th>後半 平均（件）</th><th>安定</th></tr></thead><tbody>';
+  rows.forEach(function(x){var G=x.G,a=G.h['前半'],b=G.h['後半'];var aa=a.n?a.s/a.n:null,bb=b.n?b.s/b.n:null;var st=(a.n>=10&&b.n>=10&&aa>0&&bb>0);
+    h+='<tr data-k="'+x.k.replace(/"/g,'&quot;')+'" class="'+(S.sel===x.k?'sel':'')+'"><td>'+lbl(x.k)+'<br><span class="fam">'+fam(x.k)+'</span></td><td>'+G.sig+'</td><td>'+G.fill+'</td><td>'+Math.round((1-G.fill/G.sig)*100)+'%</td><td>'+Math.round(x.win*100)+'%</td><td class="'+cls(x.avg)+'">'+yen(x.avg)+'</td><td class="'+cls(G.s)+'">'+yen(G.s)+'</td><td class="'+cls(aa)+'">'+yen(aa)+'（'+a.n+'）</td><td class="'+cls(bb)+'">'+yen(bb)+'（'+b.n+'）</td><td>'+(st?'<span class="stab">◎</span>':'')+'</td></tr>';});
+  h+='</tbody>';
+  var t=document.getElementById('tbl');t.innerHTML=h;
+  cardTables();
+  t.querySelectorAll('tbody tr').forEach(function(tr){tr.onclick=function(){S.sel=tr.dataset.k;S.selS=null;render();};});
+  /* list */
+  var lt=document.getElementById('list'),ls=document.getElementById('ls');
+  if(!S.sel){lt.innerHTML='';return;}
+  var L=[];['1回目','2回目以降'].forEach(function(o){if(S.os!=='両方'&&o!==S.os)return;(D.samples[S.sel+'|'+o]||[]).forEach(function(s){L.push(Object.assign({o:o},s));});});
+  document.getElementById('lt').textContent='場面の一覧 — '+lbl(S.sel);
+  ls.textContent='新しい順に最大25件（高VAP×2・途切れ×1.0・前場中・約定した場面。損益は選んだ決済で表示）';
+  L.sort(function(a,b){return (b.d+b.t).localeCompare(a.d+a.t);});
+  var lh='<tr><th>日付</th><th>銘柄</th><th>OS</th><th>OS1の時刻</th><th>ライン</th><th>EP</th><th>VAP値</th><th>EP足</th><th>損益</th></tr>';
+  L.forEach(function(s,i){var p=s.p[S.exit];var vv=Math.round((s.ep-s.L+((Math.abs(s.L-Math.round(s.L/100)*100)<1e-9&&s.ep===s.L)?0:1))*10)/10;
+    lh+='<tr data-i="'+i+'"'+(S.selS===i?' class="sel"':'')+'><td>'+s.d+'</td><td>'+s.tk+'</td><td>'+s.o+'</td><td>'+s.t+'</td><td class="mono">'+s.L+'</td><td class="mono">'+s.ep+'</td><td class="mono">'+vv+'</td><td>'+s.et+'</td><td class="'+cls(p)+'">'+yen(p)+'</td></tr>';});
+  lt.innerHTML=lh;
+  lt.querySelectorAll('tr[data-i]').forEach(function(tr){tr.onclick=function(){S.selS=+tr.dataset.i;render();};});
+  if(S.selS==null&&L.length)S.selS=0;
+  if(L[S.selS])mini(L[S.selS]);
+}
+document.getElementById('meta').textContent='CA に取り込んだ '+D.dates[0]+'〜'+D.dates[1]+' の前場（'+D.nDays+'銘柄日・ティックの価格帯別出来高つき）を全部調べて、ラインごとに「割れて戻ってきたところで高VAP帯に売り指値」した場合の成績。手数料0円。';
+document.getElementById('defs').innerHTML='<h2 style="color:var(--ink)">ルール（あなたの選択どおり）</h2>'+
+ '<b>OS1</b>：ラインができたあと（割れて下にいる状態から）高値がラインを超えた最初の足。2回目以降＝一度終値でラインの下に戻ってから、また超えた足。<br>'+
+ '<b>EP</b>：OS1の足の直前までの寄りからのティックVAPで、ラインから上（最大10円）に「平均×高VAP基準」以上の値段を探し、そこから「平均×途切れ基準」以上が続く所までを高VAP帯とする。EP＝帯の上端−1円（大RNちょうどでVAP値0のときは補正なし）。高VAP帯が無ければ見送り（シグナルに数えない）。<b>未達</b>＝EPを置けたのに、OS1〜OS3でEPを上回らなかった割合（水準線に届かなかった場面はシグナルに入らない）。<br>'+
+ '<b>約定</b>：OS1〜OS3のどれかの足の高値がEPを1円でも上回ったらEPで約定（同値は未約定）。<br>'+
+ '<b>決済</b>：EP足の終値／1本後の終値（H1）／2本後の終値（H2）／H1→含み益ならH2（H1までは必ず持ち、H1の終値がEPより下ならH2の終値、そうでなければH1の終値で決済）。<b>損切り</b>：EP足から決済の足までに高値−EP≥15円の足があれば、その足の終値で撤退（SNと同じ）。損益＝（EP−決済値）×100。<br>'+
+ '<b>ライン</b>：底抜け＝「底支え」が◯回以上あったあと、実体で下に確定＋次の足も続落（次の足が底つきサインならその次の足が続落）。ラインは割った足の指標線の値段。EMAは前日から連続で計算。<br>'+
+ '<b>底支え</b>：①ヒゲで指標線を下に貫いたが実体は上で確定 ②実体で下に確定→次の足で上に復帰 ③実体で下に確定→次の足が底つきサイン→その次の足で上に復帰。<b>底つきサイン</b>：十字線・トンボ・トウバ（実体が値幅の2割以下）／カラカサ・たくり線・ハンマー（下ヒゲが実体の2倍以上・上ヒゲは実体以下）／逆カラカサ（上ヒゲが実体の2倍以上・下ヒゲは実体以下）／はらみ線（前の足の値幅の内側）。<br>'+
+ '寄り足＝1分/5分の寄り足の各値段（陽線・陰線別）。前日＝CAにある前の日付のチャート。RN＝大100円・中50円。'+
+ '底つき(新)＝大RNを割ったとき大RN±10円に平均×◯以上の値段がある（反発あり/なしで分ける）。底つき(旧)＝下ヒゲ等の底→9EMAの上で3本定着→その底を割った。山頂＝前後5本で一番高い足の実体の頂点。'+
+ 'POC・高VAP＝その値段を下に割った。浮き足連続OS＝直近15本の安値（起点）から、EMA・VWAP・POC・高VAP（×2）・RN・寄り足ライン・前日終値のうち2本以上を上抜け、この足で最上部ラインを初めて超えた（浮き足の条件4通り）。<br>'+
+ '<b>注意</b>：同じ場面が複数の手法に入ります。件数が少ない手法の差は偶然の範囲のことが多いので、前半・後半の両方で同じ向きか（◎）を重視してください。';
+gallery();
+render();
+})();
+</script>
