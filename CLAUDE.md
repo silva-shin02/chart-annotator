@@ -150,6 +150,7 @@ git push origin main
 - **矢印付きスタンプの枠を動かしても矢印の傾きを保つ**（2026-10-17・DataChart `keepPointerAngle`）：矢先（tipTm/tipP＝記録時刻）は固定、「矢先→元の根元」の直線が新しい枠と最初に交わる点を新しい根元に（rootSide/rootOff を付け直す）。当たらない（角を越える）ときは直線に一番近い角へ。単体移動・投げ縄移動の確定とプレビュー両方。
 - **矢印ツールの線を本体ごと動かしても矢先は固定**（2026-10-17・`caMoveAnchors`）：type 'arrow' は矢じり側＝`anchors[0]` を固定し根元側だけ動く。投げ縄・1本ドラッグとも（確定とプレビュー）。端点つまみは従来どおり。
 - **消しゴム中の左右同時押し**（2026-11-02）：先に届いた片方のボタンで消した分（未コミット）を、同時押し（パン）に切り替わった時点で ImageAnnotator `eraserSessionCancel`（履歴の最新＝消す前に戻す）で復元。旧：消えたまま履歴に残らず ↶ が押せなかった。
+- **分析用の書き出し**（2026-11-02・設定→バックアップ「📊 分析用に書き出す」・`DisplaySettingsModal` `doAnalysisExport`）：全メタのチャートを IDB→無ければ Firebase（並列4）で読み、`chart-annotator-analysis_YYYYMMDD.json`＝`{kind:'analysis-export',snippets,tagDefs,charts:[{id,ticker,name,date,tags,memo,barCols,bars_1m(配列・vp無し),info,strokes,extra}]}`。値動きの傾向分析（寄り足×前日終値など）の条件をユーザーの書き込みから考えるため。読めないチャートは `missing:true`。
 - スタンプ編集時カーソルを**文末**に（`ati._snippet`）。
 - **スタンプ記録**ページ（`CaStampLogModal`）＋タグ検索への統合（`caCollectStampPlacements`）。
 - テキスト編集ツールバーを**画面内にクランプ**（端で確定/削除が切れない）。
