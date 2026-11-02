@@ -1719,9 +1719,23 @@ function DisplaySettingsModal(props){
       });
       return rec;
     }
-    function finish(){
+    /* 2026-11-02: Scalping Notebook のデータ (トレード記録) も入れる。同じブラウザの scalping_data_v6 → 無ければ SN の Firebase (/data)。
+       SN の接続設定 (scalping_cfg_v2・Secret) は入れない */
+    function loadSn(cb){
+      try{ var raw=localStorage.getItem('scalping_data_v6'); if(raw){ cb(JSON.parse(raw),'local'); return; } }catch(e){}
+      var cfg=_snReadCfg();
+      if(!cfg||!cfg.fbUrl){cb(null,'none');return;}
+      setAnaExp({run:true,done:total,total:total,sn:true});
+      fetch(cfg.fbUrl.replace(/\/$/,'')+'/data.json'+caAuthParam(cfg.fbSecret))
+        .then(function(r){return r.ok?r.json():null;})
+        .then(function(v){cb(v,v?'firebase':'none');})
+        .catch(function(){cb(null,'none');});
+    }
+    function finish(){ loadSn(function(snData,snSrc){ finish2(snData,snSrc); }); }
+    function finish2(snData,snSrc){
       try{
-        var payload={app:'chart-annotator',kind:'analysis-export',version:1,exportedAt:Date.now(),
+        var payload={app:'chart-annotator',kind:'analysis-export',version:2,exportedAt:Date.now(),
+          sn:snData||null, snSrc:snSrc,
           snippets:(function(){try{return caLoadSnippets();}catch(e){return null;}})(),
           tagDefs:(function(){try{return caLoadTagDefs();}catch(e){return null;}})(),
           charts:out};
@@ -1730,7 +1744,7 @@ function DisplaySettingsModal(props){
         var dt=new Date(), ds=dt.getFullYear()+('0'+(dt.getMonth()+1)).slice(-2)+('0'+dt.getDate()).slice(-2);
         _triggerDl(url,'chart-annotator-analysis_'+ds+'.json');
         setTimeout(function(){try{URL.revokeObjectURL(url);}catch(e){}},60000);
-        setAnaExp({run:false,done:total,total:total,fail:nFail,mb:(blob.size/1048576).toFixed(1)});
+        setAnaExp({run:false,done:total,total:total,fail:nFail,mb:(blob.size/1048576).toFixed(1),snSrc:snSrc});
       }catch(e){ setAnaExp({run:false,error:(e&&e.message)||'失敗'}); }
     }
     function next(){
@@ -2101,14 +2115,15 @@ function DisplaySettingsModal(props){
           ce("div",{style:CARD},
             ce("div",{style:HEAD},"📊 分析用に全チャートを書き出す"),
             ce("div",{style:DESC},
-              "全銘柄・全日付の1分足（OHLC・出来高・EMA・VWAP）と、書き込み（線・矢印・テキスト・スタンプなど）、スタンプ定義、タグ、チャートメモを1つのJSONに書き出します。この端末に無いチャートは Firebase から読みます。",ce("br",null),
+              "全銘柄・全日付の1分足（OHLC・出来高・EMA・VWAP）と、書き込み（線・矢印・テキスト・スタンプなど）、スタンプ定義、タグ、チャートメモ、Scalping Notebook のデータ（トレード記録など）を1つのJSONに書き出します。この端末に無いチャートは Firebase から読みます。",ce("br",null),
               "値動きの傾向の分析用です（復元には使えません。Secret は含みません）。"),
             ce("button",{onClick:doAnalysisExport,disabled:!!(anaExp&&anaExp.run),
               style:{width:"100%",padding:"11px 0",fontSize:13,fontWeight:700,borderRadius:10,border:"none",
                 background:"#1e3a8a",color:"#bfdbfe",cursor:(anaExp&&anaExp.run)?"default":"pointer",fontFamily:"inherit",opacity:(anaExp&&anaExp.run)?0.6:1}},
-              (anaExp&&anaExp.run)?("書き出し中… "+anaExp.done+"/"+anaExp.total):"📊 分析用に書き出す"),
+              (anaExp&&anaExp.run)?(anaExp.sn?"SN のデータを読み込み中…":("書き出し中… "+anaExp.done+"/"+anaExp.total)):"📊 分析用に書き出す"),
             anaExp&&!anaExp.run&&!anaExp.error&&ce("div",{style:{fontSize:11,color:"#86efac",marginTop:8,fontWeight:600}},
-              "✓ "+anaExp.total+" 件を書き出しました（"+anaExp.mb+" MB）"+(anaExp.fail?("。うち "+anaExp.fail+" 件はデータが読めず中身なし"):"")),
+              "✓ "+anaExp.total+" 件を書き出しました（"+anaExp.mb+" MB）"+(anaExp.fail?("。うち "+anaExp.fail+" 件はデータが読めず中身なし"):"")+
+              (anaExp.snSrc==='local'?"。SN のデータも入れました":anaExp.snSrc==='firebase'?"。SN のデータも入れました（Firebase から）":"。SN のデータは見つかりませんでした")),
             anaExp&&anaExp.error&&ce("div",{style:{fontSize:11,color:"#fca5a5",marginTop:8}},"✕ "+anaExp.error)
           ),
           ce("div",{style:Object.assign({},CARD,{border:"1px solid #7f1d1d"})},
