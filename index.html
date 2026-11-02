@@ -3974,6 +3974,12 @@ function DataChart(props){
     if(e.buttons===3){
       panStartRef.current={x:e.clientX,y:e.clientY,uS:view.uS,uE:view.uE,ps:pShift};
       bothBtnPanRef.current=true;
+      /* 2026-11-02: 消しゴムは先に届いた片方のボタンで即削除(履歴未コミット)している → 同時押し=パンなので消した分を元に戻す
+         (旧: drawRef を捨てるだけ → 消えたまま履歴にも残らず ↶ が押せなかった) */
+      if(drawRef.current&&drawRef.current.eraser&&drawRef.current.didDelete){
+        if(props.onEraserSessionCancel)props.onEraserSessionCancel();
+        else if(props.onEraserSessionEnd)props.onEraserSessionEnd();
+      }
       drawRef.current={on:false};
       pendingTextReqRef.current=null;  // テキスト/スタンプの pending をキャンセル
       pendingSnipRef.current=null;
@@ -9226,6 +9232,25 @@ function ImageAnnotator(props){
     /* 2026-04-20 Step3: polling 45秒grace period用、commit時刻記録 (旧commit()から移植) */
     lastLocalCommitRef.current=Date.now();
   }
+  /* 2026-11-02: 消しゴムの途中(未コミット)の削除を取り消す = 履歴の最新(消す前)の書き込みに戻す。
+     履歴が無ければ消した状態を1回コミット(せめて ↶ で戻せるように) */
+  function eraserSessionCancel(){
+    var tk=analysisTfRef.current||'1m';
+    var hist=analysisHistRef.current[tk]||[];
+    var top=hist[hist.length-1];
+    if(!top){analysisCommit(analysisStrokesRef.current);return;}
+    var curObj=analysisStrokesRef.current||{'1m':[],'5m':[]};
+    var nextCurObj=Object.assign({},curObj);
+    nextCurObj[tk]=(top.cur||[]).slice();
+    setAnalysisStrokes(nextCurObj);
+    var ra=refAnalysisRef.current;
+    if(ra){
+      var nextRefStrokes=Object.assign({},(ra.analysisStrokes||{'1m':[],'5m':[]}));
+      nextRefStrokes[tk]=(top.ref||[]).slice();
+      setRefAnalysis(Object.assign({},ra,{analysisStrokes:nextRefStrokes}));
+      triggerRefAutoSave();
+    }
+  }
   /* 計測の追加/削除/移動確定をアンドゥ履歴に登録する */
   function measureCommit(newMeasures){
     var tk=analysisTfRef.current||'1m';
@@ -10536,6 +10561,7 @@ function ImageAnnotator(props){
             // 消しゴムドラッグ終了時に1回だけ履歴コミット (cur/ref両方のスナップショット)
             analysisCommit(analysisStrokesRef.current);
           },
+          onEraserSessionCancel:function(){eraserSessionCancel();},
           /* C6: onStrokeDeleteMany(items=[{side,idx}]) */
           onStrokeDeleteMany:function(items){
             if(!items||!items.length)return;
@@ -10803,6 +10829,7 @@ function ImageAnnotator(props){
               onEraserSessionEnd:function(){
                 analysisCommit(analysisStrokesRef.current);
               },
+              onEraserSessionCancel:function(){eraserSessionCancel();},
               onStrokeDeleteMany:function(items){
                 if(!items||!items.length)return;
                 var curIdxs=[], refIdxs=[];
