@@ -1693,85 +1693,6 @@ function DisplaySettingsModal(props){
       setBackupStatus('done:'+Object.keys(storeObj).length);
     }catch(e){setBackupStatus('error: '+(e&&e.message||'失敗'));}
   }
-  /* 2026-11-02: 分析用の書き出し — 全チャートの1分足 + 書き込み(線/テキスト/スタンプ…) + スタンプ定義 + タグ を1つの JSON に。
-     この端末(IDB)に無いチャートは Firebase から読む (保存はしない)。足は [t,o,h,l,c,v,ema9,ema22,ema50,ema200,vwap] の配列に詰める (vp は含めない) */
-  var sAX=useState(null); var anaExp=sAX[0],setAnaExp=sAX[1];
-  function doAnalysisExport(){
-    if(anaExp&&anaExp.run)return;
-    var meta=(caLoadMeta()||[]).filter(function(m){return m&&m.id;});
-    var total=meta.length, done=0, nFail=0, running=0, i=0, out=new Array(total);
-    setAnaExp({run:true,done:0,total:total});
-    function memoText(id){ try{ var h=caGetChartMemo(id)||''; var d=document.createElement('div'); d.innerHTML=h; return (d.textContent||'').trim(); }catch(e){ return ''; } }
-    function pack(m,d){
-      var ad=(d&&d.analysisData)||null, rec={id:m.id,ticker:m.ticker||'',name:m.name||'',date:_caResolveMetaDate(m)||'',
-        tags:(function(){try{return caGetChartTags(m.id)||[];}catch(e){return [];}})(), memo:memoText(m.id)};
-      if(!ad){rec.missing=true;return rec;}
-      var K=['t','o','h','l','c','v','ema9','ema22','ema50','ema200','vwap'];
-      rec.barCols=K;
-      rec.bars_1m=(ad.bars_1m||[]).map(function(b){return K.map(function(k){var v=b[k];return (v==null)?null:v;});});
-      /* 2026-11-02: 8/20以降(SN の VAP 方式)のチャートだけ、前場(〜11:30)の足のティック値段別出来高 vp も入れる (VAP ラインの分析用・{t:vp}) */
-      if(rec.date>='2026-08-20'){
-        var vpm={};
-        (ad.bars_1m||[]).forEach(function(b){ if(b&&b.t&&Array.isArray(b.vp)&&b.vp.length&&_caVpTm(b.t)<=690)vpm[b.t]=b.vp; });
-        rec.vp_1m=vpm;
-      }
-      var info={};
-      Object.keys(ad).forEach(function(k){ var v=ad[k]; if(v==null||typeof v!=='object')info[k]=v; });
-      rec.info=info;
-      rec.strokes=d.analysisStrokes||{};
-      Object.keys(d).forEach(function(k){
-        if(k==='analysisData'||k==='analysisStrokes')return;
-        var v=d[k]; try{ if(JSON.stringify(v).length<200000)(rec.extra||(rec.extra={}))[k]=v; }catch(e){}
-      });
-      return rec;
-    }
-    /* 2026-11-02: Scalping Notebook のデータ (トレード記録) も入れる。同じブラウザの scalping_data_v6 → 無ければ SN の Firebase (/data)。
-       SN の接続設定 (scalping_cfg_v2・Secret) は入れない */
-    function loadSn(cb){
-      try{ var raw=localStorage.getItem('scalping_data_v6'); if(raw){ cb(JSON.parse(raw),'local'); return; } }catch(e){}
-      var cfg=_snReadCfg();
-      if(!cfg||!cfg.fbUrl){cb(null,'none');return;}
-      setAnaExp({run:true,done:total,total:total,sn:true});
-      fetch(cfg.fbUrl.replace(/\/$/,'')+'/data.json'+caAuthParam(cfg.fbSecret))
-        .then(function(r){return r.ok?r.json():null;})
-        .then(function(v){cb(v,v?'firebase':'none');})
-        .catch(function(){cb(null,'none');});
-    }
-    function finish(){ loadSn(function(snData,snSrc){ finish2(snData,snSrc); }); }
-    function finish2(snData,snSrc){
-      try{
-        var payload={app:'chart-annotator',kind:'analysis-export',version:2,exportedAt:Date.now(),
-          sn:snData||null, snSrc:snSrc,
-          snippets:(function(){try{return caLoadSnippets();}catch(e){return null;}})(),
-          tagDefs:(function(){try{return caLoadTagDefs();}catch(e){return null;}})(),
-          charts:out};
-        var blob=new Blob([JSON.stringify(payload)],{type:'application/json'});
-        var url=URL.createObjectURL(blob);
-        var dt=new Date(), ds=dt.getFullYear()+('0'+(dt.getMonth()+1)).slice(-2)+('0'+dt.getDate()).slice(-2);
-        _triggerDl(url,'chart-annotator-analysis_'+ds+'.json');
-        setTimeout(function(){try{URL.revokeObjectURL(url);}catch(e){}},60000);
-        setAnaExp({run:false,done:total,total:total,fail:nFail,mb:(blob.size/1048576).toFixed(1),snSrc:snSrc});
-      }catch(e){ setAnaExp({run:false,error:(e&&e.message)||'失敗'}); }
-    }
-    function next(){
-      while(running<4&&i<total){
-        (function(idx){ var m=meta[idx]; running++;
-          function got(d){
-            running--; out[idx]=pack(m,d); if(out[idx].missing)nFail++; done++;
-            if(done%10===0||done===total)setAnaExp({run:true,done:done,total:total});
-            if(done>=total)finish(); else next();
-          }
-          caLoadDataAsync(m.id,function(d){
-            if(d&&d.analysisData){got(d);return;}
-            if(fbCfg&&fbCfg.url&&!_fbIsPaused(fbCfg))_fetchDraftDataFromFb(fbCfg,m.id,function(fd){got(fd||null);});
-            else got(null);
-          });
-        })(i++);
-      }
-    }
-    if(!total){finish();return;}
-    next();
-  }
   function doRestore(file){
     if(!file)return;
     var rd=new FileReader();
@@ -2116,21 +2037,6 @@ function DisplaySettingsModal(props){
             ce("div",{style:{fontSize:10,color:"#6b6b6b",marginTop:8,lineHeight:1.6}},
               "⚠ このファイルには Firebase の Secret も含まれます。取り扱いに注意してください。",ce("br",null),
               "※ チャートの描画データ本体(IndexedDB)は含まれません(Firebase同期で保全)。")
-          ),
-          /* 2026-11-02: 分析用の書き出し */
-          ce("div",{style:CARD},
-            ce("div",{style:HEAD},"📊 分析用に全チャートを書き出す"),
-            ce("div",{style:DESC},
-              "全銘柄・全日付の1分足（OHLC・出来高・EMA・VWAP）と、書き込み（線・矢印・テキスト・スタンプなど）、スタンプ定義、タグ、チャートメモ、Scalping Notebook のデータ（トレード記録など）、8/20以降の前場のティック値段別出来高を1つのJSONに書き出します。この端末に無いチャートは Firebase から読みます。",ce("br",null),
-              "値動きの傾向の分析用です（復元には使えません。Secret は含みません）。"),
-            ce("button",{onClick:doAnalysisExport,disabled:!!(anaExp&&anaExp.run),
-              style:{width:"100%",padding:"11px 0",fontSize:13,fontWeight:700,borderRadius:10,border:"none",
-                background:"#1e3a8a",color:"#bfdbfe",cursor:(anaExp&&anaExp.run)?"default":"pointer",fontFamily:"inherit",opacity:(anaExp&&anaExp.run)?0.6:1}},
-              (anaExp&&anaExp.run)?(anaExp.sn?"SN のデータを読み込み中…":("書き出し中… "+anaExp.done+"/"+anaExp.total)):"📊 分析用に書き出す"),
-            anaExp&&!anaExp.run&&!anaExp.error&&ce("div",{style:{fontSize:11,color:"#86efac",marginTop:8,fontWeight:600}},
-              "✓ "+anaExp.total+" 件を書き出しました（"+anaExp.mb+" MB）"+(anaExp.fail?("。うち "+anaExp.fail+" 件はデータが読めず中身なし"):"")+
-              (anaExp.snSrc==='local'?"。SN のデータも入れました":anaExp.snSrc==='firebase'?"。SN のデータも入れました（Firebase から）":"。SN のデータは見つかりませんでした")),
-            anaExp&&anaExp.error&&ce("div",{style:{fontSize:11,color:"#fca5a5",marginTop:8}},"✕ "+anaExp.error)
           ),
           ce("div",{style:Object.assign({},CARD,{border:"1px solid #7f1d1d"})},
             ce("div",{style:{fontSize:13,fontWeight:700,color:"#fca5a5",marginBottom:4}},"📂 バックアップから復元"),
