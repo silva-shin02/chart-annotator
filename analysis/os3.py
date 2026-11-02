@@ -2,9 +2,11 @@
 # ライン L → (割れて下にいる状態から) OS: 高値が L を超える足 = OS1。
 # EP = L から上の高VAP帯 (平均×r_hi 以上で始まり、平均×r_cont 以上が続く所まで) の上端 −1円 (大RN ちょうど＆VAP値0 は補正なし)。
 # OS1〜OS3 で高値が EP を1円でも上回れば約定(EP)。決済 = EP足の終値 / H1 / H2。損切り = 高値−EP≥15円 に触れた足の終値。手数料0。
+# ホールド撤退: H1以降の足が「前の足の終値より下の指標線」にヒゲでも触れたら、その足の終値で撤退。
 import pickle,sys,collections,json
 days=[d for d in pickle.load(open(sys.argv[1],'rb')) if d['date']>='2026-08-20' and d.get('vp')]
 AM=690; CUT=15
+HOLD_LINES=('e9','e22','e50','e200','vwap')
 RCOMBO=[(1.5,1.0),(1.5,1.2),(1.5,1.5),(2.0,1.0),(2.0,1.5),(2.0,2.0),(3.0,1.0),(3.0,1.5),(3.0,2.0)]
 MAXVAP=10.0
 def tick(p): return 1.0 if p>3000 else 0.5
@@ -158,10 +160,14 @@ for day in days:
           last=min(n-1,e+dd);ex=S[last]['c'];xb=last;stp=False
           for k in range(e,last+1):
             if S[k]['h']-ep>=CUT: ex=S[k]['c'];xb=k;stp=True;break
+            # ホールド中(H1以降)の撤退 (2026-11-02 ユーザー指定): 前の足の終値より下にある指標線
+            # (EMA9/22/50/200・VWAP) に、その足の安値がヒゲでも触れたら、その足の終値で撤退
+            if k>e and k<last and any(S[k][X]<S[k-1]['c'] and S[k]['l']<=S[k][X] for X in HOLD_LINES):
+              ex=S[k]['c'];xb=k;break
           pls.append((ep-ex)*100);exs.append((xb,stp))
         # 4つ目: H1までは必ず持ち、H1の終値がEPより下(含み益)ならH2まで、そうでなければH1の終値で決済 (損切りは同じ)
         h1=min(n-1,e+1)
-        if exs[1][1] or not (S[h1]['c']<ep): pls.append(pls[1]);exs.append(exs[1])
+        if exs[1][1] or exs[2][0]<=h1 or not (S[h1]['c']<ep): pls.append(pls[1]);exs.append(exs[1])
         else: pls.append(pls[2]);exs.append(exs[2])
       for win in ('30本','60本','前場中'):
         if win=='30本' and age>30: continue
