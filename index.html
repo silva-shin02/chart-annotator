@@ -14241,7 +14241,7 @@ function caLoadSnEvents(date,cb){
 
 /* ── CaChartCard: サムネイルカード + メモ + タグ ── */
 /* 前日終値からのギャップ (寄りの始値 vs 前日の最後の約定足の終値, %)。区分のしきい値 (%)。チャートを探す で使う */
-var CA_GAP_SMALL=1, CA_GAP_BIG=3;
+var CA_GAP_SMALL=0.5, CA_GAP_BIG=2;   /* 2026-11-04 ユーザー指定: ±0.5%未満=ほぼ同値 / 0.5〜2%=GU・GD / 2%以上=大幅 (旧 1%/3%)。類似チャートとチャートを探すで共通 */
 function caGapCat(g){
   if(g==null||!isFinite(g))return null;
   if(g<=-CA_GAP_BIG)return 'bgd'; if(g<=-CA_GAP_SMALL)return 'gd';
@@ -14258,12 +14258,30 @@ var CA_GAP_LABEL={bgd:'大幅GD',gd:'GD',flat:'ほぼ同値',gu:'GU',bgu:'大幅
      ② 形: 区間の始値からの終値% の線 (最大 CA_SIM2_N 点に間引き) の DTW 距離。値幅の違いもそのまま距離になる
      ③ 値幅: 区間の高値−安値% と 1分足の平均値幅% の比
      ④ 指標線: 終値が EMA9/22/50/200・VWAP の上か下か (各点で一致した割合) と、区間の最後の離れ具合
-   最後の波 (いま進んでいる波) の向きが逆なら合計 ×CA_SIM2_OPP。
+     ⑤ 寄り付き (2026-11-04 追加・25%): その場面がある日のギャップ (前日終値→寄りの始値%) の近さ 7 : 寄りの1本目の陽線/陰線の一致 3
+   最後の波 (いま進んでいる波) の向きが逆なら合計 ×CA_SIM2_OPP。一覧はギャップ区分 (caGapCat) で絞り込める (既定=すべて)。
    EMA は画面と同じ (未助走の日は前の日付のチャートから computeEnhancedBars で連続計算)。 */
 var CA_SIM2_N=40, CA_SIM2_AFTER=20, CA_SIM2_WAVE_K=3, CA_SIM2_MAX=60, CA_SIM2_PER_DAY=3, CA_SIM2_OPP=0.6;
 var CA_SIM2_LINES=['ema9','ema22','ema50','ema200','vwap'];
-var CA_SIM2_W={flow:0.35,shape:0.25,range:0.15,ind:0.25};
-var CA_SIM2_LABELS=[['flow','波の順番'],['shape','形'],['range','値幅'],['ind','指標線']];
+var CA_SIM2_W={flow:0.2625,shape:0.1875,range:0.1125,ind:0.1875,open:0.25};   /* 旧4観点 35:25:15:25 を 75% に縮めて寄り付き 25% */
+var CA_SIM2_LABELS=[['flow','波の順番'],['shape','形'],['range','値幅'],['ind','指標線'],['open','寄り付き']];
+var CA_SIM2_GAP_HALF=0.5;   /* ギャップ% の差がこれで点が半分 */
+var CA_SIM2_GAP_FRAC=0.7;   /* 寄り付き = ギャップ 7 : 寄りの足 3 */
+/* 寄り付きの情報 {gap:% or null, dir:1陽/-1陰/0同時 or null}。b1=その日の1分足, prevClose=前日の最後の約定足の終値 */
+function caSim2OpenInfo(b1,prevClose){
+  var f=null; for(var i=0;i<(b1||[]).length;i++){ var b=b1[i]; if(b&&b.v>0&&b.c>0){f=b;break;} }
+  if(!f)return {gap:null,dir:null};
+  var o=f.o>0?f.o:f.c;
+  return {gap:(prevClose>0)?(o/prevClose-1)*100:null, dir:(f.c>o)?1:(f.c<o)?-1:0};
+}
+function caSim2LastClose(b1){ for(var i=(b1||[]).length-1;i>=0;i--){ var z=b1[i]; if(z&&z.v>0&&z.c>0)return z.c; } return null; }
+function caSim2OpenScore(oa,ob){
+  if(!oa||!ob)return null;
+  var g=(oa.gap!=null&&ob.gap!=null)?_caSim2Near(oa.gap,ob.gap,CA_SIM2_GAP_HALF):null;
+  var d=(oa.dir!=null&&ob.dir!=null)?((oa.dir===ob.dir)?1:(oa.dir===0||ob.dir===0)?0.5:0):null;
+  if(g!=null&&d!=null)return CA_SIM2_GAP_FRAC*g+(1-CA_SIM2_GAP_FRAC)*d;
+  return g!=null?g:d;
+}
 /* チャート本体 (足+書き込み) を読む。この端末 → 無ければ Firebase (読んだものは保存しない) */
 function caSim2Load(id, fbCfg, cb){
   caLoadDataAsync(id,function(d){
@@ -14341,8 +14359,8 @@ function _caSim2Dtw(a,b){
   return (prev[m]>=INF/2)?Infinity:prev[m]/Math.max(1,pl[m]);
 }
 /* 観点ごとの点 (0〜1・比べられないものは null) と合計 (0〜100) */
-function caSim2Score(A,B){
-  var sc={flow:null,shape:null,range:null,ind:null}, opp=false;
+function caSim2Score(A,B,openSc){
+  var sc={flow:null,shape:null,range:null,ind:null,open:(openSc==null?null:openSc)}, opp=false;
   /* ① 波の順番 (新しい方から) */
   var wa=A.waves, wb=B.waves;
   if(!wa.length&&!wb.length)sc.flow=1;
@@ -14389,10 +14407,10 @@ function caSim2Score(A,B){
   return {sc:sc,opp:opp,score:Math.round(score*100)};
 }
 /* 1日の前場から、基準 A と同じ本数の区間をずらして採点し、重ならない上位 CA_SIM2_PER_DAY 場面を返す */
-function caSim2SearchDay(A,P){
+function caSim2SearchDay(A,P,openSc){
   var L=A.L, n=P.tm.length, hits=[];
   for(var e=L-1;e<=n-2;e++){   /* その後が1本以上ある区間だけ */
-    var s=e-L+1, B=caSim2Feat(P,s,e), r=caSim2Score(A,B);
+    var s=e-L+1, B=caSim2Feat(P,s,e), r=caSim2Score(A,B,openSc);
     hits.push({s:s,e:e,score:r.score,sc:r.sc,opp:r.opp});
   }
   hits.sort(function(a,b){return b.score-a.score;});
@@ -14465,6 +14483,7 @@ function CaSim2Card(props){
     return function(){io.disconnect();};
   },[dkey]);
   var col=sc.base?'#93c5fd':(sc.score>=80?'#4ade80':sc.score>=60?'#fbbf24':'#888');
+  var op=sc.open, g=op?op.gap:null, gc=caGapCat(g);
   var tip=sc.base?'':CA_SIM2_LABELS.map(function(v){ var x=sc.sc[v[0]]; return v[1]+' '+(x==null?'－':Math.round(x*100)); }).join(' / ')+(sc.opp?'（最後の波が逆）':'');
   return ce('button',{onClick:props.onOpen,disabled:!props.onOpen,title:tip,
       style:{border:'1px solid '+(sc.base?'#1e3a5f':'#2a2a2a'),cursor:props.onOpen?'pointer':'default',fontFamily:'inherit',
@@ -14474,6 +14493,10 @@ function CaSim2Card(props){
       ce('span',{style:{color:'#ddd',fontWeight:700}},(sc.date||'')+(m?_metaDowLabel(m):'')),
       ce('b',{style:{color:'#38bdf8'}},_caSim2Hm(sc.sTm)+'〜'+_caSim2Hm(sc.eTm)),
       ce('span',{style:{flex:1}}),
+      g!=null&&ce('span',{title:'前日終値→寄りの始値',style:{fontSize:10,fontWeight:700,whiteSpace:'nowrap',
+        color:(gc==='bgd'||gc==='gd')?'#60a5fa':(gc==='bgu'||gc==='gu')?'#f87171':'#aaa'}},CA_GAP_LABEL[gc]+' '+(g>0?'+':'')+g.toFixed(1)+'%'),
+      op&&op.dir!=null&&ce('span',{title:'寄りの1本目',style:{fontSize:10,fontWeight:700,whiteSpace:'nowrap',
+        color:op.dir>0?'#f87171':op.dir<0?'#60a5fa':'#aaa'}},op.dir>0?'寄り陽':op.dir<0?'寄り陰':'寄り同時'),
       ce('span',{style:{fontSize:12,fontWeight:700,color:col,whiteSpace:'nowrap'}},sc.base?'基準':('類似 '+sc.score+'%'))));
 }
 function CaSim2Modal(props){
@@ -14492,6 +14515,8 @@ function CaSim2Modal(props){
   var sI=useState({}); var infoById=sI[0],setInfoById=sI[1];
   var sD=useState(0); var nDone=sD[0],setNDone=sD[1];
   var sR=useState(false); var ready=sR[0],setReady=sR[1];
+  var sBO=useState(null); var baseOpen=sBO[0],setBaseOpen=sBO[1];
+  var sGF=useState('all'); var gapF=sGF[0],setGapF=sGF[1];   /* 絞り込み: 'all' | 'same'(基準と同じ区分) | 区分 */
   var allList=useMemo(function(){
     var list=charts.slice();
     if(base.meta&&!list.some(function(m){return m.id===base.meta.id;}))list.push(base.meta);
@@ -14510,8 +14535,11 @@ function CaSim2Modal(props){
         var pv=null; for(var k=ix-1;k>=0;k--){ if(arr[k].d&&arr[k].d<x.d){pv=arr[k];break;} }
         var pr=pv?raw[pv.m.id]:null, b1=r.b1, b5=r.b5;
         if(pr&&!(warmed(b5)||warmed(b1))){ b1=computeEnhancedBars(b1,pr.b1); b5=computeEnhancedBars(b5,pr.b5); }
-        out[x.m.id]={b1:b1,b5:b5,strokes:r.strokes,P:caSim2Prep(b1),d:x.d};
+        out[x.m.id]={b1:b1,b5:b5,strokes:r.strokes,P:caSim2Prep(b1),d:x.d,open:caSim2OpenInfo(b1,pr?caSim2LastClose(pr.b1):null)};
       });
+      /* 基準の日の寄り付き (前の日付 = 基準の日付より前で一番近い日付のチャート) */
+      var bpv=null; arr.forEach(function(x){ if(x.d&&base.date&&x.d<base.date&&raw[x.m.id])bpv=x; });
+      setBaseOpen(caSim2OpenInfo(props.refBars,bpv?caSim2LastClose(raw[bpv.m.id].b1):null));
       setInfoById(out); setNDone(done); setReady(true);
     }
     function next(){
@@ -14536,25 +14564,31 @@ function CaSim2Modal(props){
   var refE=-1; for(var q=0;q<refP.tm.length;q++){ if(refP.tm[q]<=endTm)refE=q; }
   var A=useMemo(function(){ return refE>=2?caSim2Feat(refP,0,refE):null; },[refP,refE]);
   /* 採点 (重いので描画の後に) */
-  var sRes=useState(null); var results=sRes[0],setResults=sRes[1];
+  var sRes=useState(null); var allRows=sRes[0],setAllRows=sRes[1];
   var sBusy=useState(false); var busy=sBusy[0],setBusy=sBusy[1];
   useEffect(function(){
-    if(!ready||!A){setResults(null);return;}
+    if(!ready||!A){setAllRows(null);return;}
     setBusy(true);
     var t=setTimeout(function(){
       var rows=[];
       charts.forEach(function(m){
         if(m.id===base.id)return;
         var inf=infoById[m.id]; if(!inf||inf.d===base.date||inf.P.tm.length<A.L+1)return;
-        caSim2SearchDay(A,inf.P).forEach(function(h){
-          rows.push({m:m,date:inf.d,sTm:inf.P.tm[h.s],eTm:inf.P.tm[h.e],score:h.score,sc:h.sc,opp:h.opp});
+        caSim2SearchDay(A,inf.P,caSim2OpenScore(baseOpen,inf.open)).forEach(function(h){
+          rows.push({m:m,date:inf.d,sTm:inf.P.tm[h.s],eTm:inf.P.tm[h.e],score:h.score,sc:h.sc,opp:h.opp,open:inf.open});
         });
       });
       rows.sort(function(a,b){ return (b.score-a.score)||b.date.localeCompare(a.date); });
-      setResults(rows.slice(0,CA_SIM2_MAX)); setBusy(false);
+      setAllRows(rows); setBusy(false);
     },30);
     return function(){clearTimeout(t);};
-  },[ready,A,infoById]);
+  },[ready,A,infoById,baseOpen]);
+  var baseCat=baseOpen?caGapCat(baseOpen.gap):null;
+  var results=allRows?allRows.filter(function(r){
+    if(gapF==='all')return true;
+    var c=caGapCat(r.open&&r.open.gap);
+    return gapF==='same'?(baseCat!=null&&c===baseCat):(c===gapF);
+  }).slice(0,CA_SIM2_MAX):null;
   var nDays={}; (results||[]).forEach(function(r){nDays[r.m.id]=1;});
   function openAt(ix){
     var nav=results.map(function(r){return {id:r.m.id,hit:{tf:'1m',tm:r.eTm}};});
@@ -14584,12 +14618,21 @@ function CaSim2Modal(props){
               style:{flex:'1 1 200px',minWidth:140,accentColor:'#3b82f6'}}),
             ce('button',{onClick:function(){changeTm(Math.max(minTm,tmView-1));},style:Object.assign({},BT,{fontSize:12,padding:'3px 9px',borderRadius:5,background:'#222',color:'#ccc'})},'←'),
             ce('button',{onClick:function(){changeTm(Math.min(maxTm,tmView+1));},style:Object.assign({},BT,{fontSize:12,padding:'3px 9px',borderRadius:5,background:'#222',color:'#ccc'})},'→')),
+          ce('div',{style:{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}},
+            ce('span',{style:{fontSize:11,color:'#888'}},'ギャップ'),
+            [['all','すべて'],['same','基準と同じ'+(baseCat?'（'+CA_GAP_LABEL[baseCat]+'）':'')],['bgd','大幅GD'],['gd','GD'],['flat','ほぼ同値'],['gu','GU'],['bgu','大幅GU']].map(function(it){
+              var on=gapF===it[0], dis=(it[0]==='same'&&!baseCat);
+              return ce('button',{key:it[0],disabled:dis,onClick:function(){setGapF(it[0]);},
+                style:Object.assign({},BT,{fontSize:11,fontWeight:700,padding:'4px 10px',borderRadius:6,opacity:dis?0.4:1,
+                  background:on?'#2563eb':'#222',color:on?'#fff':'#999',border:'1px solid '+(on?'#3b82f6':'#333')})},it[1]);
+            }),
+            ce('span',{style:{fontSize:10,color:'#666',marginLeft:4}},'前日終値→寄り。±'+CA_GAP_SMALL+'%未満=ほぼ同値 / '+CA_GAP_BIG+'%以上=大幅。前の日付のチャートが無い日は区分なし')),
           ce('div',{style:{fontSize:10,color:'#666',lineHeight:1.5}},
-            '時間帯は問わず、基準と同じ本数の区間をずらして比べます（青い帯＝似ている区間、点線の右＝その後'+CA_SIM2_AFTER+'本）。点数は絶対点：波の順番（新しい波から4つ・向き/大きさ/長さ）'+Math.round(CA_SIM2_W.flow*100)+'%・形（始値からの%の線）'+Math.round(CA_SIM2_W.shape*100)+'%・値幅'+Math.round(CA_SIM2_W.range*100)+'%・指標線（EMA9/22/50/200・VWAP の上か下か）'+Math.round(CA_SIM2_W.ind*100)+'%。いま進んでいる波の向きが逆なら ×'+CA_SIM2_OPP+'。カードに触れると内訳。1日'+CA_SIM2_PER_DAY+'場面まで・上位'+CA_SIM2_MAX+'場面。')),
+            '時間帯は問わず、基準と同じ本数の区間をずらして比べます（青い帯＝似ている区間、点線の右＝その後'+CA_SIM2_AFTER+'本）。点数は絶対点：波の順番（新しい波から4つ・向き/大きさ/長さ）'+Math.round(CA_SIM2_W.flow*100)+'%・形（始値からの%の線）'+Math.round(CA_SIM2_W.shape*100)+'%・値幅'+Math.round(CA_SIM2_W.range*100)+'%・指標線（EMA9/22/50/200・VWAP の上か下か）'+Math.round(CA_SIM2_W.ind*100)+'%・寄り付き（その日のギャップ%の近さ7：寄りの1本目の陽線/陰線3）'+Math.round(CA_SIM2_W.open*100)+'%。いま進んでいる波の向きが逆なら ×'+CA_SIM2_OPP+'。カードに触れると内訳。1日'+CA_SIM2_PER_DAY+'場面まで・上位'+CA_SIM2_MAX+'場面。')),
         ce('div',{style:{flex:1,overflowY:'auto',padding:'12px 16px'}},
           !A?ce('div',{style:{color:'#888',fontSize:12,padding:20,textAlign:'center'}},'基準の足が足りません（寄りから3本以上）')
           :ce('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))',gap:10}},
-              [ce(CaSim2Card,{key:'base',sc:{base:true,m:base.meta||null,date:base.date,sTm:openTm,eTm:refP.tm[refE]},info:baseInfo,snippetsById:snippetsById})].concat(
+              [ce(CaSim2Card,{key:'base',sc:{base:true,m:base.meta||null,date:base.date,sTm:openTm,eTm:refP.tm[refE],open:baseOpen},info:baseInfo,snippetsById:snippetsById})].concat(
                 !ready||busy||!results?[ce('div',{key:'ld',style:{color:'#888',fontSize:12,padding:20}},!ready?'読み込み中…':'計算中…')]
                 :!results.length?[ce('div',{key:'no',style:{color:'#888',fontSize:12,padding:20}},'比べられる日がありません')]
                 :results.map(function(r,ix){
