@@ -7697,7 +7697,7 @@ function ImageAnnotator(props){
   /* C6: ref側analysisStrokesをFirebaseにPATCH (帯域抑制: analysisStrokesのみ送信)
      同時にローカル IDB/memキャッシュにも反映 (再ロード時の stale 回避) */
   function triggerRefAutoSave(){
-    if(simMode)return;  /* シミュレーション中は前日(ref)側も一切保存しない */
+    /* 2026-11-04: シミュ中も前日(ref)側の書き込みは前日のチャートへ保存する (ユーザー指定。旧: シミュ中は保存しない) */
     var cfg=props.fbCfg;
     if(refAutoSaveTimerRef.current)clearTimeout(refAutoSaveTimerRef.current);
     refAutoSaveTimerRef.current=setTimeout(function(){
