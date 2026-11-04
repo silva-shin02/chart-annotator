@@ -6785,6 +6785,12 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
                  drawAnalysisStroke/Ext 内で width/fontSize/boxW/dash/矢尻/markerW を zoom 倍する
      2026-04-22: サムネモードは _strokeZoom=1.0 固定 (書込オブジェクト zoom連動OFF) */
   ctx._strokeZoom=isThumbnail?1.0:zoom;
+  /* 2026-11-04: dim.strokeFit=true のサムネ (類似チャート) は、書き込みの文字・枠をエディタと同じ縮尺に
+     (エディタは zoom=1 で 1分=Z_BASE_BAR_PX/0.8 px・1円=Z_BASE_PRICE_PX/10 px。縦横のうち小さい方の倍率) */
+  if(isThumbnail&&dim&&dim.strokeFit){
+    var _zh=(chartW/Math.max(1,uSpan))/((Z_BASE_BAR_PX/0.8)/_baseStep), _zv=pxPerYen/(Z_BASE_PRICE_PX/10);
+    var _zf=Math.min(_zh,_zv); if(isFinite(_zf)&&_zf>0)ctx._strokeZoom=Math.max(0.12,Math.min(2,_zf));
+  }
   ctx._snippetsById=snippetsById||null;
   function minToXCur(m){return minToX(m,'cur');}
   function minToXRef(m){return minToX(m,'ref');}
@@ -14442,7 +14448,7 @@ function caSim2DrawThumb(canvas, wrap, info, sc, snippetsById){
     if(tp==='horizontal'){ var p=s.anchors[0].p; return p>=mn&&p<=mx; }
     return s.anchors.some(function(a){return a&&a.tm>=t0-1&&a.tm<=t1+1;});
   });
-  var dim={w:W,h:H,thumbnail:true,thumbView:{uS:t0-540,uSpan:Math.max(1,t1-t0),pMin:mn,pMax:mx}};
+  var dim={w:W,h:H,thumbnail:true,strokeFit:true,thumbView:{uS:t0-540,uSpan:Math.max(1,t1-t0),pMin:mn,pMax:mx}};
   var lay={current:null};
   var origDPR=window.devicePixelRatio;
   try{Object.defineProperty(window,'devicePixelRatio',{value:Math.min(2,origDPR||1),configurable:true});}catch(e){}
@@ -14488,7 +14494,7 @@ function CaSim2Card(props){
   return ce('button',{onClick:props.onOpen,disabled:!props.onOpen,title:tip,
       style:{border:'1px solid '+(sc.base?'#1e3a5f':'#2a2a2a'),cursor:props.onOpen?'pointer':'default',fontFamily:'inherit',
         background:'#141414',borderRadius:8,padding:0,overflow:'hidden',display:'flex',flexDirection:'column',textAlign:'left',width:'100%'}},
-    ce('div',{ref:wrapRef,style:{width:'100%',height:170,background:'#0b0b0b'}},ce('canvas',{ref:cvRef,style:{display:'block'}})),
+    ce('div',{ref:wrapRef,style:{width:'100%',height:320,background:'#0b0b0b'}},ce('canvas',{ref:cvRef,style:{display:'block'}})),
     ce('div',{style:{display:'flex',alignItems:'center',gap:6,padding:'6px 8px 7px',fontSize:11,color:'#aaa',fontVariantNumeric:'tabular-nums'}},
       ce('span',{style:{color:'#ddd',fontWeight:700}},(sc.date||'')+(m?_metaDowLabel(m):'')),
       ce('b',{style:{color:'#38bdf8'}},_caSim2Hm(sc.sTm)+'〜'+_caSim2Hm(sc.eTm)),
@@ -14637,7 +14643,7 @@ function CaSim2Modal(props){
             '時間帯は問わず、基準と同じ本数の区間をずらして比べます（青い帯＝似ている区間、点線の右＝その後'+CA_SIM2_AFTER+'本）。点数は絶対点：波の順番（新しい波から4つ・向き/大きさ/長さ）'+Math.round(CA_SIM2_W.flow*100)+'%・形（始値からの%の線）'+Math.round(CA_SIM2_W.shape*100)+'%・値幅'+Math.round(CA_SIM2_W.range*100)+'%・指標線（EMA9/22/50/200・VWAP の上か下か）'+Math.round(CA_SIM2_W.ind*100)+'%・寄り付き（その日のギャップ%の近さ7：寄りの1本目の陽線/陰線3）'+Math.round(CA_SIM2_W.open*100)+'%。いま進んでいる波の向きが逆なら ×'+CA_SIM2_OPP+'。カードに触れると内訳。1日'+CA_SIM2_PER_DAY+'場面まで・上位'+CA_SIM2_MAX+'場面。')),
         ce('div',{style:{flex:1,overflowY:'auto',padding:'12px 16px'}},
           !A?ce('div',{style:{color:'#888',fontSize:12,padding:20,textAlign:'center'}},(!props.refBars&&!loadedBase)?'読み込み中…':'基準の足が足りません（寄りから3本以上）')
-          :ce('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))',gap:10}},
+          :ce('div',{style:{display:'grid',gridTemplateColumns:'repeat(2,minmax(0,1fr))',gap:12}},
               [ce(CaSim2Card,{key:'base',sc:{base:true,m:base.meta||null,date:base.date,sTm:openTm,eTm:refP.tm[refE],open:baseOpen},info:baseInfo,snippetsById:snippetsById})].concat(
                 !ready||busy||!results?[ce('div',{key:'ld',style:{color:'#888',fontSize:12,padding:20}},!ready?'読み込み中…':'計算中…')]
                 :!results.length?[ce('div',{key:'no',style:{color:'#888',fontSize:12,padding:20}},'比べられる日がありません')]
