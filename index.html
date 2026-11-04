@@ -14502,7 +14502,10 @@ function CaSim2Card(props){
 function CaSim2Modal(props){
   var base=props.base||{}, charts=props.charts||[], fbCfg=props.fbCfg;
   var onClose=props.onClose||function(){};
-  var refP=useMemo(function(){ return caSim2Prep(props.refBars); },[props.refBars]);
+  /* 2026-11-04: チャートカードから開いたときは refBars 無し → 読み込んだ基準の日の足 (EMA 助走済み) を使う */
+  var sLB=useState(null); var loadedBase=sLB[0],setLoadedBase=sLB[1];
+  var refBars=props.refBars||(loadedBase&&loadedBase.b1)||null;
+  var refP=useMemo(function(){ return caSim2Prep(refBars); },[refBars]);
   var openTm=refP.tm.length?refP.tm[0]:540;
   var lastTm=refP.tm.length?refP.tm[refP.tm.length-1]:540;
   var minTm=Math.min(lastTm,openTm+2), maxTm=Math.max(minTm,Math.min(lastTm,props.maxTm!=null?props.maxTm:690));
@@ -14510,6 +14513,7 @@ function CaSim2Modal(props){
   var sT=useState(function(){return clampTm(props.defTm);}); var endTm=sT[0],setEndTm=sT[1];
   var sTv=useState(endTm); var tmView=sTv[0],setTmView=sTv[1];
   var tmTimerRef=useRef(null);
+  useEffect(function(){ if(props.refBars||!loadedBase)return; var t=clampTm(props.defTm); setEndTm(t); setTmView(t); },[loadedBase]);
   function changeTm(t){ setTmView(t); if(tmTimerRef.current)clearTimeout(tmTimerRef.current); tmTimerRef.current=setTimeout(function(){setEndTm(t);},250); }
   /* 読み込み (同じ銘柄の全チャート。EMA の助走用に前の日付も要るので基準の日も読む) */
   var sI=useState({}); var infoById=sI[0],setInfoById=sI[1];
@@ -14529,17 +14533,19 @@ function CaSim2Modal(props){
       if(!alive)return;
       var arr=list.map(function(m){return {m:m,d:_caResolveMetaDate(m)||''};}).sort(function(a,b){return a.d.localeCompare(b.d);});
       function warmed(a){ if(!a||!a.length)return false; var b=a[0]; return !(b.ema9===b.ema22&&b.ema22===b.ema50&&b.ema50===b.ema200); }
-      var out={};
+      var out={}, baseLd=null;
       arr.forEach(function(x,ix){
-        var r=raw[x.m.id]; if(!r||x.m.id===base.id)return;
+        var r=raw[x.m.id]; if(!r)return;
         var pv=null; for(var k=ix-1;k>=0;k--){ if(arr[k].d&&arr[k].d<x.d){pv=arr[k];break;} }
         var pr=pv?raw[pv.m.id]:null, b1=r.b1, b5=r.b5;
         if(pr&&!(warmed(b5)||warmed(b1))){ b1=computeEnhancedBars(b1,pr.b1); b5=computeEnhancedBars(b5,pr.b5); }
+        if(x.m.id===base.id){ baseLd={b1:b1,strokes:r.strokes}; return; }
         out[x.m.id]={b1:b1,b5:b5,strokes:r.strokes,P:caSim2Prep(b1),d:x.d,open:caSim2OpenInfo(b1,pr?caSim2LastClose(pr.b1):null)};
       });
       /* 基準の日の寄り付き (前の日付 = 基準の日付より前で一番近い日付のチャート) */
       var bpv=null; arr.forEach(function(x){ if(x.d&&base.date&&x.d<base.date&&raw[x.m.id])bpv=x; });
-      setBaseOpen(caSim2OpenInfo(props.refBars,bpv?caSim2LastClose(raw[bpv.m.id].b1):null));
+      if(!props.refBars)setLoadedBase(baseLd||{b1:null,strokes:null});
+      setBaseOpen(caSim2OpenInfo(props.refBars||(baseLd&&baseLd.b1),bpv?caSim2LastClose(raw[bpv.m.id].b1):null));
       setInfoById(out); setNDone(done); setReady(true);
     }
     function next(){
@@ -14595,7 +14601,7 @@ function CaSim2Modal(props){
     if(props.onOpenScene)props.onOpenScene(nav,ix);
   }
   var BT={border:'none',cursor:'pointer',fontFamily:'inherit'};
-  var baseInfo={b1:props.refBars,b5:[],strokes:props.baseStrokes};
+  var baseInfo={b1:refBars,b5:[],strokes:props.baseStrokes||(loadedBase&&loadedBase.strokes)};
   var total=allList.length;
   return ReactDOM.createPortal(
     ce('div',{onClick:onClose,style:{position:'fixed',inset:0,background:'rgba(0,0,0,.78)',zIndex:10500,display:'flex',alignItems:'center',justifyContent:'center',padding:16}},
@@ -14630,7 +14636,7 @@ function CaSim2Modal(props){
           ce('div',{style:{fontSize:10,color:'#666',lineHeight:1.5}},
             '時間帯は問わず、基準と同じ本数の区間をずらして比べます（青い帯＝似ている区間、点線の右＝その後'+CA_SIM2_AFTER+'本）。点数は絶対点：波の順番（新しい波から4つ・向き/大きさ/長さ）'+Math.round(CA_SIM2_W.flow*100)+'%・形（始値からの%の線）'+Math.round(CA_SIM2_W.shape*100)+'%・値幅'+Math.round(CA_SIM2_W.range*100)+'%・指標線（EMA9/22/50/200・VWAP の上か下か）'+Math.round(CA_SIM2_W.ind*100)+'%・寄り付き（その日のギャップ%の近さ7：寄りの1本目の陽線/陰線3）'+Math.round(CA_SIM2_W.open*100)+'%。いま進んでいる波の向きが逆なら ×'+CA_SIM2_OPP+'。カードに触れると内訳。1日'+CA_SIM2_PER_DAY+'場面まで・上位'+CA_SIM2_MAX+'場面。')),
         ce('div',{style:{flex:1,overflowY:'auto',padding:'12px 16px'}},
-          !A?ce('div',{style:{color:'#888',fontSize:12,padding:20,textAlign:'center'}},'基準の足が足りません（寄りから3本以上）')
+          !A?ce('div',{style:{color:'#888',fontSize:12,padding:20,textAlign:'center'}},(!props.refBars&&!loadedBase)?'読み込み中…':'基準の足が足りません（寄りから3本以上）')
           :ce('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))',gap:10}},
               [ce(CaSim2Card,{key:'base',sc:{base:true,m:base.meta||null,date:base.date,sTm:openTm,eTm:refP.tm[refE],open:baseOpen},info:baseInfo,snippetsById:snippetsById})].concat(
                 !ready||busy||!results?[ce('div',{key:'ld',style:{color:'#888',fontSize:12,padding:20}},!ready?'読み込み中…':'計算中…')]
@@ -14850,6 +14856,15 @@ function CaChartCard(props){
           border:'1px solid #9a3412',
           borderRadius:5,cursor:'pointer',flexShrink:0,lineHeight:1.4}},
         '▶ シミュ'
+      ),
+      /* 2026-11-04: 類似チャート検索 (CaSim2Modal・基準の既定 = 前場まるごと) — シミュの右 */
+      props.onSimilar&&ce('button',{
+        onClick:function(e){ e.stopPropagation(); props.onSimilar(m); },
+        title:'このチャートの動きと似た場面を、同じ銘柄の他の日の前場から探す',
+        style:{padding:'4px 8px',fontSize:11,fontWeight:700,
+          background:'#1e293b',color:'#bae6fd',border:'1px solid #334155',
+          borderRadius:5,cursor:'pointer',flexShrink:0,lineHeight:1.4}},
+        '≈ 類似チャート検索'
       )
     ),
 
@@ -18285,6 +18300,14 @@ function DraftLibrary(props){
   var sImportLog=useState([]); var importLog=sImportLog[0],setImportLog=sImportLog[1];
   /* 2026-10-17: 検索結果からチャートを開く。検索パネルの状態を _caSrchKeep に、結果の並びを _caSrchNav に残す
      (エディタの ◀▶ で前後の結果へ・「一覧へ」/終了で戻るとこの状態の検索パネルに戻る) */
+  /* 2026-11-04: チャートカードの「≈ 類似チャート検索」 (CaSim2Modal・基準 = 前場まるごと) */
+  var sS2C=useState(null); var sim2Card=sS2C[0],setSim2Card=sS2C[1];
+  function openFromSim2(navList,idx){
+    var it=navList[idx]; if(!it)return;
+    setSim2Card(null); _caSrchKeep=null;
+    _caSrchNav={list:navList,idx:idx,label:'類似チャート'};
+    openChart(it.id);
+  }
   function openFromFind(navList,idx,keep){
     var it=navList[idx]; if(!it)return;
     _caFindKeep=keep; _caSrchKeep=null;
@@ -20681,7 +20704,9 @@ function DraftLibrary(props){
                   /* 2026-10-23: ボラ率 (常に表示。undefined=計算中) */
                   showVol:true, vol:caVolGet(m),
                   /* 2026-06-30: サムネカードからこの日をシミュレーション(非ブラインド) */
-                  onStartSim:function(){startSimulation(m);}
+                  onStartSim:function(){startSimulation(m);},
+                  /* 2026-11-04: 類似チャート検索 */
+                  onSimilar:function(mm){setSim2Card(mm);}
                 });
               }
               if(sortMode==='vol_desc'||sortMode==='vol_asc')return charts.map(_card);
@@ -20756,6 +20781,13 @@ function DraftLibrary(props){
         onClose:function(){setTagModalOpen(false);}
       }),
       /* 2026-11-02: チャートを探す (常に全チャート対象・この端末のデータのみ) */
+      sim2Card&&ce(CaSim2Modal,{
+        base:{id:sim2Card.id,ticker:sim2Card.ticker||'',date:_caResolveMetaDate(sim2Card)||'',meta:sim2Card},
+        charts:meta.filter(function(m){return m.ticker===sim2Card.ticker&&m.id!==sim2Card.id;}),
+        defTm:690, maxTm:690, fbCfg:fbCfg,
+        onOpenScene:function(nav,ix){openFromSim2(nav,ix);},
+        onClose:function(){setSim2Card(null);}
+      }),
       findOpen&&ce(CaFindModal,{
         charts:meta,
         initial:_fk,
