@@ -8038,7 +8038,7 @@ function ImageAnnotator(props){
     /* 2026-11-04: シミュ中の書き込みを実チャートへ確定保存してから抜ける (チェック ON/OFF に関係なく) */
     if(img&&img._savedDraftId){
       if(checkSaveTimerRef.current){clearTimeout(checkSaveTimerRef.current);checkSaveTimerRef.current=null;}
-      if(simDirtyRef.current)_saveCheckStrokesToDraft(analysisStrokesRef.current||{'1m':[],'5m':[]});
+      if(simDirtyRef.current){simPendingRef.current=false;_saveCheckStrokesToDraft(analysisStrokesRef.current||{'1m':[],'5m':[]});}
     }
     /* 2026-06-29: ブラインド練習は終了時に正解(銘柄・日付)を公開する */
     if(img&&img._blind&&props.onBlindSimExit){
@@ -8232,9 +8232,20 @@ function ImageAnnotator(props){
     if(!(img&&img._savedDraftId))return;
     if(!simDirtyRef.current){ if(analysisStrokes===simFirstStrokesRef.current)return; simDirtyRef.current=true; }
     if(checkSaveTimerRef.current)clearTimeout(checkSaveTimerRef.current);
-    checkSaveTimerRef.current=setTimeout(function(){_saveCheckStrokesToDraft(analysisStrokesRef.current||{'1m':[],'5m':[]});},600);
+    simPendingRef.current=true;
+    checkSaveTimerRef.current=setTimeout(function(){simPendingRef.current=false;_saveCheckStrokesToDraft(analysisStrokesRef.current||{'1m':[],'5m':[]});},600);
     return function(){if(checkSaveTimerRef.current){clearTimeout(checkSaveTimerRef.current);checkSaveTimerRef.current=null;}};
   },[analysisStrokes]);
+  /* 2026-11-04: 終了ボタン以外でエディタが閉じたとき (画面遷移など) も、待っている保存を捨てずに書く */
+  var simPendingRef=useRef(false);
+  useEffect(function(){
+    return function(){
+      if(simMode&&img&&img._savedDraftId&&simPendingRef.current){
+        simPendingRef.current=false;
+        _saveCheckStrokesToDraft(analysisStrokesRef.current||{'1m':[],'5m':[]});
+      }
+    };
+  },[]);
   var st0=useState("pan");   var tool=st0[0],setTool=st0[1];
   var st1=useState(function(){return caLoadDrawDefaults().color;}); var color=st1[0],setColor=st1[1];
   var st2=useState([]);      var colorHist=st2[0],setColorHist=st2[1];
