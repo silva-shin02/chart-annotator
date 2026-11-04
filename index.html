@@ -14503,7 +14503,18 @@ function CaSim2Card(props){
         color:(gc==='bgd'||gc==='gd')?'#60a5fa':(gc==='bgu'||gc==='gu')?'#f87171':'#aaa'}},CA_GAP_LABEL[gc]+' '+(g>0?'+':'')+g.toFixed(1)+'%'),
       op&&op.dir!=null&&ce('span',{title:'寄りの1本目',style:{fontSize:10,fontWeight:700,whiteSpace:'nowrap',
         color:op.dir>0?'#f87171':op.dir<0?'#60a5fa':'#aaa'}},op.dir>0?'寄り陽':op.dir<0?'寄り陰':'寄り同時'),
-      ce('span',{style:{fontSize:12,fontWeight:700,color:col,whiteSpace:'nowrap'}},sc.base?'基準':('類似 '+sc.score+'%'))));
+      ce('span',{style:{fontSize:12,fontWeight:700,color:col,whiteSpace:'nowrap'}},sc.base?'基準':('類似 '+sc.score+'%'))),
+    /* 2026-11-04: そのチャートのタグ (チャートカードと同じチップ) */
+    (function(){
+      var ids=m?(caGetChartTags(m.id)||[]):[], defs=props.tagDefsById||{};
+      var chips=ids.map(function(tid){return defs[tid];}).filter(Boolean);
+      if(!chips.length)return null;
+      return ce('div',{style:{display:'flex',flexWrap:'wrap',gap:4,padding:'0 8px 7px'}},
+        chips.map(function(td){
+          return ce('span',{key:td.id,style:{fontSize:10,padding:'2px 7px',borderRadius:10,background:td.color,color:'#fff',
+            fontWeight:700,whiteSpace:'nowrap',letterSpacing:0.2,boxShadow:'0 1px 3px rgba(0,0,0,.4)'}},td.name);
+        }));
+    })());
 }
 function CaSim2Modal(props){
   var base=props.base||{}, charts=props.charts||[], fbCfg=props.fbCfg;
@@ -14572,6 +14583,7 @@ function CaSim2Modal(props){
     return function(){alive=false; if(bumpT)clearTimeout(bumpT);};
   },[]);
   var snippetsById=useMemo(function(){ var mm={}; try{(caLoadSnippets()||[]).forEach(function(sn){if(sn&&sn.id)mm[sn.id]=sn;});}catch(e){} return mm; },[]);
+  var tagDefsById=useMemo(function(){ var mm={}; try{(caLoadTagDefs()||[]).forEach(function(d){if(d&&d.id)mm[d.id]=d;});}catch(e){} return mm; },[]);
   /* 基準の区間 */
   var refE=-1; for(var q=0;q<refP.tm.length;q++){ if(refP.tm[q]<=endTm)refE=q; }
   var A=useMemo(function(){ return refE>=2?caSim2Feat(refP,0,refE):null; },[refP,refE]);
@@ -14644,11 +14656,11 @@ function CaSim2Modal(props){
         ce('div',{style:{flex:1,overflowY:'auto',padding:'12px 16px'}},
           !A?ce('div',{style:{color:'#888',fontSize:12,padding:20,textAlign:'center'}},(!props.refBars&&!loadedBase)?'読み込み中…':'基準の足が足りません（寄りから3本以上）')
           :ce('div',{style:{display:'grid',gridTemplateColumns:'repeat(2,minmax(0,1fr))',gap:12}},
-              [ce(CaSim2Card,{key:'base',sc:{base:true,m:base.meta||null,date:base.date,sTm:openTm,eTm:refP.tm[refE],open:baseOpen},info:baseInfo,snippetsById:snippetsById})].concat(
+              [ce(CaSim2Card,{key:'base',sc:{base:true,m:base.meta||null,date:base.date,sTm:openTm,eTm:refP.tm[refE],open:baseOpen},info:baseInfo,snippetsById:snippetsById,tagDefsById:tagDefsById})].concat(
                 !ready||busy||!results?[ce('div',{key:'ld',style:{color:'#888',fontSize:12,padding:20}},!ready?'読み込み中…':'計算中…')]
                 :!results.length?[ce('div',{key:'no',style:{color:'#888',fontSize:12,padding:20}},'比べられる日がありません')]
                 :results.map(function(r,ix){
-                  return ce(CaSim2Card,{key:r.m.id+'|'+r.eTm+'|'+endTm,sc:r,info:infoById[r.m.id],snippetsById:snippetsById,onOpen:function(){openAt(ix);}});
+                  return ce(CaSim2Card,{key:r.m.id+'|'+r.eTm+'|'+endTm,sc:r,info:infoById[r.m.id],snippetsById:snippetsById,tagDefsById:tagDefsById,onOpen:function(){openAt(ix);}});
                 }))),
           ready&&results&&results.length>0&&ce('div',{style:{fontSize:11,color:'#666',marginTop:10}},results.length+' 場面（'+Object.keys(nDays).length+' 日）'))
       )),
