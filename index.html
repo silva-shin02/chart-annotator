@@ -8810,6 +8810,28 @@ function ImageAnnotator(props){
     });
     return r;
   },[analysisData,img]);
+  /* 2026-11-04: 類似チャート (CaSim2Modal)。基準 = 寄り〜全板と同じ集計時刻 (固定時刻 / シミュ中は開示済みの最後の足 / 表示範囲の中央) */
+  var sSim2=useState(null); var sim2Open=sSim2[0],setSim2Open=sSim2[1];
+  function openSim2(){
+    var d=simMode?simDisplayData:emaContinuedData;
+    if(!d||!d.bars_1m||!d.bars_1m.length){window.caToast('チャートデータがありません','info');return;}
+    var ticker=img._ticker||(analysisData&&analysisData.ticker)||'';
+    if(!ticker){window.caToast('銘柄が分かりません','info');return;}
+    var cid=simMode?(img._savedDraftId||null):(img._draftId||savedDraftIdRef.current||null);
+    var metaAll=caLoadMeta(), bm=null;
+    var charts=metaAll.filter(function(m){ if(m&&m.id===cid)bm=m; return m&&m.ticker===ticker&&m.id!==cid; });
+    var r=vpRange(), cut=vpLadderCut();
+    setSim2Open({base:{id:cid,ticker:ticker,date:(analysisData&&analysisData.date)||'',meta:bm},charts:charts,refBars:d.bars_1m,
+      defTm:(cut!=null?Math.min(690,cut):null),maxTm:(simMode&&r.hi!=null)?Math.min(690,r.hi):690,
+      baseStrokes:(analysisStrokesRef.current||{})});
+  }
+  /* 場面を開く: 検索結果と同じ経路 (上端の ◀ n/N ▶ で前後の場面へ・開いた直後に場面の終わりの足を中央へ) */
+  function openSim2Scene(nav,ix){
+    var it=nav[ix]; if(!it)return;
+    _caSrchNav={list:nav,idx:ix,label:'類似チャート'};
+    setSim2Open(null);
+    saveAndExit(function(){ if(props.onSearchNav)props.onSearchNav(it.id); });
+  }
   /* 保存してから別の日のチャートを開く (検索の ◀▶ と同じ経路: saveAndExit → App onSearchNav → DraftLibrary navOpenId) */
   function goDay(m){
     if(!m)return;
@@ -9821,6 +9843,10 @@ function ImageAnnotator(props){
           color:_fbIsPaused(props.fbCfg)?'#f87171':autoSaveStatus==='saving'?'#93c5fd':autoSaveStatus==='ok'?'#86efac':autoSaveStatus==='err'?'#fca5a5':'#fb923c'}},
           _fbIsPaused(props.fbCfg)?'⏸ 同期停止中':autoSaveStatus==='saving'?'⏳ 自動保存中':autoSaveStatus==='ok'?'✓ 自動保存済':autoSaveStatus==='err'?'✕ 自動保存失敗':'🔥 自動保存ON'
         ),
+        /* 2026-11-04: 類似チャート (この動きと似た場面を同じ銘柄の他の日から探す。シミュ中も使える) */
+        analysisData && ce("button",{key:'sim2',onClick:openSim2,title:'寄り〜指定時刻(全板の集計時刻)の動きと似た場面を、同じ銘柄の他の日の前場から探す',
+          style:Object.assign({},TS,{fontSize:12,padding:"6px 10px",background:"#1e293b",color:"#bae6fd",border:"1px solid #334155"})},
+          "≈ 類似チャート"),
         /* 2026-10-18: 前の日 / 次の日 (同じ銘柄の直前/直後の日付のチャートへ。シミュ中は出さない) */
         analysisData && !simMode && [['prev','◀ 前の日'],['next','次の日 ▶']].map(function(it){
           var m=dayNav[it[0]], d=dayNav[it[0]+'D'];
@@ -11810,6 +11836,8 @@ function ImageAnnotator(props){
     }),
 
     /* 2026-04-20: 表示・動作設定モーダル */
+    sim2Open&&ce(CaSim2Modal,Object.assign({},sim2Open,{fbCfg:props.fbCfg,
+      onOpenScene:openSim2Scene,onClose:function(){setSim2Open(null);}})),
     showDisplaySettings&&ce(DisplaySettingsModal,{
       fbCfg:props.fbCfg||{},
       onOpenFbSettings:function(){setShowDisplaySettings(false);setShowFbSettings(true);},
@@ -14212,14 +14240,7 @@ function caLoadSnEvents(date,cb){
 }
 
 /* ── CaChartCard: サムネイルカード + メモ + タグ ── */
-/* ─── 2026-10-31: 類似チャート ───────────────────────────────
-   同じ銘柄の全日付から、寄り付き(初約定)〜指定時刻の「形」が似ている日を探す。
-   形 = 1分足ごとに [終値, EMA9, EMA22, EMA50, EMA200, VWAP] を寄りの始値からの%に直した6本の線 (重みは同じ)。
-   EMA/VWAP との上下関係・並び・離れ具合も形に入る。幅(%の大きさ)も比べる。
-   時間のずれは範囲の長さの3割まで許す DTW (Sakoe-Chiba 帯)。距離 = 経路上の平均二乗差。
-   点数 = 一番似ている日 100% / 中央値の日 50% になるよう指数で換算 (相対的な点数) */
-var CA_SIM_KEYS=['c','ema9','ema22','ema50','ema200','vwap'];
-/* 2026-10-31: 前日終値からのギャップ (寄りの始値 vs 前日の最後の約定足の終値, %)。区分のしきい値 (%) */
+/* 前日終値からのギャップ (寄りの始値 vs 前日の最後の約定足の終値, %)。区分のしきい値 (%)。チャートを探す で使う */
 var CA_GAP_SMALL=1, CA_GAP_BIG=3;
 function caGapCat(g){
   if(g==null||!isFinite(g))return null;
@@ -14227,93 +14248,90 @@ function caGapCat(g){
   if(g>=CA_GAP_BIG)return 'bgu'; if(g>=CA_GAP_SMALL)return 'gu'; return 'flat';
 }
 var CA_GAP_LABEL={bgd:'大幅GD',gd:'GD',flat:'ほぼ同値',gu:'GU',bgu:'大幅GU'};
-var CA_SIM_BAND=0.3;
-/* bars1m → {series:[[6値]...], openTm, i0} 。endSpec={kind:'am'}|{kind:'off',off:N(寄りからの分)} */
-function caSimSeries(bars1m, endSpec){
-  var b=bars1m||[], i0=-1;
-  for(var i=0;i<b.length;i++){ if(b[i]&&b[i].v>0){i0=i;break;} }
-  if(i0<0)return null;
-  var t0=_caVpTm(b[i0].t), p0=b[i0].o||b[i0].c; if(!(p0>0))return null;
-  var endTm=(endSpec&&endSpec.kind==='off')?(t0+endSpec.off-1):690;   /* 寄り15分 = 寄りの足から15本 */
-  if(endTm>690)endTm=690;
-  var out=[];
-  for(var j=i0;j<b.length;j++){
-    var x=b[j], m=_caVpTm(x.t); if(m>endTm)break;
-    if(!(x.c>0))continue;
-    out.push(CA_SIM_KEYS.map(function(k){ var v=(k==='c')?x.c:x[k]; if(v==null||!(v>0))v=x.c; return (v-p0)/p0*100; }));
-  }
-  return out.length?{series:out, openTm:t0, p0:p0}:null;
+/* ─── 2026-11-04: 類似チャート (作り直し・CaSim2Modal。旧 CaSimilarModal は廃止) ───────────────
+   エディタの「≈ 類似チャート」から開く。基準 = このチャートの寄り(初約定)〜指定時刻 (既定 = 全板と同じ集計時刻:
+   固定した時刻 / シミュ中は開示済みの最後の足 / それ以外は表示範囲の中央の足)。
+   同じ銘柄の他の日の前場から、基準と同じ本数の区間を「どの時間帯でも」ずらしながら比べ、似ている場面を探す
+   (= 「こう動いた後」の場面。サムネはその後 CA_SIM2_AFTER 本も描く)。
+   点数 = 絶対点 (似た場面が無ければ低いまま)。4つの観点の重み付き平均 ×100:
+     ① 波の順番 (CA_SIM2_W.flow): ジグザグの波を新しい方から最大4つ、向き・大きさ・長さで比べる (新しい波ほど重い)
+     ② 形: 区間の始値からの終値% の線 (最大 CA_SIM2_N 点に間引き) の DTW 距離。値幅の違いもそのまま距離になる
+     ③ 値幅: 区間の高値−安値% と 1分足の平均値幅% の比
+     ④ 指標線: 終値が EMA9/22/50/200・VWAP の上か下か (各点で一致した割合) と、区間の最後の離れ具合
+   最後の波 (いま進んでいる波) の向きが逆なら合計 ×CA_SIM2_OPP。
+   EMA は画面と同じ (未助走の日は前の日付のチャートから computeEnhancedBars で連続計算)。 */
+var CA_SIM2_N=40, CA_SIM2_AFTER=20, CA_SIM2_WAVE_K=3, CA_SIM2_MAX=60, CA_SIM2_PER_DAY=3, CA_SIM2_OPP=0.6;
+var CA_SIM2_LINES=['ema9','ema22','ema50','ema200','vwap'];
+var CA_SIM2_W={flow:0.35,shape:0.25,range:0.15,ind:0.25};
+var CA_SIM2_LABELS=[['flow','波の順番'],['shape','形'],['range','値幅'],['ind','指標線']];
+/* チャート本体 (足+書き込み) を読む。この端末 → 無ければ Firebase (読んだものは保存しない) */
+function caSim2Load(id, fbCfg, cb){
+  caLoadDataAsync(id,function(d){
+    if(d&&d.analysisData){cb(d);return;}
+    var cfg=fbCfg||{};
+    if(!cfg.url){cb(null);return;}
+    fetch(cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data/'+id+'.json'+caAuthParam(cfg.secret))
+      .then(function(r){return r.ok?r.json():null;})
+      .then(function(fb){cb(fb&&fb.analysisData?fb:null);})
+      .catch(function(){cb(null);});
+  });
 }
-function caSimDtw(a,b){
-  var n=a.length, m=b.length; if(!n||!m)return Infinity;
-  var w=Math.max(Math.abs(n-m), Math.ceil(CA_SIM_BAND*Math.max(n,m)));
-  var INF=1e18, prev=new Float64Array(m+1), cur=new Float64Array(m+1), pl=new Float64Array(m+1), cl=new Float64Array(m+1);
-  for(var j=0;j<=m;j++){prev[j]=INF;pl[j]=0;} prev[0]=0;
-  var D=a[0].length;
-  for(var i=1;i<=n;i++){
-    for(var j2=0;j2<=m;j2++){cur[j2]=INF;cl[j2]=0;}
-    var jlo=Math.max(1,i-w), jhi=Math.min(m,i+w);
-    for(var j3=jlo;j3<=jhi;j3++){
-      var d=0, ai=a[i-1], bj=b[j3-1];
-      for(var k=0;k<D;k++){ var t=ai[k]-bj[k]; d+=t*t; }
-      d/=D;
-      var best=prev[j3-1], bl=pl[j3-1];
-      if(prev[j3]<best){best=prev[j3];bl=pl[j3];}
-      if(cur[j3-1]<best){best=cur[j3-1];bl=cl[j3-1];}
-      cur[j3]=best+d; cl[j3]=bl+1;
-    }
-    var tp=prev;prev=cur;cur=tp; var tl=pl;pl=cl;cl=tl;
-  }
-  return (prev[m]>=INF/2)?Infinity:prev[m]/Math.max(1,pl[m]);
+/* 前場の1分足 (初約定の足から・終値のある足) を配列に */
+function caSim2Prep(bars){
+  var P={tm:[],o:[],h:[],l:[],c:[]}, started=false;
+  CA_SIM2_LINES.forEach(function(k){P[k]=[];});
+  (bars||[]).forEach(function(b){
+    if(!b||!b.t)return;
+    var tm=_caVpTm(b.t); if(tm<540||tm>690)return;
+    if(!started){ if(!(b.v>0))return; started=true; }
+    if(!(b.c>0))return;
+    P.tm.push(tm); P.o.push(b.o>0?b.o:b.c); P.h.push(b.h>0?b.h:b.c); P.l.push(b.l>0?b.l:b.c); P.c.push(b.c);
+    CA_SIM2_LINES.forEach(function(k){P[k].push(b[k]>0?b[k]:null);});
+  });
+  return P;
 }
-/* ─── 2026-10-31: 類似チャートの5つの観点 ───
-   ① ギャップ ② 最初の方向 (最初の波) ③ 転換の度合い (2・3つ目の波の戻し割合と速さ) ④ EMA/VWAP の並び ⑤ 全体の形 (従来の DTW)。
-   波 = ジグザグ。区切り = 範囲内の1分足の平均値幅(%)の CA_SIM_WAVE_K 倍以上戻したら切り替わり (その日のボラに合わせる) */
-var CA_SIM_WAVE_K=3;
-var CA_SIM_VIEWS=[['gap','ギャップ'],['dir','最初の方向'],['turn','転換'],['order','並び'],['shape','全体の形']];
-var CA_SIM_OPP_PENALTY=0.2;   /* 最初の方向が逆の日は合計点にこれを掛ける */
-function caSimAnalyze(bars1m, endSpec){
-  var base=caSimSeries(bars1m,endSpec); if(!base)return null;
-  var b=bars1m, i0=-1; for(var i=0;i<b.length;i++){ if(b[i]&&b[i].v>0){i0=i;break;} }
-  var p0=base.p0, endTm=(endSpec&&endSpec.kind==='off')?(base.openTm+endSpec.off-1):690; if(endTm>690)endTm=690;
-  var xs=[], rngSum=0, ranks=[];
-  for(var j=i0;j<b.length;j++){
-    var x=b[j]; if(_caVpTm(x.t)>endTm)break; if(!(x.c>0))continue;
-    xs.push((x.c-p0)/p0*100); rngSum+=((x.h-x.l)/p0*100)||0;
-    /* 並び: 6本の値を上から順に並べたときの各線の順位 */
-    var vals=CA_SIM_KEYS.map(function(k){ var v=(k==='c')?x.c:x[k]; return (v>0)?v:x.c; });
-    var idx=[0,1,2,3,4,5].sort(function(a,c){return vals[c]-vals[a];}), rk=[];
-    idx.forEach(function(k,pos){rk[k]=pos;});
-    ranks.push(rk);
+/* 区間 [s,e] の特徴 */
+function caSim2Feat(P,s,e){
+  var p0=P.o[s], L=e-s+1, xs=new Array(L), hi=0, lo=0, rs=0;
+  for(var i=0;i<L;i++){
+    var j=s+i; xs[i]=(P.c[j]-p0)/p0*100;
+    var h=(P.h[j]-p0)/p0*100, l=(P.l[j]-p0)/p0*100;
+    if(h>hi)hi=h; if(l<lo)lo=l; rs+=(P.h[j]-P.l[j])/p0*100;
   }
-  var th=Math.max(0.05, CA_SIM_WAVE_K*(xs.length?rngSum/xs.length:0.1));
-  /* ジグザグ (起点は寄りの始値=0%) */
-  var waves=[], dir=0, hi=0, lo=0, hiI=-1, loI=-1, st=0, stI=-1, ext=0, extI=-1;
-  for(var k=0;k<xs.length;k++){
+  var N=Math.min(CA_SIM2_N,L), path=new Array(N), ind=new Array(N);
+  for(var q=0;q<N;q++){
+    var f=(N===1)?(L-1):q*(L-1)/(N-1), a=Math.floor(f), b=Math.min(L-1,a+1), w=f-a;
+    path[q]=xs[a]*(1-w)+xs[b]*w;
+    var jj=s+Math.round(f), c=P.c[jj];
+    ind[q]=CA_SIM2_LINES.map(function(k){ var v=P[k][jj]; return v>0?(c-v)/p0*100:null; });
+  }
+  /* ジグザグ (起点 = 区間の始値 = 0%)。区切り = 区間の1分足の平均値幅の CA_SIM2_WAVE_K 倍 */
+  var th=Math.max(0.05,CA_SIM2_WAVE_K*rs/L);
+  var waves=[], dir=0, mx=0, mn=0, mxI=-1, mnI=-1, st=0, stI=-1, ext=0, extI=-1;
+  for(var k=0;k<L;k++){
     var v=xs[k];
     if(dir===0){
-      if(v>hi){hi=v;hiI=k;} if(v<lo){lo=v;loI=k;}
-      if(hi-lo>=th){ if(hiI>loI){dir=1;st=lo;stI=loI;ext=hi;extI=hiI;} else {dir=-1;st=hi;stI=hiI;ext=lo;extI=loI;} }
+      if(v>mx){mx=v;mxI=k;} if(v<mn){mn=v;mnI=k;}
+      if(mx-mn>=th){ if(mxI>mnI){dir=1;st=mn;stI=mnI;ext=mx;extI=mxI;} else {dir=-1;st=mx;stI=mxI;ext=mn;extI=mnI;} }
       continue;
     }
     if(dir>0){ if(v>ext){ext=v;extI=k;} else if(ext-v>=th){ waves.push({dir:1,mag:ext-st,dur:extI-stI}); st=ext;stI=extI;dir=-1;ext=v;extI=k; } }
     else { if(v<ext){ext=v;extI=k;} else if(v-ext>=th){ waves.push({dir:-1,mag:st-ext,dur:extI-stI}); st=ext;stI=extI;dir=1;ext=v;extI=k; } }
   }
-  if(dir!==0)waves.push({dir:dir,mag:Math.abs(ext-st),dur:extI-stI,open:true});
-  return {series:base.series, openTm:base.openTm, p0:p0, ranks:ranks, waves:waves, th:th};
+  if(dir!==0)waves.push({dir:dir,mag:Math.abs(ext-st),dur:Math.max(extI-stI,L-1-stI)});
+  return {path:path,ind:ind,range:hi-lo,bar:rs/L,waves:waves,L:L};
 }
-function _caSimNear(a,b,half){ return Math.exp(-Math.LN2*Math.abs(a-b)/Math.max(1e-9,half)); }
-function caSimDtwCost(a,b,cost){
+function _caSim2Near(a,b,half){ return Math.exp(-Math.LN2*Math.abs(a-b)/Math.max(1e-9,half)); }
+function _caSim2Dtw(a,b){
   var n=a.length, m=b.length; if(!n||!m)return Infinity;
-  var w=Math.max(Math.abs(n-m), Math.ceil(CA_SIM_BAND*Math.max(n,m)));
-  var INF=1e18, prev=new Float64Array(m+1), cur=new Float64Array(m+1), pl=new Float64Array(m+1), cl=new Float64Array(m+1);
+  var w=Math.max(Math.abs(n-m),Math.ceil(0.2*Math.max(n,m))), INF=1e18;
+  var prev=new Float64Array(m+1), cur=new Float64Array(m+1), pl=new Float64Array(m+1), cl=new Float64Array(m+1);
   for(var j=0;j<=m;j++){prev[j]=INF;pl[j]=0;} prev[0]=0;
   for(var i=1;i<=n;i++){
     for(var j2=0;j2<=m;j2++){cur[j2]=INF;cl[j2]=0;}
     var jlo=Math.max(1,i-w), jhi=Math.min(m,i+w);
     for(var j3=jlo;j3<=jhi;j3++){
-      var d=cost(a[i-1],b[j3-1]);
-      var best=prev[j3-1], bl=pl[j3-1];
+      var t=a[i-1]-b[j3-1], d=t*t, best=prev[j3-1], bl=pl[j3-1];
       if(prev[j3]<best){best=prev[j3];bl=pl[j3];}
       if(cur[j3-1]<best){best=cur[j3-1];bl=cl[j3-1];}
       cur[j3]=best+d; cl[j3]=bl+1;
@@ -14322,217 +14340,264 @@ function caSimDtwCost(a,b,cost){
   }
   return (prev[m]>=INF/2)?Infinity:prev[m]/Math.max(1,pl[m]);
 }
-/* 並びの食い違い = 6本のうち上下関係が逆になっている組の割合 (0〜1) */
-function _caRankDiff(r1,r2){ var bad=0,n=0; for(var i=0;i<6;i++)for(var j=i+1;j<6;j++){ n++; if((r1[i]-r1[j])*(r2[i]-r2[j])<0)bad++; } return bad/n; }
-/* 観点ごとの点 (0〜1, 比べられないものは null) と、最初の方向が逆か */
-function caSimScores(A,B,gapA,gapB){
-  var sc={gap:null,dir:null,turn:null,order:null}, opp=false;
-  if(gapA!=null&&gapB!=null)sc.gap=_caSimNear(gapA,gapB,0.7);
+/* 観点ごとの点 (0〜1・比べられないものは null) と合計 (0〜100) */
+function caSim2Score(A,B){
+  var sc={flow:null,shape:null,range:null,ind:null}, opp=false;
+  /* ① 波の順番 (新しい方から) */
   var wa=A.waves, wb=B.waves;
-  if(wa.length&&wb.length){
-    if(wa[0].dir!==wb[0].dir){ sc.dir=0; opp=true; }
-    else sc.dir=0.6*_caSimNear(wa[0].mag,wb[0].mag,0.5*Math.max(wa[0].mag,wb[0].mag,0.3))
-               +0.4*_caSimNear(wa[0].dur,wb[0].dur,Math.max(3,0.3*Math.max(wa[0].dur,wb[0].dur)));
-    var parts=[];
-    for(var k=1;k<=2;k++){
-      var ha=(wa.length>k&&wa[k-1].mag>0), hb=(wb.length>k&&wb[k-1].mag>0), s;
-      if(ha&&hb){
-        var ra=wa[k].mag/wa[k-1].mag, rb=wb[k].mag/wb[k-1].mag;
-        /* 戻し割合は倍率なので対数で比べる (1.5倍の違いで半分) */
-        s=0.6*_caSimNear(Math.log(ra+0.05),Math.log(rb+0.05),Math.log(1.5))+0.4*_caSimNear(wa[k].dur,wb[k].dur,Math.max(3,0.3*Math.max(wa[k].dur,wb[k].dur)));
-      }else s=(ha===hb)?1:0.2;   /* どちらもその波が無い=同じ (一方通行どうし) / 片方だけ=違う */
-      parts.push(s);
+  if(!wa.length&&!wb.length)sc.flow=1;
+  else{
+    var WT=[1,0.8,0.6,0.4], sum=0, ws=0, half=Math.max(2,0.15*A.L);
+    for(var k=0;k<WT.length;k++){
+      var ia=wa.length-1-k, ib=wb.length-1-k;
+      if(ia<0&&ib<0)break;
+      ws+=WT[k];
+      if(ia<0||ib<0){ sum+=0.2*WT[k]; continue; }   /* 片方だけ波がある */
+      var x=wa[ia], y=wb[ib];
+      if(x.dir!==y.dir){ if(k===0)opp=true; continue; }
+      var sm=_caSim2Near(Math.log(x.mag+0.02),Math.log(y.mag+0.02),Math.log(1.6));
+      var sd=_caSim2Near(x.dur,y.dur,half);
+      sum+=WT[k]*(0.6+0.25*sm+0.15*sd);
     }
-    sc.turn=(2*parts[0]+parts[1])/3;
-  }else if(!wa.length&&!wb.length){ sc.dir=1; sc.turn=1; }
-  var od=caSimDtwCost(A.ranks,B.ranks,_caRankDiff);
-  if(isFinite(od))sc.order=1-od;
-  return {sc:sc,opp:opp};
+    sc.flow=ws?sum/ws:null;
+  }
+  /* ② 形 */
+  var d=_caSim2Dtw(A.path,B.path);
+  if(isFinite(d))sc.shape=Math.exp(-Math.LN2*Math.sqrt(d)/Math.max(0.15,0.25*A.range));
+  /* ③ 値幅 */
+  var r1=Math.min(A.range,B.range)/Math.max(1e-9,A.range,B.range), r2=Math.min(A.bar,B.bar)/Math.max(1e-9,A.bar,B.bar);
+  sc.range=0.6*r1+0.4*r2;
+  /* ④ 指標線 (上下の一致 ±0.03% 以内は「線上」= 半分) */
+  var ag=0, an=0, n=Math.min(A.ind.length,B.ind.length);
+  for(var q=0;q<n;q++){
+    var qa=A.ind[Math.round(q*(A.ind.length-1)/Math.max(1,n-1))], qb=B.ind[Math.round(q*(B.ind.length-1)/Math.max(1,n-1))];
+    for(var li=0;li<CA_SIM2_LINES.length;li++){
+      var u=qa[li], v=qb[li]; if(u==null||v==null)continue;
+      var su=Math.abs(u)<0.03?0:(u>0?1:-1), sv=Math.abs(v)<0.03?0:(v>0?1:-1);
+      ag+=(su===sv)?1:(su===0||sv===0)?0.5:0; an++;
+    }
+  }
+  if(an){
+    var la=A.ind[A.ind.length-1], lb=B.ind[B.ind.length-1], ds=0, dn=0, hh=Math.max(0.2,0.3*A.range);
+    for(var l2=0;l2<CA_SIM2_LINES.length;l2++){ if(la[l2]==null||lb[l2]==null)continue; ds+=_caSim2Near(la[l2],lb[l2],hh); dn++; }
+    sc.ind=0.7*(ag/an)+0.3*(dn?ds/dn:ag/an);
+  }
+  var tot=0, tw=0;
+  CA_SIM2_LABELS.forEach(function(v){ var x=sc[v[0]]; if(x!=null){tot+=CA_SIM2_W[v[0]]*x; tw+=CA_SIM2_W[v[0]];} });
+  var score=tw?tot/tw:0;
+  if(opp)score*=CA_SIM2_OPP;
+  return {sc:sc,opp:opp,score:Math.round(score*100)};
 }
-/* チャート本体を読む (この端末 → 無ければ Firebase。Firebase から読んだものは保存しない) */
-function caLoadChartDataAny(id, fbCfg, cb){
-  caLoadDataAsync(id,function(d){
-    if(d&&d.analysisData){cb(d.analysisData);return;}
-    var cfg=fbCfg||{};
-    if(!cfg.url){cb(null);return;}
-    fetch(cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data/'+id+'.json'+caAuthParam(cfg.secret))
-      .then(function(r){return r.ok?r.json():null;})
-      .then(function(fb){cb(fb&&fb.analysisData?fb.analysisData:null);})
-      .catch(function(){cb(null);});
+/* 1日の前場から、基準 A と同じ本数の区間をずらして採点し、重ならない上位 CA_SIM2_PER_DAY 場面を返す */
+function caSim2SearchDay(A,P){
+  var L=A.L, n=P.tm.length, hits=[];
+  for(var e=L-1;e<=n-2;e++){   /* その後が1本以上ある区間だけ */
+    var s=e-L+1, B=caSim2Feat(P,s,e), r=caSim2Score(A,B);
+    hits.push({s:s,e:e,score:r.score,sc:r.sc,opp:r.opp});
+  }
+  hits.sort(function(a,b){return b.score-a.score;});
+  var out=[], sep=Math.max(5,Math.ceil(L/2));
+  for(var i=0;i<hits.length&&out.length<CA_SIM2_PER_DAY;i++){
+    var h=hits[i];
+    if(out.some(function(o){return Math.abs(o.e-h.e)<sep;}))continue;
+    out.push(h);
+  }
+  return out;
+}
+function _caSim2Hm(t){ return Math.floor(t/60)+':'+('0'+(t%60)).slice(-2); }
+/* サムネ: 区間 (青い帯) + その後 (CA_SIM2_AFTER 本・基準は無し)。区間の終わりに縦の点線 */
+function caSim2DrawThumb(canvas, wrap, info, sc, snippetsById){
+  var bars=info.b1; if(!bars||!bars.length)return;
+  var am=bars.filter(function(b){var t=_caVpTm(b.t);return t>=540&&t<=690;});
+  function idxOf(tm){ for(var i=0;i<am.length;i++){ if(_caVpTm(am[i].t)>=tm)return i; } return am.length-1; }
+  var s0=idxOf(sc.sTm), je=idxOf(sc.eTm), s1=sc.base?je:Math.min(am.length-1,je+CA_SIM2_AFTER);
+  if(s0<0||je<0||s1<s0)return;
+  var t0=_caVpTm(am[s0].t), t1=_caVpTm(am[s1].t), tE=_caVpTm(am[je].t);
+  var mn=Infinity, mx=-Infinity;
+  for(var k=s0;k<=s1;k++){ var b=am[k]; if(b.v>0&&b.h>0){ if(b.l<mn)mn=b.l; if(b.h>mx)mx=b.h; } }
+  if(!isFinite(mn)||!isFinite(mx))return;
+  var pad=Math.max(1,(mx-mn)*0.06); mn-=pad; mx+=pad;
+  var W=Math.max(120,Math.round(wrap.clientWidth||260)), H=Math.max(80,Math.round(wrap.clientHeight||170));
+  var strokes=((info.strokes&&info.strokes['1m'])||[]).filter(function(s){
+    if(!s||s._hidden||(s.side||'cur')!=='cur'||!s.anchors||!s.anchors.length)return false;
+    var tp=s.type||s.tool;
+    if(tp==='horizontal'){ var p=s.anchors[0].p; return p>=mn&&p<=mx; }
+    return s.anchors.some(function(a){return a&&a.tm>=t0-1&&a.tm<=t1+1;});
   });
+  var dim={w:W,h:H,thumbnail:true,thumbView:{uS:t0-540,uSpan:Math.max(1,t1-t0),pMin:mn,pMax:mx}};
+  var lay={current:null};
+  var origDPR=window.devicePixelRatio;
+  try{Object.defineProperty(window,'devicePixelRatio',{value:Math.min(2,origDPR||1),configurable:true});}catch(e){}
+  try{
+    canvas.style.width=W+'px'; canvas.style.height=H+'px';
+    drawDataChart(canvas,bars,{bars_1m:info.b1,bars_5m:info.b5||[]},dim,'1m',{uS:0,uE:0},0,{min:mn,max:mx},lay,
+      strokes,null,null,null,null,1,null,null,null,snippetsById,null,null);
+    var L=lay.current, ctx=canvas.getContext('2d');
+    if(L&&ctx){
+      function xOf(tm){ return L.padL+L.halfBarPx+((tm-540)-L.uS)/L.uSpan*L.innerW; }
+      var bw=L.innerW/L.uSpan;
+      ctx.save();
+      ctx.beginPath(); ctx.rect(L.padL,L.priceTop,L.chartW,L.priceBot-L.priceTop); ctx.clip();
+      var xa=xOf(t0)-bw/2, xb=xOf(tE)+bw/2;
+      ctx.fillStyle='rgba(56,189,248,0.10)';
+      ctx.fillRect(xa,L.priceTop,xb-xa,L.priceBot-L.priceTop);
+      ctx.fillStyle='rgba(56,189,248,0.85)';
+      ctx.fillRect(xa,L.priceTop,xb-xa,3);
+      if(!sc.base){
+        ctx.strokeStyle='#38bdf8'; ctx.lineWidth=1.2; ctx.setLineDash([4,3]);
+        ctx.beginPath(); ctx.moveTo(Math.round(xb)+0.5,L.priceTop); ctx.lineTo(Math.round(xb)+0.5,L.priceBot); ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }catch(e){console.warn('[sim2 thumb]',e);}
+  finally{ try{Object.defineProperty(window,'devicePixelRatio',{value:origDPR,configurable:true});}catch(e){} }
 }
-function CaSimilarModal(props){
-  var base=props.base, charts=props.charts||[], fbCfg=props.fbCfg;
-  var onOpenChart=props.onOpenChart||function(){}, onClose=props.onClose||function(){};
-  /* 読み込んだ1分足 {id: bars_1m|null} */
-  var sB=useState({}); var barsById=sB[0],setBarsById=sB[1];
-  var sDone=useState(0); var nDone=sDone[0],setNDone=sDone[1];
+function CaSim2Card(props){
+  var sc=props.sc, info=props.info, m=sc.m;
+  var wrapRef=useRef(null), cvRef=useRef(null), drawnRef=useRef(null);
+  var dkey=sc.sTm+'|'+sc.eTm;
   useEffect(function(){
-    var alive=true, list=charts.slice(), i=0, running=0, acc={}, done=0, bumpT=null;
-    function flush(){ bumpT=null; if(alive){ setBarsById(Object.assign({},acc)); setNDone(done); } }
-    function bump(){ if(!bumpT)bumpT=setTimeout(flush,200); }
+    var wrap=wrapRef.current; if(!wrap)return;
+    function draw(){ if(drawnRef.current===dkey||!cvRef.current)return; drawnRef.current=dkey; caSim2DrawThumb(cvRef.current,wrap,info,sc,props.snippetsById); }
+    if(typeof IntersectionObserver==='undefined'){ draw(); return; }
+    var io=new IntersectionObserver(function(es){ es.forEach(function(e){ if(e.isIntersecting){ draw(); io.disconnect(); } }); },{rootMargin:'300px'});
+    io.observe(wrap);
+    return function(){io.disconnect();};
+  },[dkey]);
+  var col=sc.base?'#93c5fd':(sc.score>=80?'#4ade80':sc.score>=60?'#fbbf24':'#888');
+  var tip=sc.base?'':CA_SIM2_LABELS.map(function(v){ var x=sc.sc[v[0]]; return v[1]+' '+(x==null?'－':Math.round(x*100)); }).join(' / ')+(sc.opp?'（最後の波が逆）':'');
+  return ce('button',{onClick:props.onOpen,disabled:!props.onOpen,title:tip,
+      style:{border:'1px solid '+(sc.base?'#1e3a5f':'#2a2a2a'),cursor:props.onOpen?'pointer':'default',fontFamily:'inherit',
+        background:'#141414',borderRadius:8,padding:0,overflow:'hidden',display:'flex',flexDirection:'column',textAlign:'left',width:'100%'}},
+    ce('div',{ref:wrapRef,style:{width:'100%',height:170,background:'#0b0b0b'}},ce('canvas',{ref:cvRef,style:{display:'block'}})),
+    ce('div',{style:{display:'flex',alignItems:'center',gap:6,padding:'6px 8px 7px',fontSize:11,color:'#aaa',fontVariantNumeric:'tabular-nums'}},
+      ce('span',{style:{color:'#ddd',fontWeight:700}},(sc.date||'')+(m?_metaDowLabel(m):'')),
+      ce('b',{style:{color:'#38bdf8'}},_caSim2Hm(sc.sTm)+'〜'+_caSim2Hm(sc.eTm)),
+      ce('span',{style:{flex:1}}),
+      ce('span',{style:{fontSize:12,fontWeight:700,color:col,whiteSpace:'nowrap'}},sc.base?'基準':('類似 '+sc.score+'%'))));
+}
+function CaSim2Modal(props){
+  var base=props.base||{}, charts=props.charts||[], fbCfg=props.fbCfg;
+  var onClose=props.onClose||function(){};
+  var refP=useMemo(function(){ return caSim2Prep(props.refBars); },[props.refBars]);
+  var openTm=refP.tm.length?refP.tm[0]:540;
+  var lastTm=refP.tm.length?refP.tm[refP.tm.length-1]:540;
+  var minTm=Math.min(lastTm,openTm+2), maxTm=Math.max(minTm,Math.min(lastTm,props.maxTm!=null?props.maxTm:690));
+  function clampTm(t){ return Math.max(minTm,Math.min(maxTm,t==null?maxTm:t)); }
+  var sT=useState(function(){return clampTm(props.defTm);}); var endTm=sT[0],setEndTm=sT[1];
+  var sTv=useState(endTm); var tmView=sTv[0],setTmView=sTv[1];
+  var tmTimerRef=useRef(null);
+  function changeTm(t){ setTmView(t); if(tmTimerRef.current)clearTimeout(tmTimerRef.current); tmTimerRef.current=setTimeout(function(){setEndTm(t);},250); }
+  /* 読み込み (同じ銘柄の全チャート。EMA の助走用に前の日付も要るので基準の日も読む) */
+  var sI=useState({}); var infoById=sI[0],setInfoById=sI[1];
+  var sD=useState(0); var nDone=sD[0],setNDone=sD[1];
+  var sR=useState(false); var ready=sR[0],setReady=sR[1];
+  var allList=useMemo(function(){
+    var list=charts.slice();
+    if(base.meta&&!list.some(function(m){return m.id===base.meta.id;}))list.push(base.meta);
+    return list;
+  },[]);
+  useEffect(function(){
+    var alive=true, list=allList, i=0, running=0, raw={}, done=0, bumpT=null;
+    function bump(){ if(!bumpT)bumpT=setTimeout(function(){bumpT=null; if(alive)setNDone(done);},200); }
+    function finish(){
+      if(!alive)return;
+      var arr=list.map(function(m){return {m:m,d:_caResolveMetaDate(m)||''};}).sort(function(a,b){return a.d.localeCompare(b.d);});
+      function warmed(a){ if(!a||!a.length)return false; var b=a[0]; return !(b.ema9===b.ema22&&b.ema22===b.ema50&&b.ema50===b.ema200); }
+      var out={};
+      arr.forEach(function(x,ix){
+        var r=raw[x.m.id]; if(!r||x.m.id===base.id)return;
+        var pv=null; for(var k=ix-1;k>=0;k--){ if(arr[k].d&&arr[k].d<x.d){pv=arr[k];break;} }
+        var pr=pv?raw[pv.m.id]:null, b1=r.b1, b5=r.b5;
+        if(pr&&!(warmed(b5)||warmed(b1))){ b1=computeEnhancedBars(b1,pr.b1); b5=computeEnhancedBars(b5,pr.b5); }
+        out[x.m.id]={b1:b1,b5:b5,strokes:r.strokes,P:caSim2Prep(b1),d:x.d};
+      });
+      setInfoById(out); setNDone(done); setReady(true);
+    }
     function next(){
       while(alive&&running<4&&i<list.length){
         (function(m){ running++;
-          caLoadChartDataAny(m.id,fbCfg,function(ad){
+          caSim2Load(m.id,fbCfg,function(d){
             running--; if(!alive)return;
-            acc[m.id]=(ad&&ad.bars_1m)?ad.bars_1m:null; done++; bump(); next();
+            var ad=d&&d.analysisData;
+            if(ad&&ad.bars_1m&&ad.bars_1m.length)
+              raw[m.id]={b1:caFindSlimBars(ad.bars_1m),b5:caFindSlimBars(ad.bars_5m),strokes:migrateAnalysisStrokes(d.analysisStrokes,'cur')};
+            done++; bump();
+            if(done>=list.length)finish(); else next();
           });
         })(list[i++]);
       }
-      if(alive&&done>=list.length)flush();
     }
-    next();
+    if(!list.length)finish(); else next();
     return function(){alive=false; if(bumpT)clearTimeout(bumpT);};
   },[]);
-  var baseBars=barsById[base.id];
-  /* 範囲: 'm15' | 'm30' | 'am' | 'off'(スライダー)。既定は前場 */
-  var sR=useState({kind:'am'}); var rng=sR[0],setRng=sR[1];
-  var baseOpenTm=useMemo(function(){ var s0=caSimSeries(baseBars,{kind:'am'}); return s0?s0.openTm:540; },[baseBars]);
-  var maxOff=Math.max(1,690-baseOpenTm);
-  var endSpec=(rng.kind==='am')?{kind:'am'}:{kind:'off',off:(rng.kind==='m15'?15:rng.kind==='m30'?30:rng.off)};
-  var curOff=(endSpec.kind==='am')?maxOff:Math.min(maxOff,endSpec.off);
-  function hhmm(t){return Math.floor(t/60)+':'+('0'+(t%60)).slice(-2);}
-  var sSort=useState('sim'); var sortBy=sSort[0],setSortBy=sSort[1];
-  /* 2026-10-31: 各日のギャップ% = 寄りの始値 ÷ 前の日付のチャートの最後の約定足の終値 −1 (前の日付が読めない/無い日は null) */
-  var gapById=useMemo(function(){
-    var list=charts.slice().sort(function(a,b){return _caResolveMetaDate(a).localeCompare(_caResolveMetaDate(b));});
-    var out={}, prevC=null, prevD=null;
-    list.forEach(function(m){
-      var bb=barsById[m.id], d=_caResolveMetaDate(m);
-      var ss=bb?caSimSeries(bb,{kind:'off',off:1}):null;
-      out[m.id]=(ss&&prevC>0&&prevD&&prevD<d)?(ss.p0/prevC-1)*100:null;
-      if(bb){ for(var i=bb.length-1;i>=0;i--){ if(bb[i]&&bb[i].v>0&&bb[i].c>0){prevC=bb[i].c;prevD=d;break;} } }
-      else { prevC=null; prevD=null; }   /* 読めない/読み込み中の日の次は不明にする (1日飛ばしの終値を使わない) */
-    });
-    return out;
-  },[barsById]);
-  var baseGap=gapById[base.id], baseCat=caGapCat(baseGap);
-  /* 絞り込み: 'all' | 'same'(基準と同じ区分) | 区分 */
-  var sGF=useState('all'); var gapF=sGF[0],setGapF=sGF[1];
-  /* 2026-10-31: 5つの観点の ON/OFF (この端末に記憶・既定は全部 ON) */
-  var sVw=useState(function(){ try{ var v=JSON.parse(localStorage.getItem('ca_sim_views_v1')); if(v&&typeof v==='object')return v; }catch(e){} return {}; });
-  var views=sVw[0];
-  function viewOn(k){ return views[k]!==false; }
-  function toggleView(k){ var nv=Object.assign({},views); nv[k]=!viewOn(k); sVw[1](nv); try{localStorage.setItem('ca_sim_views_v1',JSON.stringify(nv));}catch(e){} }
-  /* 観点ごとの点 (ON/OFF に関係なく全部計算しておき、合計だけ ON の観点で出す) */
-  var scored=useMemo(function(){
-    var A=caSimAnalyze(baseBars,endSpec); if(!A)return [];
-    var rows=[], ga=gapById[base.id];
-    charts.forEach(function(m){
-      if(m.id===base.id)return;
-      var bb=barsById[m.id]; if(bb===undefined)return;
-      var B=caSimAnalyze(bb,endSpec); if(!B){rows.push({m:m,none:true});return;}
-      var r=caSimScores(A,B,ga,gapById[m.id]);
-      rows.push({m:m,sc:r.sc,opp:r.opp,d:caSimDtw(A.series,B.series)});
-    });
-    /* ⑤ 全体の形: 距離を「一番近い日=1・中央値=0.5」に換算 (距離そのものには目盛りが無いため相対) */
-    var ds=rows.filter(function(r){return !r.none&&isFinite(r.d);}).map(function(r){return r.d;}).sort(function(a,b){return a-b;});
-    var dmin=ds.length?ds[0]:0, dmed=ds.length?ds[Math.floor(ds.length/2)]:0, sc=Math.max(1e-9,dmed-dmin);
-    rows.forEach(function(r){ if(!r.none)r.sc.shape=isFinite(r.d)?Math.exp(-Math.LN2*(r.d-dmin)/sc):null; });
-    return rows;
-  },[barsById,baseBars,endSpec.kind,endSpec.off,gapById]);
-  var results=scored.map(function(r){
-    if(r.none)return {m:r.m,score:null};
-    var sum=0,n=0;
-    CA_SIM_VIEWS.forEach(function(v){ var k=v[0]; if(viewOn(k)&&r.sc[k]!=null){sum+=r.sc[k];n++;} });
-    var tot=n?sum/n:null;
-    if(tot!=null&&r.opp&&viewOn('dir'))tot*=CA_SIM_OPP_PENALTY;
-    return {m:r.m,score:tot==null?null:Math.round(tot*100),sc:r.sc,opp:r.opp};
-  });
-  var shownRows=results.filter(function(r){
-    if(gapF==='all')return true;
-    var c=caGapCat(gapById[r.m.id]);
-    return gapF==='same'?(baseCat!=null&&c===baseCat):(c===gapF);
-  });
-  var sorted=shownRows.slice().sort(function(a,b){
-    if(sortBy==='sim'){ var x=(a.score==null?-1:a.score), y=(b.score==null?-1:b.score); if(x!==y)return y-x; }
-    var da=_caResolveMetaDate(a.m), db=_caResolveMetaDate(b.m);
-    return sortBy==='old'?da.localeCompare(db):db.localeCompare(da);
-  });
+  var snippetsById=useMemo(function(){ var mm={}; try{(caLoadSnippets()||[]).forEach(function(sn){if(sn&&sn.id)mm[sn.id]=sn;});}catch(e){} return mm; },[]);
+  /* 基準の区間 */
+  var refE=-1; for(var q=0;q<refP.tm.length;q++){ if(refP.tm[q]<=endTm)refE=q; }
+  var A=useMemo(function(){ return refE>=2?caSim2Feat(refP,0,refE):null; },[refP,refE]);
+  /* 採点 (重いので描画の後に) */
+  var sRes=useState(null); var results=sRes[0],setResults=sRes[1];
+  var sBusy=useState(false); var busy=sBusy[0],setBusy=sBusy[1];
+  useEffect(function(){
+    if(!ready||!A){setResults(null);return;}
+    setBusy(true);
+    var t=setTimeout(function(){
+      var rows=[];
+      charts.forEach(function(m){
+        if(m.id===base.id)return;
+        var inf=infoById[m.id]; if(!inf||inf.d===base.date||inf.P.tm.length<A.L+1)return;
+        caSim2SearchDay(A,inf.P).forEach(function(h){
+          rows.push({m:m,date:inf.d,sTm:inf.P.tm[h.s],eTm:inf.P.tm[h.e],score:h.score,sc:h.sc,opp:h.opp});
+        });
+      });
+      rows.sort(function(a,b){ return (b.score-a.score)||b.date.localeCompare(a.date); });
+      setResults(rows.slice(0,CA_SIM2_MAX)); setBusy(false);
+    },30);
+    return function(){clearTimeout(t);};
+  },[ready,A,infoById]);
+  var nDays={}; (results||[]).forEach(function(r){nDays[r.m.id]=1;});
+  function openAt(ix){
+    var nav=results.map(function(r){return {id:r.m.id,hit:{tf:'1m',tm:r.eTm}};});
+    if(props.onOpenScene)props.onOpenScene(nav,ix);
+  }
   var BT={border:'none',cursor:'pointer',fontFamily:'inherit'};
-  function pill(on){return Object.assign({},BT,{fontSize:11,fontWeight:700,padding:'4px 10px',borderRadius:6,
-    background:on?'#2563eb':'#222',color:on?'#fff':'#999',border:'1px solid '+(on?'#3b82f6':'#333')});}
-  function thumbOf(m){return _thumbMemCache[m.id]||m.thumbUrl||m.thumb||null;}
-  function gapTxt(m){ var g=gapById[m.id]; if(g==null)return ''; return CA_GAP_LABEL[caGapCat(g)]+' '+(g>0?'+':'')+g.toFixed(1)+'%'; }
-  function marks(sc,opp){
-    if(!sc)return null;
-    return ce('div',{style:{display:'flex',gap:6,flexWrap:'wrap',padding:'0 8px 6px',fontSize:10,color:'#aaa'}},
-      CA_SIM_VIEWS.map(function(v){
-        var x=sc[v[0]], mk=(x==null)?'－':(v[0]==='dir'&&opp)?'逆':x>=0.8?'◎':x>=0.6?'○':x>=0.4?'△':'×';
-        var col=(x==null)?'#555':(mk==='◎')?'#4ade80':(mk==='○')?'#a3e635':(mk==='△')?'#fbbf24':'#f87171';
-        return ce('span',{key:v[0],style:{opacity:viewOn(v[0])?1:0.35,whiteSpace:'nowrap'}},v[1].slice(0,2)+' ',ce('b',{style:{color:col}},mk));
-      }));
-  }
-  function card(m,label,labelCol,extra){
-    var tu=thumbOf(m), gt=gapTxt(m), gc=caGapCat(gapById[m.id]);
-    return ce('button',{key:m.id,onClick:function(){onOpenChart(m.id);onClose();},
-        style:Object.assign({},BT,{background:'#141414',border:'1px solid #2a2a2a',borderRadius:8,padding:0,overflow:'hidden',
-          display:'flex',flexDirection:'column',textAlign:'left',width:'100%'})},
-      tu?ce('img',{src:tu,draggable:false,style:{width:'100%',display:'block',height:'auto'}})
-        :ce('div',{style:{height:80,display:'flex',alignItems:'center',justifyContent:'center',color:'#555',fontSize:11,background:'#1a1a1a'}},'no preview'),
-      ce('div',{style:{display:'flex',alignItems:'center',gap:6,padding:'6px 8px'}},
-        ce('span',{style:{flex:1,fontSize:12,fontWeight:700,color:'#ddd',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},
-          (_caResolveMetaDate(m)||m.name)+_metaDowLabel(m)),
-        gt&&ce('span',{title:'前日終値からのギャップ',style:{fontSize:10,fontWeight:700,whiteSpace:'nowrap',fontVariantNumeric:'tabular-nums',
-          color:(gc==='bgd'||gc==='gd')?'#60a5fa':(gc==='bgu'||gc==='gu')?'#f87171':'#aaa'}},gt),
-        ce('span',{style:{fontSize:12,fontWeight:700,color:labelCol,fontVariantNumeric:'tabular-nums',whiteSpace:'nowrap'}},label)),
-      extra||null);
-  }
-  var total=charts.length;
+  var baseInfo={b1:props.refBars,b5:[],strokes:props.baseStrokes};
+  var total=allList.length;
   return ReactDOM.createPortal(
     ce('div',{onClick:onClose,style:{position:'fixed',inset:0,background:'rgba(0,0,0,.78)',zIndex:10500,display:'flex',alignItems:'center',justifyContent:'center',padding:16}},
       ce('div',{onClick:function(e){e.stopPropagation();},
           style:{background:'#1a1a1a',borderRadius:14,boxShadow:'0 8px 40px rgba(0,0,0,.9)',display:'flex',flexDirection:'column',
-            maxWidth:1100,width:'100%',maxHeight:'min(90vh,900px)',overflow:'hidden'}},
+            maxWidth:1200,width:'100%',maxHeight:'min(92vh,1000px)',overflow:'hidden'}},
         ce('div',{style:{padding:'12px 16px 10px',borderBottom:'1px solid #2a2a2a',display:'flex',alignItems:'center',gap:8,flexShrink:0}},
           ce('div',{style:{flex:1,fontWeight:700,fontSize:14,color:'#fff'}},'≈ 類似チャート',
-            ce('span',{style:{color:'#888',fontWeight:400,fontSize:12,marginLeft:8}},(base.ticker||'')+' '+(_caResolveMetaDate(base)||'')+_metaDowLabel(base)+' と形が似ている日'),
-            nDone<total&&ce('span',{style:{color:'#fbbf24',fontWeight:400,fontSize:12,marginLeft:8}},'読み込み中 '+nDone+'/'+total)),
+            ce('span',{style:{color:'#888',fontWeight:400,fontSize:12,marginLeft:8}},(base.ticker||'')+' の他の日の前場から、この動きと似た場面'),
+            !ready&&ce('span',{style:{color:'#fbbf24',fontWeight:400,fontSize:12,marginLeft:8}},'読み込み中 '+nDone+'/'+total)),
           ce('button',{onClick:onClose,style:Object.assign({},BT,{background:'none',color:'#888',fontSize:18,padding:'0 4px'})},'✕')),
-        /* 範囲と並び順 */
         ce('div',{style:{padding:'8px 16px',borderBottom:'1px solid #2a2a2a',display:'flex',flexDirection:'column',gap:6,flexShrink:0}},
-          ce('div',{style:{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}},
-            ce('span',{style:{fontSize:11,color:'#888'}},'範囲'),
-            [['m15','寄り15分'],['m30','寄り30分'],['am','前場']].map(function(it){
-              return ce('button',{key:it[0],onClick:function(){setRng({kind:it[0]});},style:pill(rng.kind===it[0])},it[1]);
-            }),
-            ce('input',{type:'range',min:1,max:maxOff,step:1,value:curOff,
-              onChange:function(e){setRng({kind:'off',off:+e.target.value});},
-              style:{flex:'1 1 180px',minWidth:140,accentColor:'#3b82f6'}}),
-            ce('span',{style:{fontSize:11,color:'#ccc',fontVariantNumeric:'tabular-nums',whiteSpace:'nowrap'}},
-              '寄り〜'+(endSpec.kind==='am'?'前引け':(curOff+'分'))+'（この日 '+hhmm(baseOpenTm)+'〜'+hhmm(endSpec.kind==='am'?690:baseOpenTm+curOff-1)+'）')),
-          ce('div',{style:{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}},
-            ce('span',{style:{fontSize:11,color:'#888'}},'並び順'),
-            [['sim','似ている順'],['new','新しい順'],['old','古い順']].map(function(it){
-              return ce('button',{key:it[0],onClick:function(){setSortBy(it[0]);},style:pill(sortBy===it[0])},it[1]);
-            }),
-            ce('span',{style:{fontSize:10,color:'#666',marginLeft:4}},'')),
-          /* 2026-10-31: 5つの観点の ON/OFF。合計 = ON の観点の平均 (最初の方向が逆なら ×'+CA_SIM_OPP_PENALTY+') */
-          ce('div',{style:{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}},
-            ce('span',{style:{fontSize:11,color:'#888'}},'比べる観点'),
-            CA_SIM_VIEWS.map(function(v){ return ce('button',{key:v[0],onClick:function(){toggleView(v[0]);},style:pill(viewOn(v[0]))},(viewOn(v[0])?'✓ ':'')+v[1]); }),
-            ce('span',{style:{fontSize:10,color:'#666',marginLeft:4}},'ギャップ=前日終値→寄りの% / 最初の方向=寄りから最初の波の向き・大きさ・長さ（逆なら大きく減点）/ 転換=2・3つ目の波の戻し割合と速さ / 並び=終値・EMA9/22/50/200・VWAP の上下の並びの推移 / 全体の形=6本の線の形（一番近い日=100・中央値=50の相対）。波の区切り=範囲内の1分足の平均値幅の'+CA_SIM_WAVE_K+'倍')),
-          /* 2026-10-31: ギャップの区分で絞り込み (区分: |GAP|<1% ほぼ同値 / 1〜3% GU・GD / 3%以上 大幅) */
-          ce('div',{style:{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}},
-            ce('span',{style:{fontSize:11,color:'#888'}},'ギャップ'),
-            [['all','すべて'],['same','基準と同じ'+(baseCat?'（'+CA_GAP_LABEL[baseCat]+'）':'')],['bgd','大幅GD'],['gd','GD'],['flat','ほぼ同値'],['gu','GU'],['bgu','大幅GU']].map(function(it){
-              return ce('button',{key:it[0],onClick:function(){setGapF(it[0]);},disabled:(it[0]==='same'&&!baseCat),style:pill(gapF===it[0])},it[1]);
-            }),
-            ce('span',{style:{fontSize:10,color:'#666',marginLeft:4}},'前日終値→寄り。±'+CA_GAP_SMALL+'%未満=ほぼ同値 / '+CA_GAP_BIG+'%以上=大幅。前の日付のチャートが無い日は区分なし'))),
+          ce('div',{style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}},
+            ce('span',{style:{fontSize:11,color:'#888'}},'基準'),
+            ce('span',{style:{fontSize:12,color:'#ddd',fontVariantNumeric:'tabular-nums',whiteSpace:'nowrap'}},
+              (base.date||'')+'  寄り '+_caSim2Hm(openTm)+' 〜 ',ce('b',{style:{color:'#38bdf8'}},_caSim2Hm(tmView)),
+              '（'+(A?A.L:0)+'本）'),
+            ce('input',{type:'range',min:minTm,max:maxTm,step:1,value:tmView,
+              onChange:function(e){changeTm(+e.target.value);},
+              style:{flex:'1 1 200px',minWidth:140,accentColor:'#3b82f6'}}),
+            ce('button',{onClick:function(){changeTm(Math.max(minTm,tmView-1));},style:Object.assign({},BT,{fontSize:12,padding:'3px 9px',borderRadius:5,background:'#222',color:'#ccc'})},'←'),
+            ce('button',{onClick:function(){changeTm(Math.min(maxTm,tmView+1));},style:Object.assign({},BT,{fontSize:12,padding:'3px 9px',borderRadius:5,background:'#222',color:'#ccc'})},'→')),
+          ce('div',{style:{fontSize:10,color:'#666',lineHeight:1.5}},
+            '時間帯は問わず、基準と同じ本数の区間をずらして比べます（青い帯＝似ている区間、点線の右＝その後'+CA_SIM2_AFTER+'本）。点数は絶対点：波の順番（新しい波から4つ・向き/大きさ/長さ）'+Math.round(CA_SIM2_W.flow*100)+'%・形（始値からの%の線）'+Math.round(CA_SIM2_W.shape*100)+'%・値幅'+Math.round(CA_SIM2_W.range*100)+'%・指標線（EMA9/22/50/200・VWAP の上か下か）'+Math.round(CA_SIM2_W.ind*100)+'%。いま進んでいる波の向きが逆なら ×'+CA_SIM2_OPP+'。カードに触れると内訳。1日'+CA_SIM2_PER_DAY+'場面まで・上位'+CA_SIM2_MAX+'場面。')),
         ce('div',{style:{flex:1,overflowY:'auto',padding:'12px 16px'}},
-          baseBars===undefined
-            ?ce('div',{style:{padding:40,textAlign:'center',color:'#777',fontSize:13}},'読み込み中…')
-            :baseBars===null
-              ?ce('div',{style:{padding:40,textAlign:'center',color:'#777',fontSize:13}},'この日のチャートデータが読めませんでした')
-              :ce('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(250px,1fr))',gap:10}},
-                  [card(base,'基準','#93c5fd')].concat(sorted.map(function(r){
-                    return card(r.m, r.score==null?'—':('類似 '+r.score+'%'), r.score==null?'#555':(r.score>=80?'#4ade80':r.score>=50?'#fbbf24':'#888'), marks(r.sc,r.opp));
-                  }))))
-      )
-    ),
-    document.body
-  );
+          !A?ce('div',{style:{color:'#888',fontSize:12,padding:20,textAlign:'center'}},'基準の足が足りません（寄りから3本以上）')
+          :ce('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))',gap:10}},
+              [ce(CaSim2Card,{key:'base',sc:{base:true,m:base.meta||null,date:base.date,sTm:openTm,eTm:refP.tm[refE]},info:baseInfo,snippetsById:snippetsById})].concat(
+                !ready||busy||!results?[ce('div',{key:'ld',style:{color:'#888',fontSize:12,padding:20}},!ready?'読み込み中…':'計算中…')]
+                :!results.length?[ce('div',{key:'no',style:{color:'#888',fontSize:12,padding:20}},'比べられる日がありません')]
+                :results.map(function(r,ix){
+                  return ce(CaSim2Card,{key:r.m.id+'|'+r.eTm+'|'+endTm,sc:r,info:infoById[r.m.id],snippetsById:snippetsById,onOpen:function(){openAt(ix);}});
+                }))),
+          ready&&results&&results.length>0&&ce('div',{style:{fontSize:11,color:'#666',marginTop:10}},results.length+' 場面（'+Object.keys(nDays).length+' 日）'))
+      )),
+    document.body);
 }
 function CaChartCard(props){
   var m=props.m;
@@ -14742,15 +14807,6 @@ function CaChartCard(props){
           border:'1px solid #9a3412',
           borderRadius:5,cursor:'pointer',flexShrink:0,lineHeight:1.4}},
         '▶ シミュ'
-      ),
-      /* 2026-10-31: 同じ銘柄で形が似ている日を探す (CaSimilarModal) — シミュの右 */
-      props.onSimilar&&ce('button',{
-        onClick:function(e){ e.stopPropagation(); props.onSimilar(m); },
-        title:'同じ銘柄で、チャートの形が似ている日を探す',
-        style:{padding:'4px 8px',fontSize:11,fontWeight:700,
-          background:'#1e293b',color:'#bae6fd',border:'1px solid #334155',
-          borderRadius:5,cursor:'pointer',flexShrink:0,lineHeight:1.4}},
-        '≈ 類似チャート'
       )
     ),
 
@@ -18044,7 +18100,6 @@ function DraftLibrary(props){
   /* 2026-10-23: 表示中の銘柄のチャートのボラ率を計算してキャッシュ (未計算のものだけ・並列3)。
      この端末に無いチャートは Firebase から読む (チャート本体は保存しない)。読めなかったものはこのセッション中は再試行しない */
   var sVolV=useState(0); var setVolVer=sVolV[1];
-  var sSimB=useState(null); var similarBase=sSimB[0],setSimilarBase=sSimB[1];   /* 2026-10-31: 類似チャートの基準の日 (meta) */
   var volFailRef=useRef({});
   useEffect(function(){
     if(!selTicker)return;
@@ -20583,9 +20638,7 @@ function DraftLibrary(props){
                   /* 2026-10-23: ボラ率 (常に表示。undefined=計算中) */
                   showVol:true, vol:caVolGet(m),
                   /* 2026-06-30: サムネカードからこの日をシミュレーション(非ブラインド) */
-                  onStartSim:function(){startSimulation(m);},
-                  /* 2026-10-31: 類似チャート */
-                  onSimilar:function(mm){setSimilarBase(mm);}
+                  onStartSim:function(){startSimulation(m);}
                 });
               }
               if(sortMode==='vol_desc'||sortMode==='vol_asc')return charts.map(_card);
@@ -20643,14 +20696,6 @@ function DraftLibrary(props){
         initialQueryDraftId:patSearchInitQuery,
         /* 2026-05-03: 年月折り畳み state を共有 */
         expandedYM:expandedYM, onToggleYM:toggleYM, onSetAllYM:setAllYM
-      }),
-      /* 2026-10-31: 類似チャート (同じ銘柄の全日付と形を比べる) */
-      similarBase&&ce(CaSimilarModal,{
-        base:similarBase,
-        charts:meta.filter(function(m){return m.ticker===similarBase.ticker;}),
-        fbCfg:fbCfg,
-        onOpenChart:function(id){openChart(id);},
-        onClose:function(){setSimilarBase(null);}
       }),
       /* カレンダー検索モーダル */
       calOpen&&selTicker&&ce(CaCalendarModal,{
