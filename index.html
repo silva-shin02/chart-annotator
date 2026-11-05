@@ -13536,6 +13536,24 @@ function _caMemoHasContent(html){
    管理モード(✎): 追加 / 名前変更 / 色変更 / カテゴリ移動 / 削除 / 順番入れ替え(▲▼。タブレットでも使えるようボタン式)。
    カテゴリは追加のみ(改名・削除・並べ替えはタグ管理ページ)。変更したら 'ca_tag_defs_changed' を飛ばし、
    タグ名/色を描画時に読む親(カード・エディタ)が再描画する */
+/* 2026-11-05: おすすめのタグの色 (ユーザーと決めた案)。上=赤系・下=青系、大幅=同じ色の濃い版、
+   滝登り↔滝下り・ストップ高↔安は反対色、決算=橙の濃淡、SQ=黄緑、シグナル系=灰の濃淡。名前 (表記ゆれ吸収) で当てる */
+var CA_TAG_PRESET_COLORS={
+  '決算前日':'#fb923c','決算当日':'#ea580c','場中決算':'#9a3412','決算翌日':'#a16207','MSQ':'#4d7c0f','SSQ':'#84cc16',
+  '地合い○':'#16a34a','地合い×':'#57534e','ストップ高':'#a21caf','ストップ安':'#0e7490',
+  'ノーシグナル':'#9ca3af','有効シグナルなし':'#4b5563','値動き大':'#6366f1',
+  'GU':'#f87171','大幅GU':'#b91c1c','GD':'#60a5fa','大幅GD':'#1d4ed8','滝登り':'#ec4899','滝下り':'#14b8a6',
+  'V字回復':'#9333ea','寄り天V字':'#c084fc','株価変動イベント':'#eab308','要復習':'#000000'
+};
+function _caTagPresetKey(n){
+  var t=String(n||''); try{t=t.normalize('NFKC');}catch(e){}
+  return t.replace(/\s+/g,'').replace(/[〇◯○]/g,'○').replace(/[×✕✖xX]/g,'×').toUpperCase();
+}
+function caTagPresetColor(name){
+  var k=_caTagPresetKey(name);
+  for(var n in CA_TAG_PRESET_COLORS){ if(_caTagPresetKey(n)===k)return CA_TAG_PRESET_COLORS[n]; }
+  return null;
+}
 function CaTagSelector(props){
   var selectedIds=props.selectedIds||[];
   var onChangeTags=props.onChangeTags;
@@ -13590,6 +13608,15 @@ function CaTagSelector(props){
   function changeTagColor(id,c){
     pushTagCH(c);
     saveDefs(defs.map(function(d){return d.id===id?Object.assign({},d,{color:c}):d;}));
+  }
+  /* 2026-11-05: おすすめの色を名前で一括で当てる (当てはまらないタグはそのまま) */
+  function applyPresetColors(){
+    var hits=defs.filter(function(d){ var c=caTagPresetColor(d.name); return c&&String(d.color||'').toLowerCase()!==c; });
+    if(!hits.length){ window.caToast('変える色はありません（すでにおすすめの色です）','info'); return; }
+    window.caConfirm(hits.length+' 個のタグの色をおすすめの色に変えますか？\n（名前が一致しないタグはそのまま）',function(){
+      saveDefs(defs.map(function(d){ var c=caTagPresetColor(d.name); return c?Object.assign({},d,{color:c}):d; }));
+      window.caToast(hits.length+' 個のタグの色を変えました','success');
+    });
   }
   function moveTagToCategory(id,newCatId){
     saveDefs(defs.map(function(d){return d.id===id?Object.assign({},d,{catId:(newCatId==='__uncat'?null:newCatId)}):d;}));
@@ -13754,6 +13781,11 @@ function CaTagSelector(props){
         style:{padding:'5px 12px',fontSize:12,fontWeight:700,background:'#2563eb',border:'none',
           borderRadius:6,color:'#fff',cursor:'pointer',flexShrink:0,fontFamily:'inherit'}},'追加')
     ),
+    /* 2026-11-05: おすすめの色を当てる */
+    manage&&ce('div',{style:{display:'flex',gap:6,marginTop:6}},
+      ce('button',{onClick:applyPresetColors,title:'決めておいたおすすめの色を、名前が一致するタグにまとめて当てる',
+        style:{padding:'5px 12px',fontSize:12,fontWeight:700,background:'#3b0764',border:'1px solid #7e22ce',
+          borderRadius:6,color:'#e9d5ff',cursor:'pointer',flexShrink:0,fontFamily:'inherit'}},'🎨 おすすめの色を当てる')),
     /* カテゴリ追加 (改名・削除・並べ替えはタグ管理ページ)。追加後は各タグ行のセレクトで移動する */
     manage&&ce('div',{style:{display:'flex',gap:6,marginTop:6}},
       ce('input',{type:'text',placeholder:'新しいカテゴリ名…',value:newCatName,
