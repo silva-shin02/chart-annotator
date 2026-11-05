@@ -13559,7 +13559,7 @@ function caTagPresetColor(name){
    区分 = caGapCat (±0.5%未満=付けない / 0.5〜2%=GU・GD / 2%以上=大幅だけ)。判定できた日は4つのタグを判定どおりに置き換え
    (他のタグは触らない)。前の日付のチャートが無い/読めない日は触らない。 */
 var CA_GAP_TAG_NAMES={gu:'GU',bgu:'大幅GU',gd:'GD',bgd:'大幅GD'};
-function caAutoGapTags(fbCfg,onProg,cb){
+function caAutoGapTags(fbCfg,onProg,cb,targets){   /* targets=[id...] のときはその分 (と次の日付のチャート) だけ判定 */
   var defs=caLoadTagDefs()||[], idOf={}, missing=[];
   Object.keys(CA_GAP_TAG_NAMES).forEach(function(k){
     var key=_caTagPresetKey(CA_GAP_TAG_NAMES[k]);
@@ -13568,6 +13568,22 @@ function caAutoGapTags(fbCfg,onProg,cb){
   });
   var gapIds=Object.keys(idOf).map(function(k){return idOf[k];});
   var meta=(caLoadMeta()||[]).filter(function(m){return m&&m.id&&_caResolveMetaDate(m);});
+  /* 判定する日 (judge) と、そのために読む日 (前の日付も) */
+  var judge=null;
+  if(targets&&targets.length){
+    judge={}; var need={}, byT0={};
+    meta.forEach(function(m){ (byT0[m.ticker||'']||(byT0[m.ticker||'']=[])).push(m); });
+    Object.keys(byT0).forEach(function(tk){
+      var arr=byT0[tk].map(function(m){return {m:m,d:_caResolveMetaDate(m)};}).sort(function(a,b){return a.d.localeCompare(b.d);});
+      arr.forEach(function(x,ix){
+        if(targets.indexOf(x.m.id)<0)return;
+        judge[x.m.id]=1; need[x.m.id]=1;
+        for(var k=ix-1;k>=0;k--){ if(arr[k].d<x.d){need[arr[k].m.id]=1;break;} }   /* 前の日付 */
+        for(var k2=ix+1;k2<arr.length;k2++){ if(arr[k2].d>x.d){judge[arr[k2].m.id]=1;need[arr[k2].m.id]=1;break;} }   /* 次の日付 (前日が届いて判定できるようになった分) */
+      });
+    });
+    meta=meta.filter(function(m){return need[m.id];});
+  }
   var info={}, i=0, running=0, done=0, N=meta.length;
   function fin(){
     var byT={};
@@ -13576,6 +13592,7 @@ function caAutoGapTags(fbCfg,onProg,cb){
     Object.keys(byT).forEach(function(tk){
       var arr=byT[tk].map(function(m){return {m:m,d:_caResolveMetaDate(m)};}).sort(function(a,b){return a.d.localeCompare(b.d);});
       arr.forEach(function(x,ix){
+        if(judge&&!judge[x.m.id])return;
         var r=info[x.m.id]; if(!r||!(r.o>0))return;
         var pv=null; for(var k=ix-1;k>=0;k--){ if(arr[k].d<x.d){pv=arr[k];break;} }
         var pr=pv?info[pv.m.id]:null; if(!pr||!(pr.c>0))return;
@@ -13587,7 +13604,7 @@ function caAutoGapTags(fbCfg,onProg,cb){
         if(!same)changes.push({id:x.m.id,tags:want});
       });
     });
-    cb({changes:changes,judged:nJudged,total:N,missing:missing});
+    cb({changes:changes,judged:nJudged,total:(judge?Object.keys(judge).length:N),missing:missing});
   }
   function next(){
     while(running<4&&i<N){
@@ -13609,6 +13626,22 @@ function caAutoGapTags(fbCfg,onProg,cb){
   }
   if(!gapIds.length){cb({changes:[],judged:0,total:N,missing:missing});return;}
   if(!N)fin(); else next();
+}
+/* 2026-11-05: 取り込んだチャートにも自動で付ける (確認なし)。続けて取り込んだ分はまとめて1.5秒後に判定 */
+var _caAutoGapPend=[], _caAutoGapTimer=null;
+function caScheduleAutoGapTags(id,fbCfg){
+  if(id)_caAutoGapPend.push(id);
+  if(_caAutoGapTimer)clearTimeout(_caAutoGapTimer);
+  _caAutoGapTimer=setTimeout(function(){
+    _caAutoGapTimer=null;
+    var ids=_caAutoGapPend.slice(); _caAutoGapPend=[];
+    if(!ids.length)return;
+    caAutoGapTags(fbCfg,null,function(r){
+      if(!r.changes.length)return;
+      caApplyChartTagChanges(r.changes,fbCfg);
+      window.caToast('GU/GD タグを自動で付けました（'+r.changes.length+' チャート）','success');
+    },ids);
+  },1500);
 }
 /* タグの割り当てを保存 (チャートカードの handleChangeTags と同じ: ローカル + Firebase) */
 function caApplyChartTagChanges(changes,fbCfg){
@@ -19082,6 +19115,7 @@ function DraftLibrary(props){
         });
         if(thumb)caSaveThumb(id,thumb);
         fbSaveDraft(id,metaItem,data);
+        caScheduleAutoGapTags(id,fbCfg);   /* 2026-11-05: GU/GD タグを自動で付ける */
         window.caToast('JSONを読み込みました: '+chartName,'success');
       });
       } /* createNewChart */
@@ -19174,6 +19208,7 @@ function DraftLibrary(props){
           });
           if(thumb)caSaveThumb(id,thumb);
           fbSaveDraft(id,metaItem,data);
+        caScheduleAutoGapTags(id,fbCfg);   /* 2026-11-05: GU/GD タグを自動で付ける */
           processed++;
           window.caToast(chartName+' → '+ticker,'success');
           _log({file:chartName,msg:'→ '+ticker,ok:true});
