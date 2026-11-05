@@ -8332,6 +8332,33 @@ function ImageAnnotator(props){
         body:JSON.stringify({updatedAt:ut})}).catch(function(){});
     }
   }
+  /* 2026-11-05: スタンプの一括置き換え (元→先・全チャート)。開いているチャート/前日チャートはその場で置き換えて通常の保存に任せる */
+  var stSnipRep=useState({src:'',dst:'',busy:false,msg:''}); var snipRep=stSnipRep[0],setSnipRep=stSnipRep[1];
+  function runSnipReplace(){
+    var byId={}; snippets.forEach(function(s){byId[s.id]=s;});
+    var src=byId[snipRep.src], dst=byId[snipRep.dst];
+    if(!src||!dst||src.id===dst.id){setSnipRep(Object.assign({},snipRep,{msg:'元と先のスタンプを別々に選んでください'}));return;}
+    var curId=img&&img._savedDraftId, ra=refAnalysisRef.current, refId=ra&&ra.id;
+    var rc=caStampReplaceStrokes(analysisStrokesRef.current,src,dst,byId);
+    var rr=ra?caStampReplaceStrokes(ra.analysisStrokes,src,dst,byId):{n:0,skip:0};
+    setSnipRep(Object.assign({},snipRep,{busy:true,msg:'調べています…'}));
+    caStampReplaceScan(props.fbCfg,src,dst,byId,[curId,refId].filter(Boolean),
+      function(d,N){setSnipRep(function(p){return Object.assign({},p,{msg:'調べています… '+d+'/'+N});});},
+      function(res){
+        var n=res.n+rc.n+rr.n, nc=res.charts+(rc.n?1:0)+(rr.n?1:0), sk=res.skip+rc.skip+rr.skip;
+        if(!n){setSnipRep(function(p){return Object.assign({},p,{busy:false,msg:'「'+src.text+'」のスタンプは見つかりませんでした'+(res.failed?'（読めなかったチャート '+res.failed+'件）':'')});});return;}
+        var q='「'+src.text+'」→「'+dst.text+'」\n'+nc+'チャート・'+n+'個のスタンプを置き換えます。\n（後ろの数字などは残します。例：'+src.text+'9 → '+dst.text+'9）'+
+          (sk?'\n※文字を別の文に書き換えてあるスタンプ '+sk+'個はそのままにします。':'')+
+          (res.failed?'\n※読めなかったチャート '+res.failed+'件は対象外です。':'')+'\nよろしいですか？';
+        if(!window.confirm(q)){setSnipRep(function(p){return Object.assign({},p,{busy:false,msg:'取りやめました'});});return;}
+        if(rc.n){setAnalysisStrokes(rc.strokes);analysisStrokesRef.current=rc.strokes;}
+        if(rr.n){var ra2=refAnalysisRef.current; if(ra2&&ra2.id===refId){setRefAnalysis(Object.assign({},ra2,{analysisStrokes:rr.strokes}));triggerRefAutoSave();}}
+        if(rc.n||rr.n)analysisCommit(rc.n?rc.strokes:analysisStrokesRef.current, rr.n?rr.strokes:undefined);
+        caStampReplaceApply(props.fbCfg,res.hits,
+          function(d,N){setSnipRep(function(p){return Object.assign({},p,{msg:'保存しています… '+d+'/'+N});});},
+          function(){setSnipRep(function(p){return Object.assign({},p,{busy:false,msg:'置き換えました：'+nc+'チャート・'+n+'個'});});});
+      });
+  }
   function moveSnipToCat(snipId,newCatId){
     updateSnippets(snippets.map(function(s){return s.id===snipId?Object.assign({},s,{catId:(newCatId==='__uncat'?null:newCatId)}):s;}));
   }
@@ -10177,6 +10204,23 @@ function ImageAnnotator(props){
               )
             );
           })),
+        /* 2026-11-05: ⇄ 一括置き換え (全チャートの元スタンプ → 先スタンプ。定義は両方残す) */
+        ce("div",{style:{display:"flex",flexWrap:"wrap",gap:4,alignItems:"center",marginTop:6,padding:"5px 6px",border:"1px solid #3a3050",borderRadius:6,background:"#150f24"}},
+          ce("span",{style:{fontSize:11,fontWeight:700,color:"#c4b5fd",flexShrink:0}},"⇄ 一括置き換え"),
+          ce("select",{value:snipRep.src,disabled:snipRep.busy,onChange:function(e){setSnipRep(Object.assign({},snipRep,{src:e.target.value,msg:''}));},
+            style:{maxWidth:150,padding:"3px 4px",fontSize:11,borderRadius:6,border:"1px solid #444",background:"#1a1a2e",color:"#ddd"}},
+            ce("option",{value:''},"元のスタンプ…"),
+            snippets.map(function(s){return ce("option",{key:s.id,value:s.id},s.text);})),
+          ce("span",{style:{fontSize:11,color:"#888"}},"→"),
+          ce("select",{value:snipRep.dst,disabled:snipRep.busy,onChange:function(e){setSnipRep(Object.assign({},snipRep,{dst:e.target.value,msg:''}));},
+            style:{maxWidth:150,padding:"3px 4px",fontSize:11,borderRadius:6,border:"1px solid #444",background:"#1a1a2e",color:"#ddd"}},
+            ce("option",{value:''},"置き換え先…"),
+            snippets.map(function(s){return ce("option",{key:s.id,value:s.id},s.text);})),
+          ce("button",{onClick:runSnipReplace,disabled:snipRep.busy||simMode||!snipRep.src||!snipRep.dst,
+            title:simMode?'シミュ中は使えません':'全チャートの元のスタンプを置き換え先に変えます（後ろの数字などは残す・スタンプの定義は両方残す）',
+            style:{padding:"3px 10px",fontSize:11,borderRadius:6,border:"none",background:(snipRep.busy||simMode||!snipRep.src||!snipRep.dst)?"#3a3050":"#7c3aed",color:"#fff",cursor:"pointer",fontWeight:700,flexShrink:0}},"全チャートで置き換え"),
+          snipRep.msg&&ce("span",{style:{fontSize:10,color:"#a5b4fc",flexBasis:"100%"}},snipRep.msg)
+        ),
         /* +カテゴリ追加 (フラット時もここから最初のカテゴリを作成可能) */
         ce("div",{style:{display:"flex",gap:4,alignItems:"center",marginTop:4}},
           addingSnipCat
@@ -14277,6 +14321,107 @@ function caSnipEffText(s, byId){
   var t=s&&s.text||'';
   if(s&&s._snippet&&s.snipId&&byId&&byId[s.snipId]&&!s._editedText)t=byId[s.snipId].text||t;
   return t;
+}
+/* 2026-11-05: スタンプの一括置き換え (スタンプ編集パネルの「⇄ 一括置き換え」)。
+   元のスタンプ (src 定義) を先のスタンプ (dst 定義) に付け替える。定義そのものは両方残す。
+   対象 = スタンプで snipId が src、または snipId が無い/定義が消えていて文字が src の名前で始まるもの。
+   文字の後ろの付け足し (「底つきライン9」の 9 など) はそのまま残す (→「大RN-OS9」)。
+   付け足し無し・未編集のものは定義の文字に連動したまま。色は元の定義の色のままなら先の定義の色に。
+   戻り値: 置き換えた stroke / null (対象外)。文字が src で始まらない (別の文に書き換え済み) ものは {skip:true} */
+function caStampReplaceOne(s, src, dst, byId){
+  if(!s||!s._snippet||!src||!dst)return null;
+  var known=s.snipId&&byId&&byId[s.snipId];
+  var t=caSnipEffText(s,byId)||'';
+  var hit=(s.snipId===src.id)||(!known&&t.indexOf(src.text)===0);
+  if(!hit)return null;
+  if(t.indexOf(src.text)!==0)return {skip:true};
+  var rest=t.slice(src.text.length);
+  var ns=Object.assign({},s,{snipId:dst.id});
+  if(rest===''&&!s._editedText){ ns.text=dst.text; }
+  else { ns.text=dst.text+rest; ns._editedText=true; }
+  delete ns.spans;
+  var sc=String(s.color||'').toLowerCase(), oc=String(src.color||'').toLowerCase();
+  if(!s._editedColor||!sc||sc===oc)ns.color=dst.color||ns.color;
+  return ns;
+}
+/* 書き込み {'1m':[],'5m':[]} 全体に適用。{strokes, n(置き換え数), skip} (n=0 なら strokes は元のまま) */
+function caStampReplaceStrokes(so, src, dst, byId){
+  var out={'1m':[],'5m':[]}, n=0, skip=0;
+  so=so||{};
+  Object.keys(so).forEach(function(tf){
+    var arr=so[tf];
+    if(!Array.isArray(arr)){out[tf]=arr;return;}
+    out[tf]=arr.map(function(s){
+      var r=caStampReplaceOne(s,src,dst,byId);
+      if(!r)return s;
+      if(r.skip){skip++;return s;}
+      n++; return r;
+    });
+  });
+  return {strokes:n?out:so, n:n, skip:skip};
+}
+/* 全チャート (この端末の IDB → 無ければ Firebase・並列4) を調べる。exclude=[id] は除く (エディタで開いている分はその場で置き換える)。
+   cb({hits:[{id,d,fromIdb,strokes,n}], n, skip, charts, failed}) */
+function caStampReplaceScan(fbCfg, src, dst, byId, exclude, onProg, cb){
+  var meta=(caLoadMeta()||[]).filter(function(m){return m&&m.id&&(exclude||[]).indexOf(m.id)<0;});
+  var N=meta.length, i=0, running=0, done=0, hits=[], nAll=0, skipAll=0, failed=0;
+  if(!N){cb({hits:[],n:0,skip:0,charts:0,failed:0});return;}
+  function one(m, d, fromIdb){
+    running--;
+    if(d&&d.analysisStrokes){
+      var r=caStampReplaceStrokes(d.analysisStrokes,src,dst,byId);
+      skipAll+=r.skip;
+      if(r.n){hits.push({id:m.id,d:d,fromIdb:fromIdb,strokes:r.strokes,n:r.n});nAll+=r.n;}
+    }else if(!d)failed++;
+    done++; if(onProg)onProg(done,N);
+    if(done>=N)cb({hits:hits,n:nAll,skip:skipAll,charts:hits.length,failed:failed}); else next();
+  }
+  function next(){
+    while(running<4&&i<N){
+      (function(m){ running++;
+        caLoadDataAsync(m.id,function(d){
+          if(d){one(m,d,true);return;}
+          var cfg=fbCfg||{};
+          if(!cfg.url){one(m,null,false);return;}
+          fetch(cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data/'+m.id+'.json'+caAuthParam(cfg.secret))
+            .then(function(r){return r.ok?r.json():null;})
+            .then(function(fb){one(m,fb||null,false);})
+            .catch(function(){one(m,null,false);});
+        });
+      })(meta[i++]);
+    }
+  }
+  next();
+}
+/* 調べた結果を書き込む: IDB (この端末にあった分) + meta の savedAt + Firebase (analysisStrokes だけ PATCH・ts・v) */
+function caStampReplaceApply(fbCfg, hits, onProg, cb){
+  var N=hits.length, i=0, running=0, done=0, v0=Date.now();
+  var cfg=fbCfg||{}, useFb=!!(cfg.url&&!_fbIsPaused(cfg));
+  var base=useFb?cfg.url.replace(/\/$/,''):'', auth=useFb?caAuthParam(cfg.secret):'';
+  var savedAt={};
+  if(!N){cb();return;}
+  function fin(){
+    try{var lm=caLoadMeta();caSaveMeta(lm.map(function(mm){return savedAt[mm.id]?Object.assign({},mm,{savedAt:savedAt[mm.id]}):mm;}));}catch(e){}
+    if(useFb)fetch(base+'/chart-annotator-drafts-v.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({_v:Date.now()})}).catch(function(){});
+    cb();
+  }
+  function next(){
+    while(running<4&&i<N){
+      (function(h,k){ running++;
+        var v=v0+k; savedAt[h.id]=v;
+        if(h.fromIdb)caSaveData(h.id,Object.assign({},h.d,{analysisStrokes:h.strokes,_v:v}));
+        var p=useFb?Promise.all([
+          fetch(base+'/chart-annotator-drafts-data/'+h.id+'.json'+auth,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({analysisStrokes:h.strokes,_v:v})}),
+          fetch(base+'/chart-annotator-drafts-ts/'+h.id+'.json'+auth,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({t:v})})
+        ]).catch(function(){}):Promise.resolve();
+        p.then(function(){
+          running--; done++; if(onProg)onProg(done,N);
+          if(done>=N)fin(); else next();
+        });
+      })(hits[i],i); i++;
+    }
+  }
+  next();
 }
 /* スタンプ配置をスタンプ種別ごとに束ねるキー (snipId優先・無ければテキスト) */
 function _caStampGroupKey(p){ return p&&p.snipId?('id:'+p.snipId):('txt:'+((p&&p.text)||'')); }
