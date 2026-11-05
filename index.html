@@ -14247,6 +14247,9 @@ function caLoadSnEvents(date,cb){
 
 /* ── CaChartCard: サムネイルカード + メモ + タグ ── */
 /* 前日終値からのギャップ (寄りの始値 vs 前日の最後の約定足の終値, %)。区分のしきい値 (%)。チャートを探す で使う */
+/* 2026-11-05 ユーザー指定: チャート検索 (類似チャート・チャートを探す・ホームの検索パネル) の対象は、チャートの日付 (取引日) がこの日以降のものだけ */
+var CA_SEARCH_FROM='2026-08-20';
+function caSearchEligible(m){ var d=m?(_caResolveMetaDate(m)||''):''; return !!d&&d>=CA_SEARCH_FROM; }
 var CA_GAP_SMALL=0.5, CA_GAP_BIG=2;   /* 2026-11-04 ユーザー指定: ±0.5%未満=ほぼ同値 / 0.5〜2%=GU・GD / 2%以上=大幅 (旧 1%/3%)。類似チャートとチャートを探すで共通 */
 function caGapCat(g){
   if(g==null||!isFinite(g))return null;
@@ -14598,6 +14601,7 @@ function CaSim2Modal(props){
       charts.forEach(function(m){
         if(m.id===base.id)return;
         var inf=infoById[m.id]; if(!inf||inf.d===base.date||inf.P.tm.length<A.L+1)return;
+        if(!(inf.d>=CA_SEARCH_FROM))return;   /* 2026-11-05: 8/20 以降の日だけ (読み込みは EMA 助走・ギャップ用に前の日も) */
         caSim2SearchDay(A,inf.P,caSim2OpenScore(baseOpen,inf.open)).forEach(function(h){
           rows.push({m:m,date:inf.d,sTm:inf.P.tm[h.s],eTm:inf.P.tm[h.e],score:h.score,sc:h.sc,opp:h.opp,open:inf.open});
         });
@@ -15257,6 +15261,7 @@ function CaFindModal(props){
     if(!ready)return out;
     charts.forEach(function(m){
       var inf=infoById[m.id]; if(!inf)return;
+      if(!caSearchEligible(m))return;   /* 2026-11-05: 8/20 以降のチャートだけ */
       if(selTags.length){ var ts=tagMap[m.id]||[]; if(!selTags.every(function(t){return ts.indexOf(t)>=0;}))return; }
       if(gapCats.length){ var c=caGapCat(inf.gap); if(!c||gapCats.indexOf(c)<0)return; }
       CA_FIND_LINES.forEach(function(ln){
@@ -18365,7 +18370,7 @@ function DraftLibrary(props){
     var seq=++searchSeqRef.current;
     if(!q||!q.trim()){setSearchResults([]);setSearching(false);setSearchProg(null);return;}
     var nq=_srchNorm(q.trim());
-    var list=meta.slice();
+    var list=meta.filter(caSearchEligible);   /* 2026-11-05: 8/20 以降のチャートだけ */
     if(list.length===0){setSearchResults([]);setSearching(false);return;}
     setSearching(true); setSearchProg({done:0,total:list.length});
     var tagMap=caLoadTagMap(), defsById={};
@@ -18436,7 +18441,7 @@ function DraftLibrary(props){
     if(stampPlacements!==null||stampLoading)return;
     var alive=true; setStampLoading(true);
     var byId={}; caLoadSnippets().forEach(function(s){if(s&&s.id)byId[s.id]=s;});
-    caCollectStampPlacements(meta, byId, function(res){
+    caCollectStampPlacements(meta.filter(caSearchEligible), byId, function(res){   /* 2026-11-05: 8/20 以降のチャートだけ */
       if(!alive)return;
       setStampPlacements(res); setStampLoading(false);
     });
@@ -19763,7 +19768,8 @@ function DraftLibrary(props){
   };
   /* 2026-10-17: 日付の読み取りはエディタと同じ _caResolveMetaDate に統一 */
   var _srchEffDate=function(m){ return _caResolveMetaDate(m)||''; };
-  var _tagSearchFiltered=selTagIds.length===0?meta.slice():meta.filter(function(m){
+  var _srchMeta=meta.filter(caSearchEligible);   /* 2026-11-05: 8/20 以降のチャートだけ */
+  var _tagSearchFiltered=selTagIds.length===0?_srchMeta.slice():_srchMeta.filter(function(m){
     var mt=_srchTagMap[m.id]||[];
     if(tagMode==='and')return selTagIds.every(function(tid){return mt.indexOf(tid)>=0;});
     return selTagIds.some(function(tid){return mt.indexOf(tid)>=0;});
