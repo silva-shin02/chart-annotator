@@ -13554,6 +13554,77 @@ function caTagPresetColor(name){
   for(var n in CA_TAG_PRESET_COLORS){ if(_caTagPresetKey(n)===k)return CA_TAG_PRESET_COLORS[n]; }
   return null;
 }
+/* 2026-11-05: GU・大幅GU・GD・大幅GD のタグをチャートから自動で付ける (既存チャートに一括)。
+   ギャップ = その日の初約定の足の始値 ÷ 同じ銘柄で前の日付のチャートの最後の約定足の終値 −1 (類似チャートと同じ)。
+   区分 = caGapCat (±0.5%未満=付けない / 0.5〜2%=GU・GD / 2%以上=大幅だけ)。判定できた日は4つのタグを判定どおりに置き換え
+   (他のタグは触らない)。前の日付のチャートが無い/読めない日は触らない。 */
+var CA_GAP_TAG_NAMES={gu:'GU',bgu:'大幅GU',gd:'GD',bgd:'大幅GD'};
+function caAutoGapTags(fbCfg,onProg,cb){
+  var defs=caLoadTagDefs()||[], idOf={}, missing=[];
+  Object.keys(CA_GAP_TAG_NAMES).forEach(function(k){
+    var key=_caTagPresetKey(CA_GAP_TAG_NAMES[k]);
+    var d=defs.filter(function(x){return _caTagPresetKey(x.name)===key;})[0];
+    if(d)idOf[k]=d.id; else missing.push(CA_GAP_TAG_NAMES[k]);
+  });
+  var gapIds=Object.keys(idOf).map(function(k){return idOf[k];});
+  var meta=(caLoadMeta()||[]).filter(function(m){return m&&m.id&&_caResolveMetaDate(m);});
+  var info={}, i=0, running=0, done=0, N=meta.length;
+  function fin(){
+    var byT={};
+    meta.forEach(function(m){ (byT[m.ticker||'']||(byT[m.ticker||'']=[])).push(m); });
+    var changes=[], nJudged=0;
+    Object.keys(byT).forEach(function(tk){
+      var arr=byT[tk].map(function(m){return {m:m,d:_caResolveMetaDate(m)};}).sort(function(a,b){return a.d.localeCompare(b.d);});
+      arr.forEach(function(x,ix){
+        var r=info[x.m.id]; if(!r||!(r.o>0))return;
+        var pv=null; for(var k=ix-1;k>=0;k--){ if(arr[k].d<x.d){pv=arr[k];break;} }
+        var pr=pv?info[pv.m.id]:null; if(!pr||!(pr.c>0))return;
+        var cat=caGapCat((r.o/pr.c-1)*100); if(!cat)return;
+        nJudged++;
+        var cur=caGetChartTags(x.m.id), want=cur.filter(function(t){return gapIds.indexOf(t)<0;});
+        if(idOf[cat])want.push(idOf[cat]);
+        var same=(want.length===cur.length)&&want.every(function(t){return cur.indexOf(t)>=0;});
+        if(!same)changes.push({id:x.m.id,tags:want});
+      });
+    });
+    cb({changes:changes,judged:nJudged,total:N,missing:missing});
+  }
+  function next(){
+    while(running<4&&i<N){
+      (function(m){ running++;
+        caSim2Load(m.id,fbCfg,function(d){
+          running--;
+          var b=d&&d.analysisData&&d.analysisData.bars_1m;
+          if(b&&b.length){
+            var o=null,c=null;
+            for(var q=0;q<b.length;q++){ if(b[q]&&b[q].v>0&&b[q].c>0){o=b[q].o>0?b[q].o:b[q].c;break;} }
+            for(var q2=b.length-1;q2>=0;q2--){ if(b[q2]&&b[q2].v>0&&b[q2].c>0){c=b[q2].c;break;} }
+            info[m.id]={o:o,c:c};
+          }
+          done++; if(onProg)onProg(done,N);
+          if(done>=N)fin(); else next();
+        });
+      })(meta[i++]);
+    }
+  }
+  if(!gapIds.length){cb({changes:[],judged:0,total:N,missing:missing});return;}
+  if(!N)fin(); else next();
+}
+/* タグの割り当てを保存 (チャートカードの handleChangeTags と同じ: ローカル + Firebase) */
+function caApplyChartTagChanges(changes,fbCfg){
+  changes.forEach(function(ch){ caSetChartTags(ch.id,ch.tags); });
+  if(fbCfg&&fbCfg.url&&!fbCfg.paused){
+    var a=caAuthParam(fbCfg.secret), base=fbCfg.url.replace(/\/$/,''), q=changes.slice(), run=0;
+    (function pump(){
+      while(run<4&&q.length){
+        var ch=q.shift(); run++;
+        fetch(base+'/ca-chart-tags/'+encodeURIComponent(ch.id)+'.json'+a,{method:'PUT',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({tagIds:ch.tags,updatedAt:Date.now()})}).catch(function(){}).then(function(){run--;pump();});
+      }
+    })();
+  }
+  try{window.dispatchEvent(new Event('ca_chart_tags_changed'));}catch(e){}
+}
 function CaTagSelector(props){
   var selectedIds=props.selectedIds||[];
   var onChangeTags=props.onChangeTags;
@@ -13616,6 +13687,22 @@ function CaTagSelector(props){
     window.caConfirm(hits.length+' 個のタグの色をおすすめの色に変えますか？\n（名前が一致しないタグはそのまま）',function(){
       saveDefs(defs.map(function(d){ var c=caTagPresetColor(d.name); return c?Object.assign({},d,{color:c}):d; }));
       window.caToast(hits.length+' 個のタグの色を変えました','success');
+    });
+  }
+  /* 2026-11-05: GU・大幅GU・GD・大幅GD を全チャートに自動で付ける */
+  var sAG=useState(null); var autoGapProg=sAG[0],setAutoGapProg=sAG[1];
+  function runAutoGapTags(){
+    if(autoGapProg)return;
+    setAutoGapProg('0/…');
+    caAutoGapTags(fbCfg,function(d,n){setAutoGapProg(d+'/'+n);},function(r){
+      setAutoGapProg(null);
+      if(r.missing.length===4){ window.caToast('タグ「GU・大幅GU・GD・大幅GD」が見つかりません','error'); return; }
+      var miss=r.missing.length?('\n（タグが無いので付けない: '+r.missing.join('・')+'）'):'';
+      if(!r.changes.length){ window.caToast('変更はありません（判定できた '+r.judged+' / '+r.total+' チャート）'+miss,'info'); return; }
+      window.caConfirm('ギャップを判定できた '+r.judged+' / '+r.total+' チャートのうち、'+r.changes.length+' チャートの GU/GD 系タグを付け替えますか？\n（前の日付のチャートが無い日は触りません）'+miss,function(){
+        caApplyChartTagChanges(r.changes,fbCfg);
+        window.caToast(r.changes.length+' チャートのタグを付け替えました','success');
+      });
     });
   }
   function moveTagToCategory(id,newCatId){
@@ -13785,7 +13872,11 @@ function CaTagSelector(props){
     manage&&ce('div',{style:{display:'flex',gap:6,marginTop:6}},
       ce('button',{onClick:applyPresetColors,title:'決めておいたおすすめの色を、名前が一致するタグにまとめて当てる',
         style:{padding:'5px 12px',fontSize:12,fontWeight:700,background:'#3b0764',border:'1px solid #7e22ce',
-          borderRadius:6,color:'#e9d5ff',cursor:'pointer',flexShrink:0,fontFamily:'inherit'}},'🎨 おすすめの色を当てる')),
+          borderRadius:6,color:'#e9d5ff',cursor:'pointer',flexShrink:0,fontFamily:'inherit'}},'🎨 おすすめの色を当てる'),
+      ce('button',{onClick:runAutoGapTags,disabled:!!autoGapProg,title:'前の日付のチャートの終値→寄りの始値から、GU・大幅GU・GD・大幅GD を全チャートに自動で付ける',
+        style:{padding:'5px 12px',fontSize:12,fontWeight:700,background:'#172554',border:'1px solid #1d4ed8',
+          borderRadius:6,color:'#bfdbfe',cursor:autoGapProg?'default':'pointer',flexShrink:0,fontFamily:'inherit'}},
+        autoGapProg?('判定中… '+autoGapProg):'⇅ GU/GD を自動で付ける')),
     /* カテゴリ追加 (改名・削除・並べ替えはタグ管理ページ)。追加後は各タグ行のセレクトで移動する */
     manage&&ce('div',{style:{display:'flex',gap:6,marginTop:6}},
       ce('input',{type:'text',placeholder:'新しいカテゴリ名…',value:newCatName,
@@ -14738,6 +14829,12 @@ function CaChartCard(props){
     window.addEventListener('ca_tag_defs_changed',onDefs);
     return function(){window.removeEventListener('ca_tag_defs_changed',onDefs);};
   },[]);
+  /* 2026-11-05: GU/GD の自動付けなどでタグの割り当てがまとめて変わったら読み直す */
+  useEffect(function(){
+    function onTags(){setTagIds(caGetChartTags(m.id));}
+    window.addEventListener('ca_chart_tags_changed',onTags);
+    return function(){window.removeEventListener('ca_chart_tags_changed',onTags);};
+  },[m.id]);
 
   /* SN予定 state */
   var sSNE=useState(null); var snEvents=sSNE[0],setSnEvents=sSNE[1];
