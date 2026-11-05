@@ -11233,6 +11233,17 @@ function ImageAnnotator(props){
           return true;
         }
         var _atiHasSel=!!(atiSel&&atiSel[1]>atiSel[0]&&!ati._snippet);
+        /* 2026-11-05: 選択部分の今の色 (全部同じ色ならその色・混ざっていれば null)。色の丸の「選択中」の囲みに使う */
+        var _atiSelColor=(function(){
+          if(!_atiHasSel)return ati.color;
+          var el=analysisTextareaRef.current, n=((el&&el.value)||ati.text||'').length;
+          var a=caSpanArr(ati.spans,n), c0=null;
+          for(var i=atiSel[0];i<Math.min(atiSel[1],n);i++){
+            var c=String((a[i]&&a[i].c)||ati.color||'').toLowerCase();
+            if(c0===null)c0=c; else if(c!==c0)return null;
+          }
+          return c0;
+        })();
         var _atiHasSpans=!!(ati.spans&&ati.spans.length&&!ati._snippet);
         function confirmAnalysisText(){
           var txt=(analysisTextareaRef.current&&analysisTextareaRef.current.value)||ati.text||'';
@@ -11447,7 +11458,7 @@ function ImageAnnotator(props){
           ce("div",{style:{display:"flex",gap:5,alignItems:"center",minWidth:"max-content"}},
             ce("span",{style:{fontSize:10,color:_atiHasSel?"#fbbf24":"#888",fontWeight:_atiHasSel?700:400,flexShrink:0}},_atiHasSel?"色(選択部分)":"色"),
             quickColors.map(function(qc,qi){
-              var isA=ati.color===qc;
+              var isA=(_atiSelColor!=null)&&String(_atiSelColor).toLowerCase()===String(qc).toLowerCase();   /* 2026-11-05: 選択中は選択部分の色 */
               var QS=IS_TOUCH?24:20;
               var circleStyle={width:QS,height:QS,borderRadius:"50%",background:qc,cursor:"pointer",flexShrink:0,
                   boxShadow:isA?"0 0 0 2px #111,0 0 0 3.5px #6366F1":"0 1px 3px rgba(0,0,0,.4)",
