@@ -2811,7 +2811,7 @@ function DataChart(props){
         }
         var shifted;
         if(m.handleId){
-          shifted=applyHandleTransform(s,m.handleId,m.dtm,m.dp);
+          shifted=handleXformSnap(s,m.handleId,m.dtm,m.dp);
         }else{
           shifted=Object.assign({},s,{
             anchors:caMoveAnchors(s,s.anchors,m.dtm,m.dp)
@@ -3947,6 +3947,17 @@ function DataChart(props){
     else return {tm:sTM, p:cP};       // 垂直: 時刻固定
   }
 
+  /* 2026-11-05: 既存の矢印(矢印ツール)の端点つまみを動かすときも、✛ ON なら もう片方の端点から垂直/水平 (近い方) に吸着 */
+  function handleXformSnap(s,handleId,dtm,dp){
+    var ns=applyHandleTransform(s,handleId,dtm,dp);
+    if(!props.horiz||!ns||ns===s||(s.type||s.tool)!=='arrow'||!ns.anchors||ns.anchors.length<2)return ns;
+    var mi=(handleId==='p1')?0:(handleId==='p2')?1:-1; if(mi<0)return ns;
+    var fx=ns.anchors[1-mi], mv=ns.anchors[mi];
+    var sn=applyHorizSnap(fx.tm,fx.p,mv.tm,mv.p);
+    var an=ns.anchors.slice(); an[mi]=Object.assign({},mv,{tm:sn.tm,p:sn.p});
+    return Object.assign({},ns,{anchors:an});
+  }
+
   /* ───── ドラッグ式 描画ハンドラ ─────
      画像画面と同じ: 押下→ドラッグ→離すで1本のストロークを確定 */
   function onMouseDown(e){
@@ -4717,7 +4728,7 @@ function DataChart(props){
           var newStroke;
           if(m.handleId){
             /* 2026-04-21: ハンドルドラッグ → 該当anchor(s)のみ更新 */
-            newStroke=applyHandleTransform(s,m.handleId,m.dtm,m.dp);
+            newStroke=handleXformSnap(s,m.handleId,m.dtm,m.dp);
           }else{
             newStroke=Object.assign({},s,{
               anchors:caMoveAnchors(s,s.anchors,m.dtm,m.dp)
