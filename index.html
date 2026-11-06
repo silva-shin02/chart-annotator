@@ -2379,7 +2379,7 @@ function DataChart(props){
     if(L&&pos&&pos.x>=L.padL&&pos.x<=L.padL+L.chartW&&pos.y>=L.priceTop&&pos.y<=L.priceBot
        &&L.pmax!=null&&L.pmin!=null&&L.pmax!==L.pmin){
       var xs=xToSideTm(pos.x);
-      if(xs&&xs.side==='cur')p=Math.round(L.pmax-((pos.y-L.priceTop)/L.priceH)*(L.pmax-L.pmin));
+      if(xs&&xs.side==='cur')p=snapP(L.pmax-((pos.y-L.priceTop)/L.priceH)*(L.pmax-L.pmin));
     }
     if(vpCurPRef.current===p)return;
     vpCurPRef.current=p;
@@ -2570,6 +2570,9 @@ function DataChart(props){
 
   // C1+: 統合chart用 — refData から refBars を算出
   var refData=props.refData;
+  /* 2026-11-06: 値段の吸着を呼値ごとに (0.5円/0.1円の銘柄。旧: 常に1円) */
+  var _pTickFn=useMemo(function(){return caPriceTickFn(data&&data.bars_1m);},[data]);
+  function snapP(p){ if(p==null||!isFinite(p))return p; return caVpRowP(p,_pTickFn(p)); }
   var refBars=(refData&&refData[barsKey])||null;
   var hasRef=!!(refBars&&refBars.length);
   // C3+: 過去chart側ストローク (hasRef時のみ描画、書込みはC6で対応)
@@ -2896,7 +2899,7 @@ function DataChart(props){
       ctx.stroke();
       /* 差分ラベル (中央・縦線の左側) */
       var mMidY=(mY1+mY2)/2;
-      var mDiffRnd=Math.round(Math.abs(mdiff2));
+      var mDiffRnd=Math.round(Math.abs(mdiff2)*10)/10;
       var mDiffStr=mDiffRnd+'円';
       ctx.font='bold 13px -apple-system,Helvetica,sans-serif';
       ctx.textAlign='left';
@@ -2994,7 +2997,7 @@ function DataChart(props){
       /* 横線(同価格レベル: pmin/pmax線形式=価格ラベルと同基準) */
       var lcy=null;
       if(typeof lc.p==='number'&&L.pmax!=null&&L.pmin!=null&&L.pmax!==L.pmin){
-        var _ly=L.priceTop+(L.pmax-Math.round(lc.p))/(L.pmax-L.pmin)*L.priceH;  /* 2026-06-30: 連動カーソルも1円刻み */
+        var _ly=L.priceTop+(L.pmax-snapP(lc.p))/(L.pmax-L.pmin)*L.priceH;  /* 2026-06-30: 連動カーソルも1円刻み */
         if(_ly>=L.priceTop&&_ly<=L.priceBot){
           lcy=_ly;
           ctx.beginPath(); ctx.moveTo(L.padL,Math.round(lcy)+0.5); ctx.lineTo(L.padL+L.chartW,Math.round(lcy)+0.5); ctx.stroke();
@@ -3049,7 +3052,7 @@ function DataChart(props){
        編集時は pmin=dpmin/pmax=dpmax(地図モデル)なので、これで軸目盛・ローソクともズレない。 */
     var snapCy=cy, snapPrice=null;
     if(L.pmax!=null&&L.pmin!=null&&L.pmax!==L.pmin&&cy>=L.priceTop&&cy<=L.priceBot){
-      snapPrice=Math.round(L.pmax-((cy-L.priceTop)/L.priceH)*(L.pmax-L.pmin));
+      snapPrice=snapP(L.pmax-((cy-L.priceTop)/L.priceH)*(L.pmax-L.pmin));
       snapCy=L.priceTop+((L.pmax-snapPrice)/(L.pmax-L.pmin))*L.priceH;
     }
     var CROSS='#4a9de3';
@@ -3077,7 +3080,7 @@ function DataChart(props){
     ctx.fillStyle='#000';
     ctx.fillText(tStr,cx,ty+7);
     if(cy>=L.priceTop&&cy<=L.priceBot){
-      var pStr=String(snapPrice!=null?snapPrice:Math.round(L.pmax-((cy-L.priceTop)/L.priceH)*(L.pmax-L.pmin)));
+      var pStr=String(snapPrice!=null?snapPrice:snapP(L.pmax-((cy-L.priceTop)/L.priceH)*(L.pmax-L.pmin)));
       var pw=ctx.measureText(pStr).width+10;
       ctx.textAlign='left';
       ctx.fillStyle=CROSS;
@@ -4126,7 +4129,7 @@ function DataChart(props){
     /* C8a: xToSideTmでgap帯は近い側に境界clamp済み — gap block不要 */
     var tpSide=tp.side||'cur';
     if(drawTool==='measure'){
-      measureDragRef.current={startP:Math.round(tp.p),startTm:tp.tm,startSide:tpSide,curP:Math.round(tp.p)};  /* 2026-06-30: 計測も1円刻みにスナップ(端点=整数円ちょうど) */
+      measureDragRef.current={startP:snapP(tp.p),startTm:tp.tm,startSide:tpSide,curP:snapP(tp.p)};  /* 2026-06-30: 計測も1円刻みにスナップ(端点=整数円ちょうど) */
       drawCrosshair();
       return;
     }
@@ -4298,7 +4301,7 @@ function DataChart(props){
        drawTool==='trade'){
       /* 2026-07-03: 2点ツールの価格を1円刻みにスナップ(十字カーソル/計測と同基準=Math.round)。
          水平点線(dottedは既定でhoriz)が整数円ちょうど・ガイド線と一致して乗る。tm(時間)は不変。 */
-      var _sp0=(tp.p!=null?Math.round(tp.p):tp.p);
+      var _sp0=(tp.p!=null?snapP(tp.p):tp.p);
       drawRef.current={on:true, side:tpSide, sTM:tp.tm, sP:_sp0, cTM:tp.tm, cP:_sp0};
       drawCrosshair();
     }
@@ -4318,7 +4321,7 @@ function DataChart(props){
     /* 計測ティックドラッグ: 端点を個別移動 */
     if(measureTickDragRef.current){
       var tpTick=pxToTimePrice(e.clientX,e.clientY);
-      if(tpTick&&tpTick.p!=null)measureTickDragRef.current.curP=Math.round(tpTick.p);  /* 2026-06-30: 1円刻み */
+      if(tpTick&&tpTick.p!=null)measureTickDragRef.current.curP=snapP(tpTick.p);  /* 2026-06-30: 1円刻み */
       if(!rafRef.current){
         rafRef.current=requestAnimationFrame(function(){
           var tdr=measureTickDragRef.current;
@@ -4338,7 +4341,7 @@ function DataChart(props){
     /* 計測ツール: ドラッグ中の価格更新 */
     if(measureDragRef.current){
       var tpMeas=pxToTimePrice(e.clientX,e.clientY);
-      if(tpMeas&&tpMeas.p!=null)measureDragRef.current.curP=Math.round(tpMeas.p);  /* 2026-06-30: 1円刻み */
+      if(tpMeas&&tpMeas.p!=null)measureDragRef.current.curP=snapP(tpMeas.p);  /* 2026-06-30: 1円刻み */
       if(!rafRef.current){
         rafRef.current=requestAnimationFrame(function(){try{drawCrosshair();}catch(err){}rafRef.current=null;});
       }
@@ -4437,7 +4440,7 @@ function DataChart(props){
           }
         } else {
           // 2点ツール
-          var ep=Math.round(tp.p);  /* 2026-07-03: 価格を1円刻みにスナップ(sPと同基準) */
+          var ep=snapP(tp.p);  /* 2026-07-03: 価格を1円刻みにスナップ(sPと同基準) */
           if(props.horiz){
             var snapped=applyHorizSnap(drawRef.current.sTM,drawRef.current.sP,etm,ep);
             etm=snapped.tm; ep=snapped.p;
@@ -4705,7 +4708,7 @@ function DataChart(props){
     if(measureDragRef.current){
       var md=measureDragRef.current;
       var mdiff=md.curP-md.startP;
-      if(Math.abs(mdiff)>=0.5){
+      if(Math.abs(mdiff)>=0.05){   /* 2026-11-06: 0.1円刻みの銘柄でも確定できるように (旧 0.5) */
         var newM={id:'meas_'+Date.now(),
           startP:md.startP,endP:md.curP,
           startTm:md.startTm,startSide:md.startSide};
@@ -5494,7 +5497,7 @@ function DataChart(props){
       var colR='#4ade80';
       var topYR=Math.min(mY1R,mY2R);
       var hR=Math.max(Math.abs(mY2R-mY1R),2);
-      var diffRndR=Math.round(Math.abs(diffR));
+      var diffRndR=Math.round(Math.abs(diffR)*10)/10;
       var labelR=diffRndR+'円';
       return ce('div',{
         key:msr.id,
@@ -5771,6 +5774,15 @@ function caVpTickFn(bars1m){
 function caVpPrevRow(p,tfn){ return Math.round((p-tfn(p-1e-6))*10)/10; }
 /* 2026-10-30: 値段を呼値(rs)の行にまとめる (0.5円/0.1円刻みでも小数の誤差が出ないよう0.1円で丸める) */
 function caVpRowP(p,rs){ return Math.round(Math.round(p/rs)*rs*10)/10; }
+/* 2026-11-06: チャートの値段の吸着 (十字カーソル・全板の青い行・書き込み・計測) を呼値ごとに。
+   ティック(vp)があればそれから、無い旧データは1分足の4本値から判定。1円より粗くはしない (従来どおり最大1円) */
+function caPriceTickFn(bars){
+  bars=bars||[]; var hasVp=false;
+  for(var i=0;i<bars.length;i++){ if(bars[i]&&bars[i].vp&&bars[i].vp.length){hasVp=true;break;} }
+  var src=hasVp?bars:bars.map(function(b){ if(!b||!(b.v>0))return null; var a=[]; ['o','h','l','c'].forEach(function(k){ if(b[k]>0)a.push(b[k],0); }); return {vp:a}; });
+  var f=caVpTickFn(src);
+  return function(p){ return Math.min(f(p),1); };
+}
 function caVpTickStep(bars1m){
   var any=false, allHalf=true, allInt=true, all5=true, all10=true;
   for(var i=0;i<bars1m.length;i++){
