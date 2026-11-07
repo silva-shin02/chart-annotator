@@ -725,7 +725,8 @@ var CA_PEN_ONLY_KEY='ca_pen_only_v1';
 var CA_PRICE_GRID_STEP_KEY='ca_price_grid_step_v1';
 /* 2026-08-03: シミュ開始時に「寄り付きから何分ぶん」を開示済みにしておくか (分)。0=従来の0本から。既定15 */
 /* 2026-10-30: 既定を「寄り付き1本目」に変更 (ユーザー指定)。保存済みの旧値(既定15)を引き継がないようキーを v2 に */
-var CA_SIM_START_MIN_KEY='ca_sim_start_min_v2';
+/* 2026-11-07: 既定を「寄り付きから10本(10分)」に変更 (ユーザー指定)。保存済みの値(既定1)を引き継がないようキーを v3 に */
+var CA_SIM_START_MIN_KEY='ca_sim_start_min_v3';
 /* 2026-10-30: シミュ開始時に前日チャートを自動で並べるか (既定=並べない・ユーザー指定) */
 var CA_SIM_PREV_REF_KEY='ca_sim_prev_ref_v1';
 /* 2026-09-17: 価格帯別出来高の表示ON/OFF・集計モード ('visible'=表示範囲 / 'until'=寄り〜指定時刻)。全チャート共通 */
@@ -1075,11 +1076,11 @@ function caSaveDefaultTf(t){
 function caLoadSimStartMin(){
   try{
     var v=localStorage.getItem(CA_SIM_START_MIN_KEY);
-    if(v===null||v==='')return 1;
+    if(v===null||v==='')return 10;
     var n=parseInt(v,10);
-    if(isNaN(n)||n<0)return 1;
+    if(isNaN(n)||n<0)return 10;
     return n>360?360:n;
-  }catch(e){return 1;}
+  }catch(e){return 10;}
 }
 function caLoadSimPrevRef(){ try{return localStorage.getItem(CA_SIM_PREV_REF_KEY)==='1';}catch(e){return false;} }
 function caSaveSimPrevRef(on){
