@@ -725,8 +725,10 @@ var CA_PEN_ONLY_KEY='ca_pen_only_v1';
 var CA_PRICE_GRID_STEP_KEY='ca_price_grid_step_v1';
 /* 2026-08-03: シミュ開始時に「寄り付きから何分ぶん」を開示済みにしておくか (分)。0=従来の0本から。既定15 */
 /* 2026-10-30: 既定を「寄り付き1本目」に変更 (ユーザー指定)。保存済みの旧値(既定15)を引き継がないようキーを v2 に */
-/* 2026-11-07: 既定を「寄り付きから10本(10分)」に変更 (ユーザー指定)。保存済みの値(既定1)を引き継がないようキーを v3 に */
-var CA_SIM_START_MIN_KEY='ca_sim_start_min_v3';
+/* 2026-11-07: 既定を「5分足2本ぶん」に変更 (ユーザー指定・寄りを含む5分足と次の5分足の終わりまで。9:09寄りなら1分足で 9:09〜9:14 の6本)。
+   値は 'b5x2' (それ以外は分数)。保存済みの値を引き継がないようキーを v4 に */
+var CA_SIM_START_B5X2='b5x2';
+var CA_SIM_START_MIN_KEY='ca_sim_start_min_v4';
 /* 2026-10-30: シミュ開始時に前日チャートを自動で並べるか (既定=並べない・ユーザー指定) */
 var CA_SIM_PREV_REF_KEY='ca_sim_prev_ref_v1';
 /* 2026-09-17: 価格帯別出来高の表示ON/OFF・集計モード ('visible'=表示範囲 / 'until'=寄り〜指定時刻)。全チャート共通 */
@@ -1076,11 +1078,11 @@ function caSaveDefaultTf(t){
 function caLoadSimStartMin(){
   try{
     var v=localStorage.getItem(CA_SIM_START_MIN_KEY);
-    if(v===null||v==='')return 10;
+    if(v===null||v===''||v===CA_SIM_START_B5X2)return CA_SIM_START_B5X2;
     var n=parseInt(v,10);
-    if(isNaN(n)||n<0)return 10;
+    if(isNaN(n)||n<0)return CA_SIM_START_B5X2;
     return n>360?360:n;
-  }catch(e){return 10;}
+  }catch(e){return CA_SIM_START_B5X2;}
 }
 function caLoadSimPrevRef(){ try{return localStorage.getItem(CA_SIM_PREV_REF_KEY)==='1';}catch(e){return false;} }
 function caSaveSimPrevRef(on){
@@ -1089,6 +1091,11 @@ function caSaveSimPrevRef(on){
   return !!on;
 }
 function caSaveSimStartMin(n){
+  if(n===CA_SIM_START_B5X2){
+    try{localStorage.setItem(CA_SIM_START_MIN_KEY,CA_SIM_START_B5X2);}catch(e){caStorageWarn();}
+    caPrefPush(CA_SIM_START_MIN_KEY);
+    return CA_SIM_START_B5X2;
+  }
   var v=parseInt(n,10);
   if(isNaN(v)||v<0)v=0; else if(v>360)v=360;
   try{localStorage.setItem(CA_SIM_START_MIN_KEY,String(v));}catch(e){caStorageWarn();}
@@ -1888,7 +1895,7 @@ function DisplaySettingsModal(props){
               "練習モードを開いた直後に、寄り付きから何分ぶんの足を表示済みにしておくか。",ce("br",null),
               "寄り付き = その日の最初に出来高が付いた足。特別気配で寄りが遅れた日も、実際に寄ってからの経過で揃います。"),
             ce("div",{style:{display:"flex",gap:6,flexWrap:"wrap"}},
-              [{v:0,label:'0本'},{v:1,label:'1本目'},{v:5,label:'5分'},{v:10,label:'10分'},{v:15,label:'15分'},{v:30,label:'30分'},{v:60,label:'60分'}].map(function(o){
+              [{v:CA_SIM_START_B5X2,label:'5分足2本'},{v:0,label:'0本'},{v:1,label:'1本目'},{v:5,label:'5分'},{v:10,label:'10分'},{v:15,label:'15分'},{v:30,label:'30分'},{v:60,label:'60分'}].map(function(o){
                 var sel=simStartMin===o.v;
                 return ce("button",{key:o.v,onClick:function(){updateSimStartMin(o.v);},
                   style:{flex:"1 1 62px",padding:"9px 6px",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer",
@@ -1897,7 +1904,9 @@ function DisplaySettingsModal(props){
               })
             ),
             ce("div",{style:{fontSize:11,color:"#777",marginTop:8}},
-              simStartMin===1
+              simStartMin===CA_SIM_START_B5X2
+                ?"寄り付きを含む5分足と、その次の5分足の終わりまでを表示した状態で始まります (例: 9:09 寄りなら 9:14 まで＝1分足6本)"
+                :simStartMin===1
                 ?"寄り付きの1本目だけを表示した状態で始まります"
                 :simStartMin>0
                 ?("寄り付きから "+simStartMin+"分ぶん (1分足で"+simStartMin+"本) を表示した状態で始まります")
@@ -8157,13 +8166,18 @@ function ImageAnnotator(props){
      n分ぶん = 寄りから n 本目まで → cutoff = 寄りの時刻 + (n - 足の分数)。n=0 / 足なし は -1(0本)。 */
   function simInitialCutoff(d){
     var n=caLoadSimStartMin();
-    if(n<=0)return -1;
+    if(n!==CA_SIM_START_B5X2&&n<=0)return -1;
     var use1m=!!(d&&d.bars_1m&&d.bars_1m.length);
     var arr=use1m?d.bars_1m:((d&&d.bars_5m)||[]);
     if(!arr.length)return -1;
     var oi=0;
     for(var i=0;i<arr.length;i++){ if(arr[i].v>0){oi=i;break;} }
     var step=use1m?1:5;
+    if(n===CA_SIM_START_B5X2){
+      /* 寄りを含む5分足 (9:00 起点の5分区切り) と次の5分足。1分足なら2本目の最後の1分 (+9)、5分足だけなら2本目の開始 (+5) */
+      var s5=5*Math.floor(_simTmin(arr[oi].t)/5);
+      return s5+(use1m?9:5);
+    }
     return _simTmin(arr[oi].t)+Math.max(0,n-step);
   }
   /* 起動時: 直前営業日を自動で ref(前日チャート) に連結 (過去日のみ・silent) */
