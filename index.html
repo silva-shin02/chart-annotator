@@ -15133,11 +15133,12 @@ function CaDailyChart(props){
   },[code]);
   /* CSV + CSV に無い日 (CSV より新しい日) を CA のチャートから */
   var bars=useMemo(function(){
-    var rows=csv?caParseDailyCsv(csv.csv):[], have={}, last=rows.length?rows[rows.length-1].date:'';
+    /* 2026-11-09: SN と同じく CSV に無い日はすべて CA のチャートで埋める (旧: CSV より新しい日だけ) */
+    var rows=csv?caParseDailyCsv(csv.csv):[], have={};
     rows.forEach(function(r){have[r.date]=1;});
     meta.forEach(function(m){
       if(!m||m.ticker!==code)return;
-      var d=_caResolveMetaDate(m); if(!d||have[d]||d<=last)return;
+      var d=_caResolveMetaDate(m); if(!d||have[d])return;
       var px=caDayPxGet(m); if(!px)return;
       have[d]=1; rows.push({date:d,o:px.o,h:px.h,l:px.l,c:px.c,v:px.v||0,ca:true});
     });
@@ -15167,22 +15168,24 @@ function CaDailyChart(props){
     var cv=cvRef.current, v=viewRef.current; if(!cv)return;
     var dpr=window.devicePixelRatio||1; cv.width=W*dpr; cv.height=H*dpr; cv.style.width=W+'px'; cv.style.height=H+'px';
     var ctx=cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
-    ctx.fillStyle='#0b0b0d'; ctx.fillRect(0,0,W,H);
+    ctx.fillStyle='#0d0d0d'; ctx.fillRect(0,0,W,H);
     if(!v||!bars.length){ layRef.current=null; return; }
-    var padL=56,padR=56,top=12,bot=24, plotW=W-padL-padR, volH=Math.round((H-top-bot)*0.22), priceBot=H-bot-volH-6;
+    /* 2026-11-09: 寸法・値段の範囲・色は SN の DailyCandleChart と同じ (H360・出来高80・上20/下20・左右50) */
+    var padL=50,padR=50,top=20,bot=20, plotW=W-padL-padR, volH=80, priceBot=H-volH-bot;
     var i0=Math.max(0,Math.floor(v.s)), i1=Math.min(bars.length-1,Math.ceil(v.s+v.n-1));
     var bw=plotW/v.n;
     function xOf(i){return padL+(i-v.s+0.5)*bw;}
     var lo=Infinity,hi=-Infinity,vmax=0;
-    for(var i=i0;i<=i1;i++){var b=bars[i]; if(b.l<lo)lo=b.l; if(b.h>hi)hi=b.h; if(b.v>vmax)vmax=b.v;
-      ['ema9','ema22','ema50','ema200'].forEach(function(k){ if(ema[k]&&b[k]!=null){ if(b[k]<lo)lo=b[k]; if(b[k]>hi)hi=b[k]; } }); }
-    if(!(hi>lo)){hi=lo+1;}
-    var m=(hi-lo)*0.06; lo-=m; hi+=m;
+    for(var i=i0;i<=Math.min(bars.length-1,i1+1);i++){var b=bars[i]; if(b.l<lo)lo=b.l; if(b.h>hi)hi=b.h; if(i<=i1&&b.v>vmax)vmax=b.v; }
+    if(!(hi>lo)){lo-=1;hi+=1;}
+    /* SN: 足の高安だけで範囲を決めて1.1倍 (EMA は範囲に入れない) */
+    var mid=(lo+hi)/2, half=(hi-lo)*1.1/2; lo=mid-half; hi=mid+half;
     function yOf(p){return top+(hi-p)/(hi-lo)*(priceBot-top);}
     layRef.current={padL:padL,plotW:plotW,bw:bw,s:v.s,top:top,priceBot:priceBot,H:H};
     /* 価格の目盛り */
-    var rng=hi-lo, steps=[1,2,5,10,20,25,50,100,200,250,500,1000,2000,2500,5000,10000], step=steps[steps.length-1];
-    for(var q=0;q<steps.length;q++){ if(rng/steps[q]<=7){step=steps[q];break;} }
+    /* SN _pickPriceStep: 範囲÷8 以上の最小の刻み */
+    var rng=hi-lo, steps=[10,25,50,100,250,500,1000,2500,5000,10000,25000], step=steps[steps.length-1];
+    for(var q=0;q<steps.length;q++){ if(steps[q]>=rng/8){step=steps[q];break;} }
     ctx.font='11px -apple-system,Helvetica,sans-serif'; ctx.textBaseline='middle';
     for(var p=Math.ceil(lo/step)*step;p<=hi;p+=step){
       var y=Math.round(yOf(p))+0.5;
@@ -15192,15 +15195,19 @@ function CaDailyChart(props){
     }
     ctx.save(); ctx.beginPath(); ctx.rect(padL,0,plotW,H); ctx.clip();
     /* 出来高 */
-    var vTop=priceBot+6, vBot=H-bot;
+    var vTop=priceBot+4, vBot=H-bot;
+    /* 月の変わり目の縦線 (SN と同じ) */
+    ctx.strokeStyle='#333'; ctx.lineWidth=0.5;
+    for(var mm=Math.max(1,i0);mm<=i1;mm++){ if(bars[mm].date.slice(5,7)!==bars[mm-1].date.slice(5,7)){ var lx=xOf(mm)-bw/2; ctx.beginPath(); ctx.moveTo(lx,top); ctx.lineTo(lx,vBot); ctx.stroke(); } }
+    ctx.lineWidth=1;
     for(var k=i0;k<=i1;k++){ var bb=bars[k]; if(!(vmax>0))break; var hh=bb.v/vmax*(vBot-vTop);
-      ctx.fillStyle=bb.c>=bb.o?'rgba(225,29,72,.55)':'rgba(14,165,233,.55)'; ctx.fillRect(xOf(k)-bw*0.35,vBot-hh,Math.max(1,bw*0.7),hh); }
+      ctx.globalAlpha=0.6; ctx.fillStyle=bb.c>=bb.o?'#FF005C':'#00C8FF'; ctx.fillRect(xOf(k)-Math.max(1,bw*0.7)/2,vBot-hh,Math.max(1,bw*0.7),hh); ctx.globalAlpha=1; }
     /* ローソク */
     for(var j=i0;j<=i1;j++){
-      var b2=bars[j], x=Math.round(xOf(j))+0.5, up=b2.c>=b2.o, col=up?'#ff2d6b':'#19c6f5';
+      var b2=bars[j], x=xOf(j), up=b2.c>=b2.o, col=up?'#FF005C':'#00C8FF', bW=Math.max(1,bw*0.7);
       ctx.strokeStyle=col; ctx.beginPath(); ctx.moveTo(x,yOf(b2.h)); ctx.lineTo(x,yOf(b2.l)); ctx.stroke();
       var yt=yOf(Math.max(b2.o,b2.c)), yb=yOf(Math.min(b2.o,b2.c)); ctx.fillStyle=col;
-      ctx.fillRect(x-Math.max(1,bw*0.36),yt,Math.max(1,bw*0.72),Math.max(1,yb-yt));
+      ctx.fillRect(x-bW/2,yt,bW,Math.max(1,yb-yt));
     }
     /* EMA */
     ['ema200','ema50','ema22','ema9'].forEach(function(key){
@@ -15212,6 +15219,9 @@ function CaDailyChart(props){
     var hv=hovRef.current;
     if(hv>=i0&&hv<=i1){ var hx=Math.round(xOf(hv))+0.5; ctx.fillStyle='rgba(139,92,246,.18)'; ctx.fillRect(xOf(hv)-bw/2,top,bw,vBot-top); }
     ctx.restore();
+    if(vmax>0){ ctx.fillStyle='#666'; ctx.font='9px -apple-system,Helvetica,sans-serif'; ctx.textAlign='right'; ctx.textBaseline='alphabetic';
+      ctx.fillText(vmax>=1e8?Math.round(vmax/1e8)+'億':vmax>=1e4?Math.round(vmax/1e4)+'万':String(Math.round(vmax)),padL-4,vTop+10);
+      ctx.font='11px -apple-system,Helvetica,sans-serif'; }
     /* 日付 */
     ctx.fillStyle='#8a8a94'; ctx.textAlign='center'; ctx.textBaseline='alphabetic';
     var every=Math.max(1,Math.ceil(70/bw)), lastX=-1e9;
