@@ -15298,7 +15298,7 @@ function CaChartCard(props){
   var BT2={border:'none',background:'none',cursor:'pointer',fontFamily:'inherit',padding:0};
 
   /* メモ state */
-  var sMO=useState(false); var memoOpen=sMO[0],setMemoOpen=sMO[1];
+  var sMO=useState(true); var memoOpen=sMO[0],setMemoOpen=sMO[1];   /* 2026-11-09: メモは既定で開いた状態 (ユーザー指定) */
   var sMH=useState(function(){return caGetChartMemo(m.id);}); var memoHtml=sMH[0],setMemoHtml=sMH[1];
   var hasContent=_caMemoHasContent(memoHtml);
 
