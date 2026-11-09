@@ -15419,11 +15419,11 @@ function CaChartCard(props){
         return ce('span',{style:{whiteSpace:'nowrap'}},lb+' ',
           ce('b',{style:{color:'#eee',fontWeight:700}},caFmtPx(v)),extra||null);
       }
-      function pct(v){ return ce('b',{style:{marginLeft:4,fontWeight:700,color:v>=0?'#ff4d6d':'#22d3c5'}},caFmtPct(v)); }
+      function pct(v,paren){ return ce('b',{style:{marginLeft:4,fontWeight:700,color:v>=0?'#ff4d6d':'#22d3c5'}},paren?'（'+caFmtPct(v)+'）':caFmtPct(v)); }
       /* 2026-11-09: 横長カードで3段に。前終 / 始(ギャップ)・高 / 終(前日比)・安 */
       return ce('div',{style:{padding:'4px 14px 8px 14px',display:'grid',gridTemplateColumns:'auto auto',justifyContent:'start',gap:'4px 28px',fontSize:14,color:'#8a8a8a',fontVariantNumeric:'tabular-nums'}},
         pc!=null?it('前終',pc):null, pc!=null?ce('span',null):null,
-        it('始',px.o,pc!=null?pct((px.o/pc-1)*100):null),
+        it('始',px.o,pc!=null?pct((px.o/pc-1)*100,true):null),   /* 2026-11-09: ギャップは括弧で (ユーザー指定) */
         it('高',px.h),
         it('終',px.c,pc!=null?pct((px.c/pc-1)*100):null),
         it('安',px.l)
