@@ -15122,10 +15122,38 @@ function caLoadDailyCsv(code,fbCfg,cb){
   if(_caDcMem[code]){withCache(_caDcMem[code]);return;}
   idbGet('dccsv_'+code,function(v){ if(v&&v.csv){_caDcMem[code]=v;withCache(v);} else withCache(null); });
 }
+/* 2026-11-09: CA からも日足CSVを取り込む (ユーザー指定)。SN と同じ場所 (Firebase scalping-notebook-daily-csv/<コード>) に {csv,uploadedAt} で保存＝SN と共有。
+   この端末のキャッシュ (IDB dccsv_<コード>) も更新。cb(ok, msg) */
+function caSaveDailyCsv(code,fbCfg,text,cb){
+  var o={csv:text,uploadedAt:Date.now()};
+  _caDcMem[code]=o; try{idbSet('dccsv_'+code,o);}catch(e){}
+  var cfg=fbCfg||{};
+  if(!cfg.url||_fbIsPaused(cfg)){cb(o,false);return;}
+  fetch(cfg.url.replace(/\/$/,'')+'/scalping-notebook-daily-csv/'+encodeURIComponent(code)+'.json'+caAuthParam(cfg.secret),
+    {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)})
+    .then(function(r){cb(o,r.ok);}).catch(function(){cb(o,false);});
+}
 function CaDailyChart(props){
   var code=props.ticker, meta=props.meta||[];
   var sCsv=useState(null), csv=sCsv[0], setCsv=sCsv[1];
   var sSt=useState('loading'), st=sSt[0], setSt=sSt[1];
+  var sUpMsg=useState(''), upMsg=sUpMsg[0], setUpMsg=sUpMsg[1];
+  var fileRef=useRef(null);
+  function onFile(f){
+    if(!f)return;
+    var rd=new FileReader();
+    rd.onload=function(ev){
+      var text=String(ev.target.result||'');
+      var rows=caParseDailyCsv(text);
+      if(!rows.length){setUpMsg('⚠ CSV を読み取れませんでした（HyperSBI2 の日足CSV：日付,始値,高値,安値,終値,… の形式）');return;}
+      caSaveDailyCsv(code,props.fbCfg,text,function(o,ok){
+        setCsv(o); setSt('ok');
+        setUpMsg('✓ '+rows.length+'日分を取り込みました（'+rows[0].date+' 〜 '+rows[rows.length-1].date+'）'+(ok?'':' ※Firebase には保存できませんでした（この端末のみ）'));
+      });
+    };
+    rd.onerror=function(){setUpMsg('⚠ ファイルを読めませんでした');};
+    rd.readAsText(f,'UTF-8');
+  }
   useEffect(function(){
     var alive=true; setCsv(null); setSt('loading');
     caLoadDailyCsv(code,props.fbCfg,function(o,s){ if(!alive)return; if(o)setCsv(o); setSt(s); });
@@ -15266,13 +15294,19 @@ function CaDailyChart(props){
         return ce('span',{key:k,style:{fontSize:12,fontWeight:700,color:CA_DC_EMA_COLS[k]==='#6D28D9'?'#8b5cf6':CA_DC_EMA_COLS[k]}},k.slice(3)); }),
       ce('span',{style:{flex:1}}),
       st==='ok'&&csv&&ce('span',{style:{fontSize:10,color:'#666'}},'日足CSV 更新 '+new Date(csv.uploadedAt||0).toISOString().slice(0,10)),
+      ce('input',{ref:fileRef,type:'file',accept:'.csv,text/csv',style:{display:'none'},
+        onChange:function(e){var f=e.target.files&&e.target.files[0]; e.target.value=''; onFile(f);}}),
+      ce('button',{onClick:function(){if(fileRef.current)fileRef.current.click();},
+        title:'HyperSBI2 → 個別チャート(日足) → CSV保存 したファイルを取り込む。SN と共有の場所に保存します',
+        style:Object.assign({},BTN,{background:'#2a1a08',color:'#fdba74',borderColor:'#7c4a12'})},csv?'🔄 日足CSVを更新':'📤 日足CSVを取り込む'),
       ce('button',{onClick:function(){setView(fitView());},style:Object.assign({},BTN,{background:'#1c1c22',color:'#ccc'})},'↻ フィット')
     ),
+    upMsg&&ce('div',{style:{fontSize:11,color:upMsg.charAt(0)==='⚠'?'#f87171':'#86efac',padding:'4px 10px'}},upMsg),
     ce('div',{ref:wrapRef,style:{position:'relative'}},
       (bars.length===0)
         ?ce('div',{style:{height:80,display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,color:'#777'}},
             st==='loading'?'日足を読み込み中…':st==='no-cfg'?'Firebase 未設定のため日足を読めません':
-            st==='error'?'日足を読み込めませんでした':'日足CSVが未登録です（SN で HyperSBI2 の日足CSVをアップロード）')
+            st==='error'?'日足を読み込めませんでした':'日足CSVが未登録です（右上の「📤 日足CSVを取り込む」か SN で取り込み）')
         :ce('canvas',{ref:cvRef,style:{display:'block',cursor:dragRef.current?'grabbing':'crosshair'},
             onMouseDown:onDown,onMouseMove:onMove,onMouseUp:onUp,onMouseLeave:onLeave}),
       tb&&ce('div',{style:{position:'absolute',top:8,left:Math.min(Math.max(8,tip.x+12),W-200),pointerEvents:'none',
