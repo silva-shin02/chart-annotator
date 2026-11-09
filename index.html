@@ -5178,7 +5178,8 @@ function DataChart(props){
         drawCrosshair();
       }
     },
-    style:{flex:1,position:"relative",background:chartBg,overflow:"hidden",overflowX:"hidden",
+    /* 2026-11-09: rightInset = 右端に重なるパネル(全板)の幅。その分チャートを縮めて足が隠れないように */
+    style:{flex:1,position:"relative",background:chartBg,overflow:"hidden",overflowX:"hidden",marginRight:(props.rightInset||0),
        cursor:drawTool==='pan'?"grab":"default",touchAction:"none",userSelect:"none",
        /* 2026-04-20: iPad Safari の長押しメニュー (コピー/選択部分を検索等) を抑止 */
        WebkitTouchCallout:"none",WebkitUserSelect:"none"}
@@ -5932,6 +5933,8 @@ function caVpValueArea(pocMap, pocP, step){
    行 = 1円ごと (呼値が1円より粗い銘柄は呼値ごと)。全板と違い注文の無い値段も省かない (注文板データは無いため)。
    OVER/UNDER = いま見えている行より上/下の値段の合計 (全板と同じ)。現在値(cutTm時点の終値)の行を黄色、POC の値段を紫に。
    カットの時刻(現在値)が変わったら現在値の行を中央へ。行タップ = その値段を選択/解除 (props.onSelect) */
+/* 2026-11-09: 全板パネルの幅。開いている間はチャートをこの幅ぶん左に縮める (DataChart rightInset) */
+var CA_VP_LADDER_W=210;
 function CaVpLadder(props){
   var bars=props.bars||[], cut=props.cutTm, selP=props.selP;
   var RH=20;
@@ -6030,7 +6033,7 @@ function CaVpLadder(props){
         var rt=e.relatedTarget;
         if(!(rt&&rt.closest&&rt.closest('[data-ca-chart]'))&&props.onLeave)props.onLeave();
       },
-      style:{position:'absolute',top:(props.top||0),right:0,bottom:0,width:210,zIndex:120,display:'flex',flexDirection:'column',
+      style:{position:'absolute',top:(props.top||0),right:0,bottom:0,width:CA_VP_LADDER_W,zIndex:120,display:'flex',flexDirection:'column',
         background:'rgba(12,12,14,0.95)',borderLeft:'1px solid #333',boxShadow:'-4px 0 12px rgba(0,0,0,.5)',
         fontVariantNumeric:'tabular-nums',userSelect:'none',WebkitUserSelect:'none'}},
     ce('div',{style:{display:'flex',alignItems:'center',padding:'4px 8px',borderBottom:'1px solid #2a2a2a',flexShrink:0}},
@@ -7694,6 +7697,8 @@ function ImageAnnotator(props){
   /* 2026-10-13: 全板パネル (オーバーレイ) の開閉と、パネルで選んだ値段 (チャートに水平線+約定した足の点) */
   /* 2026-10-14: 全板パネルは既定で開いた状態 (✕/「全板」ボタンで閉じられる。エディタを開き直すとまた開く) */
   var sVpLad=useState(true); var vpLadOpen=sVpLad[0],setVpLadOpen=sVpLad[1];
+  /* 2026-11-09: 全板パネルが出ているか (出ている間はチャートをその幅ぶん縮める) */
+  function vpLadShown(){ return !!(vpOn&&vpLadOpen&&vpRange().has); }
   var sVpLadSel=useState(null); var vpLadSel=sVpLadSel[0],setVpLadSel=sVpLadSel[1];
   /* 2026-10-14: 全板パネルでマウスが乗っている行の値段 → チャートに水平線 (vpOpt.ladHovP) */
   var sVpLadHovP=useState(null); var vpLadHovP=sVpLadHovP[0],setVpLadHovP=sVpLadHovP[1];
@@ -10581,6 +10586,7 @@ function ImageAnnotator(props){
                引数渡しで外側値を捕捉(var巻き上げ回避)。 */
             (function(analysisTf){return ce(DataChart,{
               data:simMode?simDisplayData:emaContinuedData, tf:topTf, showCrosshair:showCrosshair,
+              rightInset:vpLadShown()?CA_VP_LADDER_W:0,   /* 2026-11-09: 全板と重ならないように */
               prevClose:prevCloseInfo,   /* 2026-10-18: 前日終値の水平線 */
               vpOpt:vpOptNow(),   /* 2026-09-17: 価格帯別出来高 */
               vpPinTm:vpPinTm, onVpPin:setVpPinTm, vpHoverTm:vpHoverTm, onVpHover:setVpHoverTm, onVpSetTime:vpSetTime, onVpCursorP:vpLadCursorP, onVpCenterTm:setVpCenterTm,
@@ -10880,6 +10886,7 @@ function ImageAnnotator(props){
                非シミュは外側analysisTfのまま(tap-to-focus維持)。引数渡しで外側値を捕捉。 */
             (function(analysisTf){return ce(DataChart,{
               data:simMode?simDisplayData:emaContinuedData, tf:'5m', showCrosshair:showCrosshair,
+              rightInset:vpLadShown()?CA_VP_LADDER_W:0,
               prevClose:prevCloseInfo,
               vpOpt:vpOptNow(),   /* 2026-09-17: 価格帯別出来高 (5分足ペインも1分足の vp から集計) */
               vpPinTm:vpPinTm, onVpPin:setVpPinTm, vpHoverTm:vpHoverTm, onVpHover:setVpHoverTm, onVpSetTime:vpSetTime, onVpCursorP:vpLadCursorP,
@@ -11135,6 +11142,7 @@ function ImageAnnotator(props){
               },"✕")
             ),
             ce(DataChart,{
+              rightInset:vpLadShown()?CA_VP_LADDER_W:0,
               data:splitChart.analysisData,
               tf:analysisTf,
               showCrosshair:showCrosshair,
@@ -11182,7 +11190,7 @@ function ImageAnnotator(props){
             })
           ),
           /* 2026-10-13: 全板パネル (右端オーバーレイ・価格帯別出来高ON かつ データありのときのみ) */
-          vpOn&&vpLadOpen&&vpRange().has&&ce(CaVpLadder,{
+          vpLadShown()&&ce(CaVpLadder,{
             bars:((simMode?simDisplayData:emaContinuedData)||{}).bars_1m||[],
             top:metaRowH,
             cutTm:vpLadderCut(),
