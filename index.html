@@ -15147,7 +15147,8 @@ function CaDailyChart(props){
     return rows;
   },[csv,meta,code]);
   var sPer=useState('3m'), per=sPer[0], setPer=sPer[1];
-  var sEma=useState({ema9:true,ema22:true,ema50:true,ema200:true}), ema=sEma[0], setEma=sEma[1];
+  /* 2026-11-09: EMA は常に全部表示 (ユーザー指定・表示切替は廃止) */
+  var ema={ema9:true,ema22:true,ema50:true,ema200:true};
   /* view = {s: 先頭 index (小数可), n: 本数} */
   var sView=useState(null), view=sView[0], setView=sView[1];
   function fitView(p){ var N=bars.length; if(!N)return null; var row=CA_DC_PERIODS.filter(function(x){return x[0]===(p||per);})[0]; var n=(row&&row[2])?Math.min(row[2],N):N; return {s:N-n,n:n}; }
@@ -15252,8 +15253,7 @@ function CaDailyChart(props){
           style:Object.assign({},BTN,{background:on?'#8b5cf6':'#1c1c22',color:on?'#fff':'#aaa',borderColor:on?'#8b5cf6':'#333'})},p[1]); }),
       ce('span',{style:{fontSize:11,color:'#888',marginLeft:10}},'EMA'),
       ['ema9','ema22','ema50','ema200'].map(function(k){
-        return ce('label',{key:k,style:{display:'flex',alignItems:'center',gap:3,fontSize:12,fontWeight:700,color:CA_DC_EMA_COLS[k]==='#6D28D9'?'#8b5cf6':CA_DC_EMA_COLS[k],cursor:'pointer'}},
-          ce('input',{type:'checkbox',checked:!!ema[k],onChange:function(){var o=Object.assign({},ema);o[k]=!o[k];setEma(o);}}),k.slice(3)); }),
+        return ce('span',{key:k,style:{fontSize:12,fontWeight:700,color:CA_DC_EMA_COLS[k]==='#6D28D9'?'#8b5cf6':CA_DC_EMA_COLS[k]}},k.slice(3)); }),
       ce('span',{style:{flex:1}}),
       st==='ok'&&csv&&ce('span',{style:{fontSize:10,color:'#666'}},'日足CSV 更新 '+new Date(csv.uploadedAt||0).toISOString().slice(0,10)),
       ce('button',{onClick:function(){setView(fitView());},style:Object.assign({},BTN,{background:'#1c1c22',color:'#ccc'})},'↻ フィット')
