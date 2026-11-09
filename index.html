@@ -12112,6 +12112,45 @@ function caVolPut(id,sa,v){
   try{localStorage.setItem(CA_VOL_CACHE_KEY,JSON.stringify(c));}catch(e){}
 }
 function caFmtVol(v){return (typeof v==='number')?v.toFixed(3)+'%':'—';}
+/* 2026-11-09: チャートカードの4本値 (ユーザー指定・レイアウト案A)。その日の約定足 (v>0) の 始値=最初の足の始値・高値・安値・終値=最後の足の終値。
+   キャッシュはボラ率と同じ方式 (localStorage・この端末のみ) {id:{sa,o,h,l,c}}。前日終値は同じ銘柄の前の日付のチャートの c */
+var CA_DAYPX_CACHE_KEY='ca_day_px_v1';
+var _caDayPxMem=null;
+function caCalcDayPx(ad){
+  var b=ad&&ad.bars_1m; if(!b||!b.length)b=ad&&ad.bars_5m; if(!b||!b.length)return null;
+  var o=null,h=null,l=null,c=null;
+  b.forEach(function(x){
+    if(!x||!(x.v>0)||!(x.c>0))return;
+    if(o==null)o=x.o>0?x.o:x.c;
+    var hh=x.h>0?x.h:x.c, ll=x.l>0?x.l:x.c;
+    if(h==null||hh>h)h=hh; if(l==null||ll<l)l=ll;
+    c=x.c;
+  });
+  return (o==null)?null:{o:o,h:h,l:l,c:c};
+}
+function _caDayPxCache(){
+  if(_caDayPxMem)return _caDayPxMem;
+  try{_caDayPxMem=JSON.parse(localStorage.getItem(CA_DAYPX_CACHE_KEY))||{};}catch(e){_caDayPxMem={};}
+  return _caDayPxMem;
+}
+/* undefined=未計算 / null=約定の足が無い / {o,h,l,c} */
+function caDayPxGet(m){
+  var c=m&&_caDayPxCache()[m.id];
+  return (c&&c.sa===(m.savedAt||0))?(c.px||null):undefined;
+}
+function caDayPxPut(id,sa,px){
+  var c=_caDayPxCache(); c[id]={sa:sa,px:px};
+  try{localStorage.setItem(CA_DAYPX_CACHE_KEY,JSON.stringify(c));}catch(e){}
+}
+/* 同じ銘柄でこの日より前の、いちばん近い日付のチャートの4本値 (無い/未計算は null/undefined) */
+function caPrevDayPx(m,meta){
+  var d=_caResolveMetaDate(m); if(!d)return null;
+  var best=null, bd='';
+  (meta||[]).forEach(function(x){ if(!x||x.ticker!==m.ticker)return; var xd=_caResolveMetaDate(x); if(xd&&xd<d&&xd>bd){bd=xd;best=x;} });
+  return best?caDayPxGet(best):null;
+}
+function caFmtPx(p){ if(typeof p!=='number')return '—'; var r=Math.round(p*10)/10; return r.toLocaleString('ja-JP',{minimumFractionDigits:(r%1?1:0),maximumFractionDigits:1}); }
+function caFmtPct(v){ return (v>=0?'+':'−')+Math.abs(v).toFixed(2)+'%'; }
 function caLoadDataAsync(id,cb){
   if(_dataMemCache[id]){cb(_dataMemCache[id]);return;}
   idbGet('data_'+id,function(val){
@@ -15144,12 +15183,26 @@ function CaChartCard(props){
         ce('div',{style:{fontSize:10,color:isHighlight?'#86efac':'#555',marginTop:2}},
           m.analysisDate?m.analysisDate+' · ':'',dateStr)
       ),
-      /* 2026-10-23: ボラ率 (前場の1分足の平均値幅率) */
-      props.showVol&&ce('div',{title:'ボラ率: 前場(9:00〜11:30)の1分足の (高値−安値)÷終値 の平均',
-        style:{flexShrink:0,fontSize:11,fontWeight:700,padding:'2px 7px',borderRadius:5,
-          background:'#2a1f0a',color:'#fbbf24',whiteSpace:'nowrap',fontVariantNumeric:'tabular-nums'}},
-        'ボラ '+(props.vol===undefined?'…':caFmtVol(props.vol)))
     ),
+
+    /* 2026-11-09: 4本値の1行 (レイアウト案A)。前日終値 / 始値(ギャップ%) / 高値 / 安値 / 終値(前日比%) */
+    (function(){
+      var px=props.dayPx, pv=props.prevPx, pc=(pv&&pv.c>0)?pv.c:null;
+      if(px===undefined)return ce('div',{style:{padding:'0 9px 5px 9px',fontSize:11,color:'#555'}},'…');
+      if(!px)return null;
+      function it(lb,v,extra){
+        return ce('span',{style:{whiteSpace:'nowrap'}},lb+' ',
+          ce('b',{style:{color:'#ddd',fontWeight:600}},caFmtPx(v)),extra||null);
+      }
+      function pct(v){ return ce('b',{style:{marginLeft:3,fontWeight:600,color:v>=0?'#ff4d6d':'#22d3c5'}},caFmtPct(v)); }
+      return ce('div',{style:{padding:'0 9px 5px 9px',display:'flex',flexWrap:'wrap',gap:'2px 10px',fontSize:11,color:'#888',fontVariantNumeric:'tabular-nums'}},
+        pc!=null&&it('前終',pc),
+        it('始',px.o,pc!=null?pct((px.o/pc-1)*100):null),
+        it('高',px.h),
+        it('安',px.l),
+        it('終',px.c,pc!=null?pct((px.c/pc-1)*100):null)
+      );
+    })(),
 
     /* タグチップ行 (タグがある場合のみ表示) */
     tagIds.length>0&&ce('div',{
@@ -18548,18 +18601,18 @@ function DraftLibrary(props){
   var volFailRef=useRef({});
   useEffect(function(){
     if(!selTicker)return;
-    var list=meta.filter(function(m){return m.ticker===selTicker&&caVolGet(m)===undefined&&!volFailRef.current[m.id];});
+    var list=meta.filter(function(m){return m.ticker===selTicker&&(caVolGet(m)===undefined||caDayPxGet(m)===undefined)&&!volFailRef.current[m.id];});   /* 2026-11-09: 4本値も */
     if(!list.length)return;
     var alive=true, i=0, running=0, bumpT=null;
     function bump(){ if(bumpT)return; bumpT=setTimeout(function(){bumpT=null; if(alive)setVolVer(function(x){return x+1;});},250); }
     function loadOne(m,cb){
       caLoadDataAsync(m.id,function(d){
-        if(d&&d.analysisData){cb(true,caCalcVolAm1m(d.analysisData));return;}
+        if(d&&d.analysisData){cb(true,caCalcVolAm1m(d.analysisData),caCalcDayPx(d.analysisData));return;}
         var cfg=fbCfg||{};
         if(!cfg.url){cb(false);return;}
         fetch(cfg.url.replace(/\/$/,'')+'/chart-annotator-drafts-data/'+m.id+'.json'+caAuthParam(cfg.secret))
           .then(function(r){return r.ok?r.json():null;})
-          .then(function(fb){ if(fb&&fb.analysisData)cb(true,caCalcVolAm1m(fb.analysisData)); else cb(false); })
+          .then(function(fb){ if(fb&&fb.analysisData)cb(true,caCalcVolAm1m(fb.analysisData),caCalcDayPx(fb.analysisData)); else cb(false); })
           .catch(function(){cb(false);});
       });
     }
@@ -18567,10 +18620,10 @@ function DraftLibrary(props){
       while(alive&&running<3&&i<list.length){
         (function(m){
           running++;
-          loadOne(m,function(ok,v){
+          loadOne(m,function(ok,v,px){
             running--;
             if(!alive)return;
-            if(ok)caVolPut(m.id,m.savedAt||0,v); else volFailRef.current[m.id]=true;
+            if(ok){caVolPut(m.id,m.savedAt||0,v);caDayPxPut(m.id,m.savedAt||0,px);} else volFailRef.current[m.id]=true;
             bump(); next();
           });
         })(list[i++]);
@@ -21091,8 +21144,8 @@ function DraftLibrary(props){
                   onOpen:openChart,
                   onDelete:deleteChart,
                   fbCfg:fbCfg,
-                  /* 2026-10-23: ボラ率 (常に表示。undefined=計算中) */
-                  showVol:true, vol:caVolGet(m),
+                  /* 2026-11-09: カードのボラ表示は廃止 (ユーザー指定)。代わりに4本値と前日終値 (undefined=計算中) */
+                  dayPx:caDayPxGet(m), prevPx:caPrevDayPx(m,meta),
                   /* 2026-06-30: サムネカードからこの日をシミュレーション(非ブラインド) */
                   onStartSim:function(){startSimulation(m);},
                   /* 2026-11-04: 類似チャート検索 */
