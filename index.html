@@ -15067,6 +15067,8 @@ function CaSim2Modal(props){
       )),
     document.body);
 }
+/* 2026-11-09: 横長カードの右側の幅 */
+var CA_CARD_SIDE_W=340;
 function CaChartCard(props){
   var m=props.m;
   var isHighlight=!!props.isHighlight;
@@ -15145,12 +15147,14 @@ function CaChartCard(props){
   return ce('div',{
     'data-ca-highlight':isHighlight?'1':null,
     'data-ca-card-id':m.id,   /* 2026-06-25: 一覧スクロール復元のアンカー特定用 */
-    style:{width:IS_TOUCH?450:510,background:isHighlight?'#1c2e1a':'#1a1a1a',borderRadius:10,
+    /* 2026-11-09: 横長カード (ユーザー指定)。左=サムネ・右=タイトル/4本値/タグ/予定/ボタン。幅が足りなければ右側はサムネの下に回る */
+    style:{width:(IS_TOUCH?450:510)+CA_CARD_SIDE_W,maxWidth:'100%',background:isHighlight?'#1c2e1a':'#1a1a1a',borderRadius:10,
       border:isHighlight?'2px solid #4ade80':'1px solid #2a2a2a',overflow:'hidden',
       flexShrink:0,boxShadow:isHighlight?'0 0 0 3px rgba(74,222,128,0.25)':'none'}},
+    ce('div',{style:{display:'flex',flexWrap:'wrap',alignItems:'stretch'}},
 
     /* サムネイル部分 */
-    ce('div',{style:{position:'relative'},onClick:function(){onOpen(m.id);}},
+    ce('div',{style:{position:'relative',width:IS_TOUCH?450:510,maxWidth:'100%',flexShrink:0},onClick:function(){onOpen(m.id);}},
       isHighlight&&ce('div',{style:{position:'absolute',top:6,left:6,zIndex:2,padding:'3px 8px',
         background:'#4ade80',color:'#0a1f0a',fontSize:10,fontWeight:700,borderRadius:4,letterSpacing:0.3}},
         '📅 '+highlightDate),
@@ -15172,6 +15176,9 @@ function CaChartCard(props){
           borderRadius:4,letterSpacing:0.2,pointerEvents:'none',whiteSpace:'nowrap'}},
         '👁 '+caFmtLastViewed(lastViewedTs))
     ),
+
+    /* 右側 */
+    ce('div',{style:{flex:'1 1 280px',minWidth:0,display:'flex',flexDirection:'column',borderLeft:'1px solid #242424'}},
 
     /* タイトル・日付行 */
     ce('div',{style:{padding:'7px 9px 4px 9px',display:'flex',alignItems:'flex-start',gap:5}},
@@ -15195,12 +15202,13 @@ function CaChartCard(props){
           ce('b',{style:{color:'#ddd',fontWeight:600}},caFmtPx(v)),extra||null);
       }
       function pct(v){ return ce('b',{style:{marginLeft:3,fontWeight:600,color:v>=0?'#ff4d6d':'#22d3c5'}},caFmtPct(v)); }
-      return ce('div',{style:{padding:'0 9px 5px 9px',display:'flex',flexWrap:'wrap',gap:'2px 10px',fontSize:11,color:'#888',fontVariantNumeric:'tabular-nums'}},
-        pc!=null&&it('前終',pc),
+      /* 2026-11-09: 横長カードで3段に。前終 / 始(ギャップ)・高 / 終(前日比)・安 */
+      return ce('div',{style:{padding:'2px 9px 7px 9px',display:'grid',gridTemplateColumns:'auto auto',justifyContent:'start',gap:'3px 22px',fontSize:12,color:'#888',fontVariantNumeric:'tabular-nums'}},
+        pc!=null?it('前終',pc):null, pc!=null?ce('span',null):null,
         it('始',px.o,pc!=null?pct((px.o/pc-1)*100):null),
         it('高',px.h),
-        it('安',px.l),
-        it('終',px.c,pc!=null?pct((px.c/pc-1)*100):null)
+        it('終',px.c,pc!=null?pct((px.c/pc-1)*100):null),
+        it('安',px.l)
       );
     })(),
 
@@ -15247,8 +15255,8 @@ function CaChartCard(props){
       );
     })(),
 
-    /* アクションボタン行 (メモ・タグ) */
-    ce('div',{style:{padding:'0 9px 8px 9px',display:'flex',gap:5,alignItems:'center'}},
+    /* アクションボタン行 (メモ・タグ) — 右側の下端に */
+    ce('div',{style:{padding:'4px 9px 8px 9px',display:'flex',flexWrap:'wrap',gap:5,alignItems:'center',marginTop:'auto'}},
       /* メモ開閉ボタン + 赤丸 */
       ce('button',{
         onClick:function(e){
@@ -15305,7 +15313,9 @@ function CaChartCard(props){
           borderRadius:5,cursor:'pointer',flexShrink:0,lineHeight:1.4}},
         '≈ 類似チャート検索'
       )
-    ),
+    )
+    ), /* end 右側 */
+    ), /* end 横並び */
 
     /* タグ選択パネル (折りたたみ) */
     tagOpen&&ce('div',{
