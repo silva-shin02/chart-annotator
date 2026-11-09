@@ -18,6 +18,7 @@
 ## 0. 最重要ルール（このプロジェクト固有）
 
 0. **セッション名は「CA」にする**（2026-11-09 ユーザー指定）。クラウドセッションでは最初の返答の前に `mcp__claude-code-remote__set_session_title`（session_id は `get_session` を引数なしで呼んで取得）で title を `CA` に。すでに `CA` なら何もしない。
+   - **ピン止めも付け替える**（2026-11-09 ユーザー指定）：ピン止め＝セッションのタグ `ui:pinned`。`list_sessions`(mine:true) で**自分以外で title が `CA` かつ `ui:pinned` 付き**のセッションから `set_session_tags` で `ui:pinned` を外し、自分に付ける（既に付いていればそのまま）。`SN` など他の名前のセッションは触らない。
 
 1. **編集対象は `index.html` 1ファイルのみ**（巨大・約12,900行・React UMD を1つの IIFE 内に全部入れた構成）。
 2. **push のタイミング**：1つの依頼の修正がすべて終わってから、**まとめて1回 commit & push**（こまめに push しない）。
