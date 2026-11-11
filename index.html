@@ -15388,7 +15388,19 @@ function CaDailyChart(props){
   function idxAt(clientX){ var L=layRef.current, cv=cvRef.current; if(!L||!cv)return -1; var r=cv.getBoundingClientRect(); var i=Math.floor(L.s+(clientX-r.left-L.padL)/L.bw); return (i>=0&&i<bars.length)?i:-1; }
   var sTip=useState(null), tip=sTip[0], setTip=sTip[1];
   function clampView(v){ var N=bars.length; var n=Math.max(10,Math.min(N,v.n)); var s=Math.max(0,Math.min(N-n,v.s)); return {s:s,n:n}; }
-  function onDown(e){ if(e.button!==0)return; dragRef.current={x:e.clientX,y:e.clientY,s:viewRef.current?viewRef.current.s:0}; }
+  /* 2026-11-11 (ユーザー指定): クリックしてから動かせる。動かせない間はドラッグもホイールも効かない (ホイールはページのスクロール)。
+     チャートの外をクリックで終わる。最初のクリックは動かせるようにするだけ (シミュの確認は出さない) */
+  var sAct=useState(false), active=sAct[0], setActive=sAct[1];
+  var activeRef=useRef(false); activeRef.current=active;
+  var rootRef=useRef(null);
+  useEffect(function(){
+    if(!active)return;
+    function onDocDown(e){ var r=rootRef.current; if(r&&!r.contains(e.target))setActive(false); }
+    document.addEventListener('mousedown',onDocDown,true);
+    document.addEventListener('touchstart',onDocDown,true);
+    return function(){ document.removeEventListener('mousedown',onDocDown,true); document.removeEventListener('touchstart',onDocDown,true); };
+  },[active]);
+  function onDown(e){ if(e.button!==0)return; dragRef.current={x:e.clientX,y:e.clientY,s:viewRef.current?viewRef.current.s:0,activating:!activeRef.current}; }
   /* 2026-11-11 (ユーザー指定): 足をクリック(動かさずに離す)→その日のシミュを始めるか確認 */
   var sAsk=useState(null), ask=sAsk[0], setAsk=sAsk[1];
   /* 2026-11-11: 'YYYY-MM-DD' → '(月)' (ユーザー指定・吹き出しと確認画面) */
@@ -15401,19 +15413,21 @@ function CaDailyChart(props){
   }
   function onMove(e){
     var dr=dragRef.current, L=layRef.current;
-    if(dr&&L&&viewRef.current){ setView(clampView({s:dr.s-(e.clientX-dr.x)/L.bw,n:viewRef.current.n})); }
+    if(dr&&!dr.activating&&L&&viewRef.current){ setView(clampView({s:dr.s-(e.clientX-dr.x)/L.bw,n:viewRef.current.n})); }
     var i=idxAt(e.clientX); hovRef.current=i;
     if(i>=0){ var r=cvRef.current.getBoundingClientRect(); setTip({i:i,x:e.clientX-r.left}); } else setTip(null);
     draw();
   }
   function onUp(e){
     var dr=dragRef.current; dragRef.current=null;
+    if(dr&&dr.activating){ setActive(true); return; }
     if(dr&&e&&Math.hypot(e.clientX-dr.x,e.clientY-dr.y)<5){ var i=idxAt(e.clientX); if(i>=0)askSimAt(i); }
   }
   function onLeave(){ dragRef.current=null; hovRef.current=-1; setTip(null); draw(); }
   useEffect(function(){
     var cv=cvRef.current; if(!cv)return;
     function onWheel(e){
+      if(!activeRef.current)return;   /* 2026-11-11: 動かせない間はページのスクロールに任せる */
       var v=viewRef.current, L=layRef.current; if(!v||!L)return; e.preventDefault();
       if(e.shiftKey||Math.abs(e.deltaX)>Math.abs(e.deltaY)){ var d=(e.deltaX||e.deltaY); setView(clampView({s:v.s+d/L.bw*0.5,n:v.n})); return; }
       var r=cv.getBoundingClientRect(), f=(e.clientX-r.left-L.padL)/L.plotW; f=Math.max(0,Math.min(1,f));
@@ -15425,7 +15439,8 @@ function CaDailyChart(props){
   },[bars.length]);
   var BTN={padding:'5px 11px',fontSize:12,fontWeight:700,borderRadius:6,border:'1px solid #333',cursor:'pointer',fontFamily:'inherit'};
   var tb=tip&&bars[tip.i], prevB=tip&&tip.i>0?bars[tip.i-1]:null;
-  return ce('div',{style:{width:'100%',background:'#0b0b0d',border:'1px solid #2a2a2a',borderRadius:10,overflow:'hidden',marginBottom:6}},
+  return ce('div',{ref:rootRef,style:{width:'100%',background:'#0b0b0d',border:'1px solid '+(active?'#8b5cf6':'#2a2a2a'),
+      boxShadow:active?'0 0 0 1px #8b5cf6':'none',borderRadius:10,overflow:'hidden',marginBottom:6}},
     ce('div',{style:{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',padding:'8px 10px',borderBottom:'1px solid #1f1f24'}},
       CA_DC_PERIODS.map(function(p){ var on=per===p[0];
         return ce('button',{key:p[0],onClick:function(){setPer(p[0]);setView(fitView(p[0]));},
@@ -15448,7 +15463,7 @@ function CaDailyChart(props){
         ?ce('div',{style:{height:80,display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,color:'#777'}},
             st==='loading'?'日足を読み込み中…':st==='no-cfg'?'Firebase 未設定のため日足を読めません':
             st==='error'?'日足を読み込めませんでした':'日足CSVが未登録です（右上の「📤 日足CSVを取り込む」か SN で取り込み）')
-        :ce('canvas',{ref:cvRef,style:{display:'block',cursor:dragRef.current?'grabbing':'crosshair'},
+        :ce('canvas',{ref:cvRef,style:{display:'block',cursor:!active?'pointer':(dragRef.current?'grabbing':'crosshair')},
             onMouseDown:onDown,onMouseMove:onMove,onMouseUp:onUp,onMouseLeave:onLeave}),
       tb&&ce('div',{style:{position:'absolute',top:8,left:Math.min(Math.max(8,tip.x+12),W-200),pointerEvents:'none',
           background:'rgba(20,20,26,.92)',border:'1px solid #333',borderRadius:6,padding:'5px 8px',fontSize:11,color:'#ccc',lineHeight:1.6,fontVariantNumeric:'tabular-nums',whiteSpace:'nowrap'}},
@@ -15473,7 +15488,7 @@ function CaDailyChart(props){
         )
       )
     ),
-    bars.length>0&&ce('div',{style:{fontSize:10,color:'#555',padding:'4px 10px 6px'}},'ドラッグ: 横移動 / ホイール: ズーム / Shift+ホイール: 横移動')
+    bars.length>0&&ce('div',{style:{fontSize:10,color:'#555',padding:'4px 10px 6px'}},active?'ドラッグ: 横移動 / ホイール: ズーム / Shift+ホイール: 横移動 / 足をクリック: その日のシミュ（チャートの外をクリックで終了）':'クリックすると動かせます')
   );
 }
 
