@@ -15381,7 +15381,15 @@ function CaDailyChart(props){
   function idxAt(clientX){ var L=layRef.current, cv=cvRef.current; if(!L||!cv)return -1; var r=cv.getBoundingClientRect(); var i=Math.floor(L.s+(clientX-r.left-L.padL)/L.bw); return (i>=0&&i<bars.length)?i:-1; }
   var sTip=useState(null), tip=sTip[0], setTip=sTip[1];
   function clampView(v){ var N=bars.length; var n=Math.max(10,Math.min(N,v.n)); var s=Math.max(0,Math.min(N-n,v.s)); return {s:s,n:n}; }
-  function onDown(e){ if(e.button!==0)return; dragRef.current={x:e.clientX,s:viewRef.current?viewRef.current.s:0}; }
+  function onDown(e){ if(e.button!==0)return; dragRef.current={x:e.clientX,y:e.clientY,s:viewRef.current?viewRef.current.s:0}; }
+  /* 2026-11-11 (ユーザー指定): 足をクリック(動かさずに離す)→その日のシミュを始めるか確認 */
+  var sAsk=useState(null), ask=sAsk[0], setAsk=sAsk[1];
+  function askSimAt(i){
+    var b=bars[i]; if(!b)return;
+    var hits=meta.filter(function(m){return m&&m.ticker===code&&_caResolveMetaDate(m)===b.date;})
+      .sort(function(a,c){return (c.savedAt||0)-(a.savedAt||0);});
+    setAsk({date:b.date,m:hits[0]||null});
+  }
   function onMove(e){
     var dr=dragRef.current, L=layRef.current;
     if(dr&&L&&viewRef.current){ setView(clampView({s:dr.s-(e.clientX-dr.x)/L.bw,n:viewRef.current.n})); }
@@ -15389,7 +15397,10 @@ function CaDailyChart(props){
     if(i>=0){ var r=cvRef.current.getBoundingClientRect(); setTip({i:i,x:e.clientX-r.left}); } else setTip(null);
     draw();
   }
-  function onUp(){ dragRef.current=null; }
+  function onUp(e){
+    var dr=dragRef.current; dragRef.current=null;
+    if(dr&&e&&Math.hypot(e.clientX-dr.x,e.clientY-dr.y)<5){ var i=idxAt(e.clientX); if(i>=0)askSimAt(i); }
+  }
   function onLeave(){ dragRef.current=null; hovRef.current=-1; setTip(null); draw(); }
   useEffect(function(){
     var cv=cvRef.current; if(!cv)return;
@@ -15435,6 +15446,23 @@ function CaDailyChart(props){
         ce('div',{style:{fontWeight:700,color:'#eee'}},tb.date.replace(/-/g,'/')+(tb.ca?'（CA）':'')),
         '始 '+caFmtPx(tb.o)+'　高 '+caFmtPx(tb.h),ce('br'),'安 '+caFmtPx(tb.l)+'　終 '+caFmtPx(tb.c)+(prevB&&prevB.c>0?'（'+caFmtPct((tb.c/prevB.c-1)*100)+'）':''),
         ce('br'),'出来高 '+Math.round(tb.v||0).toLocaleString('ja-JP'))
+      ,
+      /* 2026-11-11: 足をクリックしたときの確認 (その日のチャートがあればシミュへ) */
+      ask&&ce('div',{onClick:function(){setAsk(null);},
+          style:{position:'absolute',inset:0,background:'rgba(0,0,0,.45)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:5}},
+        ce('div',{onClick:function(e){e.stopPropagation();},
+            style:{background:'#1c1c22',border:'1px solid #3a3a44',borderRadius:10,padding:'14px 16px',minWidth:260,boxShadow:'0 10px 30px rgba(0,0,0,.6)'}},
+          ce('div',{style:{fontSize:14,fontWeight:700,color:'#eee',marginBottom:10}},
+            (function(){var d=ask.date.split('-'); return Number(d[1])+'/'+Number(d[2]);})()+
+              (ask.m?' のシミュを始めますか？':' のチャートはありません')),
+          ask.m&&ce('div',{style:{fontSize:11,color:'#888',marginBottom:12}},ask.m.name||''),
+          ce('div',{style:{display:'flex',gap:8,justifyContent:'flex-end'}},
+            ask.m&&props.onStartSim&&ce('button',{onClick:function(){var m=ask.m; setAsk(null); props.onStartSim(m);},
+              style:Object.assign({},BTN,{background:'#ea580c',color:'#fff',borderColor:'#ea580c'})},'▶ シミュ開始'),
+            ce('button',{onClick:function(){setAsk(null);},style:Object.assign({},BTN,{background:'#2a2a2a',color:'#ccc'})},ask.m?'キャンセル':'閉じる')
+          )
+        )
+      )
     ),
     bars.length>0&&ce('div',{style:{fontSize:10,color:'#555',padding:'4px 10px 6px'}},'ドラッグ: 横移動 / ホイール: ズーム / Shift+ホイール: 横移動')
   );
@@ -21551,7 +21579,8 @@ function DraftLibrary(props){
                 });
               }
               /* 2026-11-09: 一覧の最上部に銘柄の日足 */
-              var _daily=selTicker?ce(CaDailyChart,{key:'daily-'+selTicker,ticker:selTicker,fbCfg:fbCfg,meta:meta}):null;
+              var _daily=selTicker?ce(CaDailyChart,{key:'daily-'+selTicker,ticker:selTicker,fbCfg:fbCfg,meta:meta,
+                onStartSim:function(m){startSimulation(m);}}):null;
               if(sortMode==='vol_desc'||sortMode==='vol_asc')return [_daily].concat(charts.map(_card));
               var groups={};      /* {ymKey: [m, m, ...]} */
               var orderRef={};    /* {ymKey: 最初に出現した index} */
