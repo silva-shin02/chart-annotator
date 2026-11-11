@@ -8750,9 +8750,12 @@ function ImageAnnotator(props){
       return arr.map(function(s){ return (s&&s.id&&pre[s.id])?Object.assign({},s,{_hidden:true}):s; });
     }
     if(!(simMode&&checkAnalysis&&!checkFullDay))return arr;
-    var c=simCutoffTm;
+    var c=simCutoffTm, preC=simPreIdsRef.current||{};
     return arr.map(function(s){
       if(!s)return s;
+      /* 2026-11-11: シミュ中に書いたもの (開始時に無かった書き込み) は時刻で隠さない。
+         5分足の今の足は 1分足の開示時刻より先の分(足の右半分など)に当たり、書いた直後に消えていた */
+      if(!(s.id&&preC[s.id]))return s;
       var mx=null;
       if(s.anchors&&s.anchors.length){for(var i=0;i<s.anchors.length;i++){var a=s.anchors[i];if(a&&a.tm!=null&&(mx==null||a.tm>mx))mx=a.tm;}}
       var future=(c<0)||(mx!=null&&mx>c);
