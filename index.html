@@ -3603,6 +3603,29 @@ function DataChart(props){
     if(typeof tm!=='number'||isNaN(tm))return tm;
     return tf==='5m'?5*Math.round(tm/5):Math.round(tm);
   }
+  /* 2026-11-11 (ユーザー指定): スタンプの矢印のマグネット。根元→矢先が垂直/水平に近ければ吸い付く。
+     q={rootSide,rootOff,rootFrac,rootVert,tipTm,tipP}、mode='tip'(矢先を動かし中)/'root'(根元を動かし中)。
+     垂直: 矢先の x は足の中央に固定なので、根元(上/下の辺)を矢先の真上/真下へ (rootVert)。
+     水平: 矢先を動かし中なら矢先の値段を根元の高さへ / 根元を動かし中なら根元(左/右の辺)を矢先の高さへ */
+  function ptrMagnet(box,Z,side,q,mode){
+    var L=layoutRef.current; if(!L||!box||!q||typeof q.tipTm!=='number'||q.tipP==null)return q;
+    var tipX=ptrTipPx(minToXWithSide(ptrTipBarTm(q.tipTm,tf),side)), tipY=pToYcss(q.tipP);
+    var rp=pointerRootPtZ(box,q,Z,tipX);
+    var dir=caMagnetDir(tipX-rp.x,tipY-rp.y); if(!dir)return q;
+    var rs=q.rootSide||'bottom', tb=(rs==='top'||rs==='bottom');
+    if(dir==='v'){
+      if(!tb||tipX<box.x||tipX>box.x+box.w)return q;
+      return Object.assign({},q,{rootVert:true,rootOff:(tipX-box.x)/Z,rootFrac:box.w>0?(tipX-box.x)/box.w:0.5});
+    }
+    if(mode==='root'){
+      if(tb||tipY<box.y||tipY>box.y+box.h)return q;
+      return Object.assign({},q,{rootVert:false,rootOff:(tipY-box.y)/Z,rootFrac:box.h>0?(tipY-box.y)/box.h:0.5});
+    }
+    var yp;
+    if(typeof L.dpmax==='number'&&typeof L.pxPerYen==='number'&&L.pxPerYen>0)yp=L.dpmax-(rp.y-L.priceTop)/L.pxPerYen;
+    else yp=L.pmin+(1-(rp.y-L.priceTop)/(L.priceH||1))*(L.pmax-L.pmin);
+    return Object.assign({},q,{tipP:yp});
+  }
   function ptrRootAboveTip(box,tipX,tipY,Z){
     var horiz=null;
     if(tipY>=box.y+box.h)horiz='bottom'; else if(tipY<=box.y)horiz='top';
@@ -3692,9 +3715,11 @@ function DataChart(props){
           tpClk.tm=ptrSnapTipTm(tpClk.tm);
           var rtc=pe.rootManual?{rootSide:s.pointer.rootSide,rootFrac:s.pointer.rootFrac,rootOff:s.pointer.rootOff,rootVert:!!s.pointer.rootVert}
             :ptrRootAboveTip(box,minToXWithSide(tpClk.tm,hit.side),pToYcss(tpClk.p),_Zd);
+          /* 2026-11-11: マグネット (垂直/水平に近ければ吸い付く) */
+          var qc=ptrMagnet(box,_Zd,hit.side,{rootSide:rtc.rootSide,rootFrac:rtc.rootFrac,rootOff:rtc.rootOff,rootVert:rtc.rootVert,tipTm:tpClk.tm,tipP:tpClk.p},'tip');
           commitPointer(pe.strokeId,{
-            rootSide:rtc.rootSide, rootFrac:rtc.rootFrac, rootOff:rtc.rootOff, rootVert:rtc.rootVert,
-            tipTm:tpClk.tm, tipP:tpClk.p
+            rootSide:qc.rootSide, rootFrac:qc.rootFrac, rootOff:qc.rootOff, rootVert:qc.rootVert,
+            tipTm:qc.tipTm, tipP:qc.tipP
           });
           _ptrSchedDraw();
         }
@@ -3743,12 +3768,34 @@ function DataChart(props){
           var rtT=ptrRootAboveTip(boxT,minToXWithSide(d.tipTm,hitT.side),pToYcss(d.tipP),ZT);
           d.rootSide=rtT.rootSide; d.rootFrac=rtT.rootFrac; d.rootOff=rtT.rootOff; d.rootVert=rtT.rootVert;
         }
+      } else if(!d._r0){
+        /* 根元を止めたまま矢先を動かすとき: 掴んだ時点の根元を覚えておく (マグネットで垂直にした根元を次の動きで戻せるように) */
+        d._r0={rootSide:d.rootSide,rootFrac:d.rootFrac,rootOff:d.rootOff,rootVert:d.rootVert};
+      }
+      if(d._r0&&!(peT&&!peT.fromSelect&&!peT.rootManual)){
+        d.rootSide=d._r0.rootSide; d.rootFrac=d._r0.rootFrac; d.rootOff=d._r0.rootOff; d.rootVert=d._r0.rootVert;
+      }
+      /* 2026-11-11: マグネット (垂直/水平に近ければ吸い付く) */
+      var hitMg=findSnippetById(d.strokeId), boxMg=hitMg?getSnippetBoxCss(hitMg.stroke,hitMg.side):null;
+      if(boxMg&&d.tipTm!=null&&d.tipP!=null){
+        var bpMg=(hitMg.stroke.pointer)||{};
+        var qMg={rootSide:d.rootSide!=null?d.rootSide:bpMg.rootSide,rootFrac:d.rootFrac!=null?d.rootFrac:bpMg.rootFrac,
+          rootOff:d.rootOff!=null?d.rootOff:bpMg.rootOff,rootVert:d.rootVert!=null?d.rootVert:!!bpMg.rootVert,tipTm:d.tipTm,tipP:d.tipP};
+        var ZMg=(layoutRef.current&&layoutRef.current.zoom>0)?layoutRef.current.zoom:1;
+        var rMg=ptrMagnet(boxMg,ZMg,hitMg.side,qMg,'tip');
+        if(rMg!==qMg){d.rootSide=rMg.rootSide;d.rootFrac=rMg.rootFrac;d.rootOff=rMg.rootOff;d.rootVert=rMg.rootVert;d.tipP=rMg.tipP;}
       }
     } else if(d.mode==='root'){
       var hit=findSnippetById(d.strokeId);
       if(hit){var box=getSnippetBoxCss(hit.stroke,hit.side);
         if(box){var _Zm=(layoutRef.current&&layoutRef.current.zoom>0)?layoutRef.current.zoom:1;
-          var pr=projectBoxPerimeterOff(box,px,py,_Zm); d.rootSide=pr.side; d.rootFrac=pr.frac; d.rootOff=pr.off; d.rootVert=false;}}
+          var pr=projectBoxPerimeterOff(box,px,py,_Zm); d.rootSide=pr.side; d.rootFrac=pr.frac; d.rootOff=pr.off; d.rootVert=false;
+          /* 2026-11-11: マグネット (根元→矢先が垂直/水平に近ければ吸い付く) */
+          var bpR=hit.stroke.pointer||{};
+          var qR={rootSide:d.rootSide,rootFrac:d.rootFrac,rootOff:d.rootOff,rootVert:false,
+            tipTm:d.tipTm!=null?d.tipTm:bpR.tipTm,tipP:d.tipP!=null?d.tipP:bpR.tipP};
+          var rR=ptrMagnet(box,_Zm,hit.side,qR,'root');
+          if(rR!==qR){d.rootSide=rR.rootSide;d.rootFrac=rR.rootFrac;d.rootOff=rR.rootOff;d.rootVert=rR.rootVert;}}}
     }
     _ptrSchedDraw();
     return true;
@@ -3960,13 +4007,23 @@ function DataChart(props){
     else return {tm:sTM, p:cP};       // 垂直: 時刻固定
   }
 
-  /* 2026-11-05: 既存の矢印(矢印ツール)の端点つまみを動かすときも、✛ ON なら もう片方の端点から垂直/水平 (近い方) に吸着 */
+  /* 2026-11-11: マグネット (✛ OFF でも常に)。もう片方の端点から見て垂直/水平に近ければ (±CA_MAGNET_DEG°) そちらへ */
+  function magnetSnap(sTM,sP,cTM,cP,side){
+    if(!layoutRef.current)return {tm:cTM,p:cP};
+    side=side||'cur';
+    var dir=caMagnetDir(minToXWithSide(cTM,side)-minToXWithSide(sTM,side), pToYcss(cP)-pToYcss(sP));
+    if(dir==='h')return {tm:cTM,p:sP};
+    if(dir==='v')return {tm:sTM,p:cP};
+    return {tm:cTM,p:cP};
+  }
+  /* 2026-11-05: 既存の矢印(矢印ツール)の端点つまみを動かすときも、✛ ON なら もう片方の端点から垂直/水平 (近い方) に吸着
+     2026-11-11: ✛ OFF のときは垂直/水平に近いときだけ吸い付く (マグネット) */
   function handleXformSnap(s,handleId,dtm,dp){
     var ns=applyHandleTransform(s,handleId,dtm,dp);
-    if(!props.horiz||!ns||ns===s||(s.type||s.tool)!=='arrow'||!ns.anchors||ns.anchors.length<2)return ns;
+    if(!ns||ns===s||(s.type||s.tool)!=='arrow'||!ns.anchors||ns.anchors.length<2)return ns;
     var mi=(handleId==='p1')?0:(handleId==='p2')?1:-1; if(mi<0)return ns;
     var fx=ns.anchors[1-mi], mv=ns.anchors[mi];
-    var sn=applyHorizSnap(fx.tm,fx.p,mv.tm,mv.p);
+    var sn=props.horiz?applyHorizSnap(fx.tm,fx.p,mv.tm,mv.p):magnetSnap(fx.tm,fx.p,mv.tm,mv.p,s.side||'cur');
     var an=ns.anchors.slice(); an[mi]=Object.assign({},mv,{tm:sn.tm,p:sn.p});
     return Object.assign({},ns,{anchors:an});
   }
@@ -4454,6 +4511,10 @@ function DataChart(props){
           if(props.horiz){
             var snapped=applyHorizSnap(drawRef.current.sTM,drawRef.current.sP,etm,ep);
             etm=snapped.tm; ep=snapped.p;
+          } else if(drawTool==='arrow'){
+            /* 2026-11-11: 矢印を描く途中も、垂直/水平に近ければ吸い付く */
+            var mgD=magnetSnap(drawRef.current.sTM,drawRef.current.sP,etm,ep,dSide);
+            etm=mgD.tm; ep=mgD.p;
           }
           drawRef.current.cTM=etm;
           drawRef.current.cP=ep;
@@ -7294,6 +7355,17 @@ function snipTimeStr(tm){
 /* 2026-10-18: 矢先を描く x = 足の中央 (時刻表示と同じく分に丸める・5分足は一番近い5分足)。
    ヒゲと同じく Math.round(x)+0.5 に合わせる (ローソクのヒゲは drawBarSet でこの位置に1px で描く)。
    矢先の時刻を足に吸着する前に貼った旧データも、描くときは足の中央にそろう。 */
+/* 2026-11-11 (ユーザー指定): 矢印のマグネット。垂直/水平から CA_MAGNET_DEG 度以内なら吸い付く。
+   dx,dy = 画面上(CSS px)の差。'h'=水平 / 'v'=垂直 / null。短すぎる(10px未満)ときは吸わない */
+var CA_MAGNET_DEG=5;
+function caMagnetDir(dx,dy){
+  var ax=Math.abs(dx), ay=Math.abs(dy);
+  if(Math.hypot(ax,ay)<10)return null;
+  var T=Math.tan(CA_MAGNET_DEG*Math.PI/180);
+  if(ay<=ax*T)return 'h';
+  if(ax<=ay*T)return 'v';
+  return null;
+}
 function ptrTipBarTm(tipTm, tf){
   if(typeof tipTm!=='number'||isNaN(tipTm))return tipTm;
   return tf==='5m'?5*Math.round(tipTm/5):Math.round(tipTm);
