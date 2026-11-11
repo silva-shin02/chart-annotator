@@ -15384,6 +15384,8 @@ function CaDailyChart(props){
   function onDown(e){ if(e.button!==0)return; dragRef.current={x:e.clientX,y:e.clientY,s:viewRef.current?viewRef.current.s:0}; }
   /* 2026-11-11 (ユーザー指定): 足をクリック(動かさずに離す)→その日のシミュを始めるか確認 */
   var sAsk=useState(null), ask=sAsk[0], setAsk=sAsk[1];
+  /* 2026-11-11: 'YYYY-MM-DD' → '(月)' (ユーザー指定・吹き出しと確認画面) */
+  function dowOf(ds){ var a=String(ds||'').split('-'); if(a.length<3)return ''; var d=new Date(Number(a[0]),Number(a[1])-1,Number(a[2])); return isNaN(d)?'':'('+'日月火水木金土'.charAt(d.getDay())+')'; }
   function askSimAt(i){
     var b=bars[i]; if(!b)return;
     var hits=meta.filter(function(m){return m&&m.ticker===code&&_caResolveMetaDate(m)===b.date;})
@@ -15443,7 +15445,7 @@ function CaDailyChart(props){
             onMouseDown:onDown,onMouseMove:onMove,onMouseUp:onUp,onMouseLeave:onLeave}),
       tb&&ce('div',{style:{position:'absolute',top:8,left:Math.min(Math.max(8,tip.x+12),W-200),pointerEvents:'none',
           background:'rgba(20,20,26,.92)',border:'1px solid #333',borderRadius:6,padding:'5px 8px',fontSize:11,color:'#ccc',lineHeight:1.6,fontVariantNumeric:'tabular-nums',whiteSpace:'nowrap'}},
-        ce('div',{style:{fontWeight:700,color:'#eee'}},tb.date.replace(/-/g,'/')+(tb.ca?'（CA）':'')),
+        ce('div',{style:{fontWeight:700,color:'#eee'}},tb.date.replace(/-/g,'/')+dowOf(tb.date)+(tb.ca?'（CA）':'')),
         '始 '+caFmtPx(tb.o)+'　高 '+caFmtPx(tb.h),ce('br'),'安 '+caFmtPx(tb.l)+'　終 '+caFmtPx(tb.c)+(prevB&&prevB.c>0?'（'+caFmtPct((tb.c/prevB.c-1)*100)+'）':''),
         ce('br'),'出来高 '+Math.round(tb.v||0).toLocaleString('ja-JP'))
       ,
@@ -15453,7 +15455,7 @@ function CaDailyChart(props){
         ce('div',{onClick:function(e){e.stopPropagation();},
             style:{background:'#1c1c22',border:'1px solid #3a3a44',borderRadius:10,padding:'14px 16px',minWidth:260,boxShadow:'0 10px 30px rgba(0,0,0,.6)'}},
           ce('div',{style:{fontSize:14,fontWeight:700,color:'#eee',marginBottom:10}},
-            (function(){var d=ask.date.split('-'); return Number(d[1])+'/'+Number(d[2]);})()+
+            (function(){var d=ask.date.split('-'); return Number(d[1])+'/'+Number(d[2])+dowOf(ask.date);})()+
               (ask.m?' のシミュを始めますか？':' のチャートはありません')),
           ask.m&&ce('div',{style:{fontSize:11,color:'#888',marginBottom:12}},ask.m.name||''),
           ce('div',{style:{display:'flex',gap:8,justifyContent:'flex-end'}},
