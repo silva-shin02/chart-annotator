@@ -4097,6 +4097,10 @@ function DataChart(props){
       lassoPathRef.current=null;       // 投げ縄パス描画をキャンセル
       lassoMoveRef.current=null;       // 投げ縄マルチ移動をキャンセル
       moveRef.current=null;            // ストローク単体移動をキャンセル
+      /* 2026-11-11: 移動中は元の位置の書き込みを隠している (moveHint) → 取り消したので戻す
+         (旧: 既存テキストを掴んで少し動かしてから左右同時押しすると、そのテキストが見えなくなったままだった) */
+      setMoveHint(null);
+      drawCrosshair();
       return;
     }
     /* 2026-04-22: text/lasso ツール時のみ既存textをhitしたらeditor overlay扱い
