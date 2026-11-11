@@ -733,6 +733,9 @@ var CA_SIM_START_B5X2='b5x2';
 var CA_SIM_START_MIN_KEY='ca_sim_start_min_v4';
 /* 2026-10-30: シミュ開始時に前日チャートを自動で並べるか (既定=並べない・ユーザー指定) */
 var CA_SIM_PREV_REF_KEY='ca_sim_prev_ref_v1';
+/* 2026-11-11: シミュの対象から「有効シグナルなし」「ノーシグナル」のタグの日を除くか (それぞれ・既定=両方除く・ユーザー指定)
+   値 = JSON {noeff:bool, nosig:bool} */
+var CA_SIM_EXCL_KEY='ca_sim_excl_v1';
 /* 2026-09-17: 価格帯別出来高の表示ON/OFF・集計モード ('visible'=表示範囲 / 'until'=寄り〜指定時刻)。全チャート共通 */
 var CA_VP_ON_KEY='ca_vp_on_v1';
 var CA_VP_MODE_KEY='ca_vp_mode_v1';
@@ -752,7 +755,7 @@ var CA_VP_MAXW_FRAC=0.40;
 var CA_VP_SRC_UI=true;
 var CA_SYNC_PREF_KEYS=[CA_PRICE_PX_KEY,CA_AUTO_PAN_KEY,CA_CHART_BG_KEY,CA_TICKER_CODES_KEY,
   CA_INDICATOR_VIS_KEY,CA_FIT_MODE_KEY,CA_DEFAULT_TF_KEY,CA_DRAW_DEFAULTS_KEY,CA_PEN_ONLY_KEY,
-  CA_PRICE_GRID_STEP_KEY,CA_SIM_START_MIN_KEY,CA_SIM_PREV_REF_KEY,CA_VP_ON_KEY,CA_VP_MODE_KEY,CA_VP_BIN_KEY,CA_VP_SRC_KEY,CA_VP_AVG_KEY,
+  CA_PRICE_GRID_STEP_KEY,CA_SIM_START_MIN_KEY,CA_SIM_PREV_REF_KEY,CA_SIM_EXCL_KEY,CA_VP_ON_KEY,CA_VP_MODE_KEY,CA_VP_BIN_KEY,CA_VP_SRC_KEY,CA_VP_AVG_KEY,
   'ca_search_words_v1','scalping_annot_presets_v1','annot_quickcolors_v1'];
 var CA_PREF_EVENTS={};
 CA_PREF_EVENTS[CA_PRICE_PX_KEY]='ca_price_px_changed';
@@ -1091,6 +1094,30 @@ function caSaveSimPrevRef(on){
   try{localStorage.setItem(CA_SIM_PREV_REF_KEY,on?'1':'0');}catch(e){caStorageWarn();}
   caPrefPush(CA_SIM_PREV_REF_KEY);
   return !!on;
+}
+function caLoadSimExcl(){
+  var d={noeff:true,nosig:true};
+  try{var v=JSON.parse(localStorage.getItem(CA_SIM_EXCL_KEY)); if(v&&typeof v==='object'){
+    if(typeof v.noeff==='boolean')d.noeff=v.noeff; if(typeof v.nosig==='boolean')d.nosig=v.nosig; }}catch(e){}
+  return d;
+}
+function caSaveSimExcl(ex){
+  try{localStorage.setItem(CA_SIM_EXCL_KEY,JSON.stringify({noeff:!!ex.noeff,nosig:!!ex.nosig}));}catch(e){caStorageWarn();}
+  caPrefPush(CA_SIM_EXCL_KEY);
+}
+/* そのチャートをシミュの対象から外すか (タグは名前で一致・表記ゆれは _caTagPresetKey) */
+var CA_SIM_EXCL_NAMES={noeff:'有効シグナルなし',nosig:'ノーシグナル'};
+function caSimExclTagIds(ex){
+  var want={}, ids={};
+  if(ex.noeff)want[_caTagPresetKey(CA_SIM_EXCL_NAMES.noeff)]=true;
+  if(ex.nosig)want[_caTagPresetKey(CA_SIM_EXCL_NAMES.nosig)]=true;
+  caLoadTagDefs().forEach(function(d){ if(d&&d.id&&want[_caTagPresetKey(d.name)])ids[d.id]=true; });
+  return ids;
+}
+function caSimFilterMeta(list,ex){
+  ex=ex||caLoadSimExcl(); if(!ex.noeff&&!ex.nosig)return list;
+  var ids=caSimExclTagIds(ex), tm=caLoadTagMap();
+  return list.filter(function(m){ var t=tm[m.id]||[]; for(var i=0;i<t.length;i++){if(ids[t[i]])return false;} return true; });
 }
 function caSaveSimStartMin(n){
   if(n===CA_SIM_START_B5X2){
@@ -18065,7 +18092,11 @@ function CaSimPicker(props){
      抽選・一覧に渡す実効期間 effP は '' | 'YYYY' | 'YYYY-MM' の前方一致キー。 */
   var sY=useState(''); var selY=sY[0],setSelY=sY[1];
   var sM=useState(''); var selM=sM[0],setSelM=sM[1];
-  var ofTicker=meta.filter(function(m){return m.ticker===selT;});
+  var sEx=useState(caLoadSimExcl); var simEx=sEx[0],setSimEx=sEx[1];
+  function toggleEx(k){ var n=Object.assign({},simEx); n[k]=!n[k]; setSimEx(n); caSaveSimExcl(n); }
+  var ofTickerAll=meta.filter(function(m){return m.ticker===selT;});
+  var ofTicker=caSimFilterMeta(ofTickerAll,simEx);   /* 2026-11-11: 除くタグの日を抜く (年・月の日数・一覧・抽選すべて) */
+  var exCnt=ofTickerAll.length-ofTicker.length;
   var yrCnt={},ymCnt={};
   ofTicker.forEach(function(m){
     var mo=_caSimMonthOf(m); if(!mo)return;
@@ -18111,6 +18142,17 @@ function CaSimPicker(props){
                 style:Object.assign({},BT2,{fontSize:12,fontWeight:700,padding:"5px 12px",borderRadius:8,
                   background:on?"#ea580c":"#2a2a2a",color:on?"#fff":"#bbb"})},tk);
             })
+        ),
+        /* 2026-11-11: 「有効シグナルなし」「ノーシグナル」の日を対象から除く (それぞれ・状態は保存) */
+        selT&&ce("div",{style:{padding:"8px 14px",borderBottom:"1px solid #2a2a2a",display:"flex",gap:14,
+          alignItems:"center",flexWrap:"wrap",flexShrink:0}},
+          ce("span",{style:{fontSize:10,fontWeight:700,color:"#777"}},"除く"),
+          [['noeff','有効シグナルなし'],['nosig','ノーシグナル']].map(function(it){
+            return ce("label",{key:it[0],style:{display:"flex",alignItems:"center",gap:5,fontSize:12,color:"#ccc",cursor:"pointer"}},
+              ce("input",{type:"checkbox",checked:!!simEx[it[0]],onChange:function(){toggleEx(it[0]);},style:{cursor:"pointer"}}),
+              "「"+it[1]+"」の日を除く");
+          }),
+          exCnt>0&&ce("span",{style:{fontSize:10,color:"#888"}},"（"+exCnt+"日を除外中）")
         ),
         /* 2026-08-02: 年セレクタ (この銘柄に実在する年だけ・新しい順)。ランダム抽選と日付一覧の両方に効く */
         selT&&yrList.length>0&&ce("div",{style:{padding:"9px 14px",borderBottom:"1px solid #2a2a2a",display:"flex",gap:6,
@@ -21829,6 +21871,7 @@ function App(){
     if(!ticker)return;
     var pd=period||'';
     var all=caLoadMeta().filter(function(m){return m.ticker===ticker;});
+    all=caSimFilterMeta(all);   /* 2026-11-11: 「有効シグナルなし」「ノーシグナル」を除く設定 (シミュの選択画面のチェック) */
     if(pd)all=all.filter(function(m){var mo=_caSimMonthOf(m); return !!mo&&mo.indexOf(pd)===0;});
     if(!all.length){try{window.caToast&&window.caToast('「'+ticker+'」'+(pd?('の'+_caSimPeriodLabel(pd)):'')+'のチャートがありません','error');}catch(e){}return;}
     var pool=all;
