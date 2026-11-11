@@ -41,6 +41,8 @@ canvas{image-rendering:high-quality;-webkit-image-rendering:high-quality}
 }
 .ca-ptr-frame{animation:caPtrPulse 1.2s ease-out infinite;}
 @keyframes caPtrBanner{0%{opacity:0;transform:translateY(4px);}100%{opacity:1;transform:translateY(0);}}
+/* 2026-11-11: テキスト編集中の選択範囲は青い塗りにしない (色の変化が見えるよう、下敷きで点線の囲みを出す) */
+.ca-ati-nosel::selection{background:transparent;color:transparent;}
 </style>
 </head>
 <body>
@@ -11768,6 +11770,7 @@ function ImageAnnotator(props){
             },
             autoFocus:true,
             defaultValue:ati.text||"",
+            className:ati._snippet?undefined:"ca-ati-nosel",
             /* 2026-04-22: boxW未指定時は wrap="off" で soft wrap を完全無効化 */
             wrap:ctrlBoxW?"soft":"off",
             rows:1,
@@ -11778,6 +11781,7 @@ function ImageAnnotator(props){
             /* 2026-10-26: 選択範囲の表示 (「色(選択部分)」) を更新。選択を外しただけでは select が来ないので、離した時/キー操作でも読む */
             onSelect:function(e){_atiReadSel(e.target);},
             onMouseUp:function(e){_atiReadSel(e.target);},
+            onMouseMove:function(e){ if(e.buttons&1)_atiReadSel(e.target); },   /* 2026-11-11: ドラッグ中も点線の囲みを追従 */
             onKeyUp:function(e){_atiReadSel(e.target);},
             onTouchEnd:function(e){var t=e.target; setTimeout(function(){_atiReadSel(t);},0);},
             onScroll:function(){syncAtiOverlays();},
@@ -11816,7 +11820,7 @@ function ImageAnnotator(props){
               background:"transparent",
               border:"none",
               /* 2026-10-26: 部分スタイルがあるときは文字を透明にし、下敷き(atiMirrorRef)の色つき文字を見せる */
-              color:_atiHasSpans?"transparent":(ati.color||"#ff3b30"),
+              color:(_atiHasSpans||_atiHasSel)?"transparent":(ati.color||"#ff3b30"),
               caretColor:ati.color||"#ff3b30",
               fontSize:((ati.fontSize||15)*atiZoom)+"px",
               fontWeight:ati.fontBold?"700":"400",
@@ -11835,7 +11839,8 @@ function ImageAnnotator(props){
             }
           }),
           /* 2026-10-26: 部分スタイルの下敷き (textarea と同じ位置・字形で色つき表示。入力は textarea が受ける) */
-          _atiHasSpans&&ce("div",{
+          /* 2026-11-11: 文字を選んでいる間も下敷きを出し、選んだ部分を点線で囲む (青い塗りの代わり) */
+          (_atiHasSpans||_atiHasSel)&&ce("div",{
             ref:function(el){
               atiMirrorRef.current=el;
               if(el)requestAnimationFrame(syncAtiOverlays);
@@ -11850,6 +11855,23 @@ function ImageAnnotator(props){
                 var c=(a[i].c!=null)?a[i].c:null, b=(a[i].b!=null)?a[i].b:null;
                 if(cur&&cur.c===c&&cur.b===b){cur.t+=t[i];continue;}
                 cur={t:t[i],c:c,b:b}; out.push(cur);
+              }
+              function grp(i0,i1,key){   /* [i0,i1) の文字を色/太字ごとの span に */
+                var res=[], cg=null;
+                for(var i=i0;i<i1;i++){
+                  var c=(a[i].c!=null)?a[i].c:null, b=(a[i].b!=null)?a[i].b:null;
+                  if(cg&&cg.c===c&&cg.b===b){cg.t+=t[i];continue;}
+                  cg={t:t[i],c:c,b:b}; res.push(cg);
+                }
+                return res.map(function(g,gi){
+                  return ce("span",{key:key+gi,style:{color:g.c||undefined,fontWeight:g.b==null?undefined:(g.b?"700":"400")}},g.t);
+                });
+              }
+              if(_atiHasSel){
+                var s0=Math.max(0,Math.min(t.length,atiSel[0])), s1=Math.max(s0,Math.min(t.length,atiSel[1]));
+                return grp(0,s0,'a').concat([
+                  ce("span",{key:'sel',style:{outline:"1.5px dashed #ffffff",outlineOffset:"1px",borderRadius:2}},grp(s0,s1,'s'))
+                ],grp(s1,t.length,'b'),[ce("span",{key:'z'},"\u200b")]);
               }
               return out.map(function(g,gi){
                 return ce("span",{key:gi,style:{color:g.c||undefined,fontWeight:g.b==null?undefined:(g.b?"700":"400")}},g.t);
