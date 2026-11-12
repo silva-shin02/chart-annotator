@@ -15493,7 +15493,8 @@ function CaDailyChart(props){
 }
 
 /* 2026-11-09: 横長カードの右側の幅 */
-var CA_CARD_SIDE_W=440;
+var CA_CARD_SIDE_W=300;  /* 2026-11-12: 440→300 (ユーザー指定・その分サムネを+140px) */
+var CA_CARD_THUMB_W=function(){return (IS_TOUCH?450:510)+140;};  /* 2026-11-12: サムネ幅 510→650 (タッチ 450→590)・縦横比は保つ */
 function CaChartCard(props){
   var m=props.m;
   var isHighlight=!!props.isHighlight;
@@ -15505,7 +15506,10 @@ function CaChartCard(props){
   var BT2={border:'none',background:'none',cursor:'pointer',fontFamily:'inherit',padding:0};
 
   /* メモ state */
-  var sMO=useState(true); var memoOpen=sMO[0],setMemoOpen=sMO[1];   /* 2026-11-09: メモは既定で開いた状態 (ユーザー指定) */
+  var sMO=useState(function(){   /* 2026-11-12: メモに書き込みがあるカードだけ既定で開く (ユーザー指定。旧 2026-11-09: 常に開く) */
+    var h=caGetChartMemo(m.id)||'';
+    return h.replace(/<[^>]*>/g,'').replace(/&nbsp;/g,' ').replace(/\s+/g,'').length>0;
+  }); var memoOpen=sMO[0],setMemoOpen=sMO[1];
   var sMH=useState(function(){return caGetChartMemo(m.id);}); var memoHtml=sMH[0],setMemoHtml=sMH[1];
   var hasContent=_caMemoHasContent(memoHtml);
 
@@ -15573,13 +15577,13 @@ function CaChartCard(props){
     'data-ca-highlight':isHighlight?'1':null,
     'data-ca-card-id':m.id,   /* 2026-06-25: 一覧スクロール復元のアンカー特定用 */
     /* 2026-11-09: 横長カード (ユーザー指定)。左=サムネ・右=タイトル/4本値/タグ/予定/ボタン。幅が足りなければ右側はサムネの下に回る */
-    style:{width:(IS_TOUCH?450:510)+CA_CARD_SIDE_W,maxWidth:'100%',background:isHighlight?'#1c2e1a':'#1a1a1a',borderRadius:10,
+    style:{width:CA_CARD_THUMB_W()+CA_CARD_SIDE_W,maxWidth:'100%',background:isHighlight?'#1c2e1a':'#1a1a1a',borderRadius:10,
       border:isHighlight?'2px solid #4ade80':'1px solid #2a2a2a',overflow:'hidden',
       flexShrink:0,boxShadow:isHighlight?'0 0 0 3px rgba(74,222,128,0.25)':'none'}},
     ce('div',{style:{display:'flex',flexWrap:'wrap',alignItems:'stretch'}},
 
     /* サムネイル部分 */
-    ce('div',{style:{position:'relative',width:IS_TOUCH?450:510,maxWidth:'100%',flexShrink:0},onClick:function(){onOpen(m.id);}},
+    ce('div',{style:{position:'relative',width:CA_CARD_THUMB_W(),maxWidth:'100%',flexShrink:0},onClick:function(){onOpen(m.id);}},
       isHighlight&&ce('div',{style:{position:'absolute',top:6,left:6,zIndex:2,padding:'3px 8px',
         background:'#4ade80',color:'#0a1f0a',fontSize:10,fontWeight:700,borderRadius:4,letterSpacing:0.3}},
         '📅 '+highlightDate),
