@@ -15580,10 +15580,10 @@ function CaChartCard(props){
     style:{width:CA_CARD_THUMB_W()+CA_CARD_SIDE_W,maxWidth:'100%',background:isHighlight?'#1c2e1a':'#1a1a1a',borderRadius:10,
       border:isHighlight?'2px solid #4ade80':'1px solid #2a2a2a',overflow:'hidden',
       flexShrink:0,boxShadow:isHighlight?'0 0 0 3px rgba(74,222,128,0.25)':'none'}},
-    ce('div',{style:{display:'flex',flexWrap:'wrap',alignItems:'stretch'}},
+    ce('div',{style:{display:'flex',flexWrap:'nowrap',alignItems:'stretch'}},   /* 2026-11-12: 常にチャート左・情報右 (ユーザー指定)。幅が足りなければサムネが縮む */
 
     /* サムネイル部分 */
-    ce('div',{style:{position:'relative',width:CA_CARD_THUMB_W(),maxWidth:'100%',flexShrink:0},onClick:function(){onOpen(m.id);}},
+    ce('div',{style:{position:'relative',width:CA_CARD_THUMB_W(),minWidth:0,flex:'0 1 auto'},   /* 右側の最低200pxより狭いときだけ縮む */onClick:function(){onOpen(m.id);}},
       isHighlight&&ce('div',{style:{position:'absolute',top:6,left:6,zIndex:2,padding:'3px 8px',
         background:'#4ade80',color:'#0a1f0a',fontSize:10,fontWeight:700,borderRadius:4,letterSpacing:0.3}},
         '📅 '+highlightDate),
@@ -15607,13 +15607,13 @@ function CaChartCard(props){
     ),
 
     /* 右側 */
-    ce('div',{style:{flex:'1 1 280px',minWidth:0,display:'flex',flexDirection:'column',borderLeft:'1px solid #242424'}},
+    ce('div',{style:{flex:'1 1 200px',minWidth:200,display:'flex',flexDirection:'column',borderLeft:'1px solid #242424'}},
 
     /* タイトル・日付行 */
-    ce('div',{style:{padding:'10px 14px 4px 14px',display:'flex',alignItems:'flex-start',gap:5}},
+    ce('div',{style:{padding:'8px 10px 3px 10px',display:'flex',alignItems:'flex-start',gap:5}},
       /* タイトル+日付 (flex:1, クリックで開く) */
       ce('div',{style:{flex:1,minWidth:0},onClick:function(){onOpen(m.id);}},
-        ce('div',{style:{fontSize:14,fontWeight:700,color:'#e5e5e5',
+        ce('div',{style:{fontSize:13,fontWeight:700,color:'#e5e5e5',
           overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',cursor:'pointer'}},
           m.name+_metaDowLabel(m)),
         ce('div',{style:{fontSize:11,color:isHighlight?'#86efac':'#666',marginTop:2}},
@@ -15624,7 +15624,7 @@ function CaChartCard(props){
     /* 2026-11-09: 4本値の1行 (レイアウト案A)。前日終値 / 始値(ギャップ%) / 高値 / 安値 / 終値(前日比%) */
     (function(){
       var px=props.dayPx, pv=props.prevPx, pc=(pv&&pv.c>0)?pv.c:null;
-      if(px===undefined)return ce('div',{style:{padding:'2px 14px 8px 14px',fontSize:13,color:'#555'}},'…');
+      if(px===undefined)return ce('div',{style:{padding:'2px 10px 6px 10px',fontSize:12,color:'#555'}},'…');
       if(!px)return null;
       function it(lb,v,extra){
         return ce('span',{style:{whiteSpace:'nowrap'}},lb+' ',
@@ -15632,7 +15632,7 @@ function CaChartCard(props){
       }
       function pct(v,paren){ return ce('b',{style:{marginLeft:4,fontWeight:700,color:v>=0?'#ff4d6d':'#22d3c5'}},paren?'（'+caFmtPct(v)+'）':caFmtPct(v)); }
       /* 2026-11-09: 横長カードで3段に。前終 / 始(ギャップ)・高 / 終(前日比)・安 */
-      return ce('div',{style:{padding:'4px 14px 8px 14px',display:'grid',gridTemplateColumns:'auto auto',justifyContent:'start',gap:'4px 28px',fontSize:14,color:'#8a8a8a',fontVariantNumeric:'tabular-nums'}},
+      return ce('div',{style:{padding:'3px 10px 6px 10px',display:'grid',gridTemplateColumns:'auto auto',justifyContent:'start',gap:'3px 16px',fontSize:12,color:'#8a8a8a',fontVariantNumeric:'tabular-nums'}},
         pc!=null?it('前終',pc):null, pc!=null?ce('span',null):null,
         it('始',px.o,pc!=null?pct((px.o/pc-1)*100,true):null),   /* 2026-11-09: ギャップは括弧で (ユーザー指定) */
         it('高',px.h),
@@ -15643,12 +15643,12 @@ function CaChartCard(props){
 
     /* タグチップ行 (タグがある場合のみ表示) */
     tagIds.length>0&&ce('div',{
-        style:{padding:'0 14px 8px 14px',display:'flex',flexWrap:'wrap',gap:5}},
+        style:{padding:'0 10px 6px 10px',display:'flex',flexWrap:'wrap',gap:4}},
       tagIds.map(function(tid){
         var td=tagDefsById[tid];
         if(!td)return null;
         return ce('span',{key:tid,
-          style:{fontSize:12,padding:'2px 9px',borderRadius:11,
+          style:{fontSize:11,padding:'1px 8px',borderRadius:10,
             background:td.color,color:'#fff',fontWeight:700,
             whiteSpace:'nowrap',letterSpacing:0.2,
             boxShadow:'0 1px 3px rgba(0,0,0,.4)'}},
@@ -15663,7 +15663,7 @@ function CaChartCard(props){
       var catMap=_snReadCategoriesMap();
       var shown=snEvents.slice(0,5);
       var rest=snEvents.length-shown.length;
-      return ce('div',{style:{padding:'5px 14px 6px 14px',borderTop:'1px solid #222'}},
+      return ce('div',{style:{padding:'4px 10px 5px 10px',borderTop:'1px solid #222'}},
         ce('div',{style:{fontSize:11,color:'#666',marginBottom:3,letterSpacing:0.3}},'📅 SNノート予定'),
         shown.map(function(ev){
           var cat=catMap[ev.categoryId]||null;
@@ -15685,7 +15685,7 @@ function CaChartCard(props){
     })(),
 
     /* アクションボタン行 (メモ・タグ) — 右側の下端に */
-    ce('div',{style:{padding:'6px 14px 12px 14px',display:'flex',flexWrap:'wrap',gap:6,alignItems:'center',marginTop:'auto'}},
+    ce('div',{style:{padding:'5px 10px 10px 10px',display:'flex',flexWrap:'wrap',gap:5,alignItems:'center',marginTop:'auto'}},
       /* メモ開閉ボタン + 赤丸 */
       ce('button',{
         onClick:function(e){
@@ -15693,7 +15693,7 @@ function CaChartCard(props){
           setMemoOpen(function(o){return !o;});
           setTagOpen(false);
         },
-        style:{position:'relative',padding:'5px 10px',fontSize:12,fontWeight:700,
+        style:{position:'relative',padding:'4px 8px',fontSize:11,fontWeight:700,
           background:memoOpen?'#1e1b4b':'#222',
           color:memoOpen?'#a5b4fc':'#666',
           border:memoOpen?'1px solid #4338CA':'1px solid #333',
@@ -15712,7 +15712,7 @@ function CaChartCard(props){
           setTagOpen(function(o){return !o;});
           setMemoOpen(false);
         },
-        style:{padding:'5px 10px',fontSize:12,fontWeight:700,
+        style:{padding:'4px 8px',fontSize:11,fontWeight:700,
           background:tagOpen?'#1a2e1a':'#222',
           color:tagOpen?'#86efac':'#666',
           border:tagOpen?'1px solid #22c55e':'1px solid #333',
@@ -15726,7 +15726,7 @@ function CaChartCard(props){
           onStartSim(m);
         },
         title:'この日をシミュレーション(練習)モードで開く',
-        style:{padding:'5px 10px',fontSize:12,fontWeight:700,
+        style:{padding:'4px 8px',fontSize:11,fontWeight:700,
           background:'#7c2d12',
           color:'#fed7aa',
           border:'1px solid #9a3412',
@@ -15737,7 +15737,7 @@ function CaChartCard(props){
       props.onSimilar&&ce('button',{
         onClick:function(e){ e.stopPropagation(); props.onSimilar(m); },
         title:'このチャートの動きと似た場面を、同じ銘柄の他の日の前場から探す',
-        style:{padding:'5px 10px',fontSize:12,fontWeight:700,
+        style:{padding:'4px 8px',fontSize:11,fontWeight:700,
           background:'#1e293b',color:'#bae6fd',border:'1px solid #334155',
           borderRadius:5,cursor:'pointer',flexShrink:0,lineHeight:1.4}},
         '≈ 類似チャート検索'
