@@ -738,6 +738,8 @@ var CA_SIM_PREV_REF_KEY='ca_sim_prev_ref_v1';
 var CA_SIM_EXCL_KEY='ca_sim_excl_v1';
 /* 2026-11-16: シミュの対象をタグで絞る (選んだタグが全部付いている日だけ=AND・ユーザー指定)。値 = JSON [tagId,...] */
 var CA_SIM_INCL_KEY='ca_sim_incl_v1';
+/* 2026-11-16: 絞るタグの組み合わせ方 'and'=全部付いている日 (既定) / 'or'=どれかが付いている日 */
+var CA_SIM_INCL_MODE_KEY='ca_sim_incl_mode_v1';
 /* 2026-09-17: 価格帯別出来高の表示ON/OFF・集計モード ('visible'=表示範囲 / 'until'=寄り〜指定時刻)。全チャート共通 */
 var CA_VP_ON_KEY='ca_vp_on_v1';
 var CA_VP_MODE_KEY='ca_vp_mode_v1';
@@ -757,7 +759,7 @@ var CA_VP_MAXW_FRAC=0.40;
 var CA_VP_SRC_UI=true;
 var CA_SYNC_PREF_KEYS=[CA_PRICE_PX_KEY,CA_AUTO_PAN_KEY,CA_CHART_BG_KEY,CA_TICKER_CODES_KEY,
   CA_INDICATOR_VIS_KEY,CA_FIT_MODE_KEY,CA_DEFAULT_TF_KEY,CA_DRAW_DEFAULTS_KEY,CA_PEN_ONLY_KEY,
-  CA_PRICE_GRID_STEP_KEY,CA_SIM_START_MIN_KEY,CA_SIM_PREV_REF_KEY,CA_SIM_EXCL_KEY,CA_SIM_INCL_KEY,CA_VP_ON_KEY,CA_VP_MODE_KEY,CA_VP_BIN_KEY,CA_VP_SRC_KEY,CA_VP_AVG_KEY,
+  CA_PRICE_GRID_STEP_KEY,CA_SIM_START_MIN_KEY,CA_SIM_PREV_REF_KEY,CA_SIM_EXCL_KEY,CA_SIM_INCL_KEY,CA_SIM_INCL_MODE_KEY,CA_VP_ON_KEY,CA_VP_MODE_KEY,CA_VP_BIN_KEY,CA_VP_SRC_KEY,CA_VP_AVG_KEY,
   'ca_search_words_v1','scalping_annot_presets_v1','annot_quickcolors_v1'];
 var CA_PREF_EVENTS={};
 CA_PREF_EVENTS[CA_PRICE_PX_KEY]='ca_price_px_changed';
@@ -1124,18 +1126,28 @@ function caSaveSimIncl(arr){
   try{localStorage.setItem(CA_SIM_INCL_KEY,JSON.stringify(arr||[]));}catch(e){caStorageWarn();}
   caPrefPush(CA_SIM_INCL_KEY);
 }
+function caLoadSimInclMode(){
+  try{return localStorage.getItem(CA_SIM_INCL_MODE_KEY)==='or'?'or':'and';}catch(e){return 'and';}
+}
+function caSaveSimInclMode(md){
+  try{localStorage.setItem(CA_SIM_INCL_MODE_KEY,md==='or'?'or':'and');}catch(e){caStorageWarn();}
+  caPrefPush(CA_SIM_INCL_MODE_KEY);
+}
 /* 除くタグだけ抜く (タグで絞る前。選択画面のタグの日数用) */
 function caSimFilterExcl(list,ex){
   ex=ex||caLoadSimExcl(); if(!ex.noeff&&!ex.nosig)return list;
   var ids=caSimExclTagIds(ex), tm=caLoadTagMap();
   return list.filter(function(m){ var t=tm[m.id]||[]; for(var i=0;i<t.length;i++){if(ids[t[i]])return false;} return true; });
 }
-/* 2026-11-16: 除くタグ → 絞るタグ (全部付いている日だけ) の順に抜く。incl 省略時は保存値 */
-function caSimFilterMeta(list,ex,incl){
+/* 2026-11-16: 除くタグ → 絞るタグ の順に抜く。incl/mode 省略時は保存値。mode 'and'=全部付いている日 / 'or'=どれかが付いている日 */
+function caSimFilterMeta(list,ex,incl,mode){
   list=caSimFilterExcl(list,ex);
   incl=incl||caLoadSimIncl(); if(!incl.length)return list;
+  mode=mode||caLoadSimInclMode();
   var tm=caLoadTagMap();
-  return list.filter(function(m){ var t=tm[m.id]||[]; for(var i=0;i<incl.length;i++){if(t.indexOf(incl[i])<0)return false;} return true; });
+  return list.filter(function(m){ var t=tm[m.id]||[];
+    if(mode==='or'){ for(var j=0;j<incl.length;j++){if(t.indexOf(incl[j])>=0)return true;} return false; }
+    for(var i=0;i<incl.length;i++){if(t.indexOf(incl[i])<0)return false;} return true; });
 }
 function caSaveSimStartMin(n){
   if(n===CA_SIM_START_B5X2){
@@ -18172,10 +18184,12 @@ function CaSimPicker(props){
   var sIn=useState(caLoadSimIncl); var simIn=sIn[0],setSimIn=sIn[1];
   function toggleIn(id){ var n=simIn.indexOf(id)>=0?simIn.filter(function(x){return x!==id;}):simIn.concat([id]); setSimIn(n); caSaveSimIncl(n); }
   function clearIn(){ setSimIn([]); caSaveSimIncl([]); }
+  var sInM=useState(caLoadSimInclMode); var simInMode=sInM[0],setSimInMode=sInM[1];
+  function setInMode(md){ setSimInMode(md); caSaveSimInclMode(md); }
   var ofTickerAll=meta.filter(function(m){return m.ticker===selT;});
   var ofTickerEx=caSimFilterExcl(ofTickerAll,simEx);   /* 2026-11-11: 除くタグの日を抜く (年・月の日数・一覧・抽選すべて) */
   var exCnt=ofTickerAll.length-ofTickerEx.length;
-  var ofTicker=caSimFilterMeta(ofTickerAll,simEx,simIn);
+  var ofTicker=caSimFilterMeta(ofTickerAll,simEx,simIn,simInMode);
   /* この銘柄 (除いた後) で使っているタグと日数。並びはタグ定義の順。選択中は0日でも出す (外せるように) */
   var _tagMap=caLoadTagMap(), _tagCnt={};
   ofTickerEx.forEach(function(m){ (_tagMap[m.id]||[]).forEach(function(t){_tagCnt[t]=(_tagCnt[t]||0)+1;}); });
@@ -18241,6 +18255,15 @@ function CaSimPicker(props){
         selT&&inTags.length>0&&ce("div",{style:{padding:"8px 14px",borderBottom:"1px solid #2a2a2a",display:"flex",gap:5,
           alignItems:"center",flexWrap:"wrap",flexShrink:0,maxHeight:110,overflowY:"auto"}},
           ce("span",{style:{fontSize:10,fontWeight:700,color:"#777",marginRight:2}},"絞る"),
+          /* 2026-11-16: 全部(AND) / どれか(OR) の切替 (保存・同期) */
+          ce("span",{style:{display:"inline-flex",borderRadius:6,overflow:"hidden",border:"1px solid #3a3a3a",marginRight:4}},
+            [['and','全部'],['or','どれか']].map(function(it){
+              var on=simInMode===it[0];
+              return ce("button",{key:it[0],onClick:function(){setInMode(it[0]);},
+                title:it[0]==='and'?'選んだタグが全部付いている日 (AND)':'選んだタグのどれかが付いている日 (OR)',
+                style:Object.assign({},BT2,{fontSize:10,fontWeight:700,padding:"3px 8px",
+                  background:on?"#ea580c":"#222",color:on?"#fff":"#999"})},it[1]);
+            })),
           inTags.map(function(d){
             var on=simIn.indexOf(d.id)>=0;
             return ce("button",{key:d.id,onClick:function(){toggleIn(d.id);},
@@ -18252,7 +18275,7 @@ function CaSimPicker(props){
               (on?'✓ ':'')+d.name+' ('+(_tagCnt[d.id]||0)+')');
           }),
           simIn.length>0&&ce("span",{style:{fontSize:10,color:"#86efac",marginLeft:4}},
-            (simIn.length>1?"全部付いている日 ":"")+ofTicker.length+"日"),
+            (simIn.length>1?(simInMode==='or'?"どれかが付いている日 ":"全部付いている日 "):"")+ofTicker.length+"日"),
           simIn.length>0&&ce("button",{onClick:clearIn,
             style:Object.assign({},BT2,{fontSize:10,fontWeight:700,padding:"3px 8px",borderRadius:6,
               background:"#2a2a2a",color:"#bbb",marginLeft:2})},"解除")
@@ -18311,7 +18334,7 @@ function CaSimPicker(props){
         ce("div",{style:{flex:1,overflowY:"auto",padding:14,display:"flex",flexWrap:"wrap",gap:10,alignContent:"flex-start"}},
           charts.length===0
             ?ce("div",{style:{width:"100%",textAlign:"center",color:"#888",fontSize:14,paddingTop:30}},
-              (simIn.length?"選んだタグが全部付いた":"")+(effP?(_caSimPeriodLabel(effP)+" のチャートがありません"):"この銘柄のチャートがありません"))
+              (simIn.length?(simInMode==="or"?"選んだタグのどれかが付いた":"選んだタグが全部付いた"):"")+(effP?(_caSimPeriodLabel(effP)+" のチャートがありません"):"この銘柄のチャートがありません"))
             :charts.map(function(m){
               var dd=_effDate(m)||'(日付不明)';
               return ce("div",{key:m.id,onClick:function(){onPick(m);},
