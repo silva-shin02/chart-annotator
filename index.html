@@ -12310,6 +12310,15 @@ function caPrevDayPx(m,meta){
   (meta||[]).forEach(function(x){ if(!x||x.ticker!==m.ticker)return; var xd=_caResolveMetaDate(x); if(xd&&xd<d&&xd>bd){bd=xd;best=x;} });
   return best?caDayPxGet(best):null;
 }
+/* 2026-11-25: EMA の誤差 — その銘柄で一番古いチャートの日を1日目として、この日が何日目か (CA のチャートの日付を数える・同じ日付は1日)。
+   取り込みは一番古い日の始値から EMA を始めるので、5分足 EMA200 の誤差が消えるまで (最初の差の0.1%未満＝12日目) は「EMA誤差あり」 */
+var CA_EMA_WARM_DAYS=11;   /* 1〜11日目に印 (ユーザー指定) */
+function caEmaDayNo(m,meta){
+  var d=_caResolveMetaDate(m); if(!d)return null;
+  var ds={};
+  (meta||[]).forEach(function(x){ if(!x||x.ticker!==m.ticker)return; var xd=_caResolveMetaDate(x); if(xd&&xd<=d)ds[xd]=1; });
+  return Object.keys(ds).length||null;
+}
 function caFmtPx(p){ if(typeof p!=='number')return '—'; var r=Math.round(p*10)/10; return r.toLocaleString('ja-JP',{minimumFractionDigits:(r%1?1:0),maximumFractionDigits:1}); }
 function caFmtPct(v){ return (v>=0?'+':'−')+Math.abs(v).toFixed(2)+'%'; }
 function caLoadDataAsync(id,cb){
@@ -15649,7 +15658,13 @@ function CaChartCard(props){
           overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',cursor:'pointer'}},
           m.name+_metaDowLabel(m)),
         ce('div',{style:{fontSize:11,color:isHighlight?'#86efac':'#666',marginTop:2}},
-          m.analysisDate?m.analysisDate+' · ':'',dateStr)
+          m.analysisDate?m.analysisDate+' · ':'',dateStr),
+        /* 2026-11-25: 一番古い日から11日目までは EMA がまだ助走中 (ユーザー指定) */
+        (props.emaDayNo&&props.emaDayNo<=CA_EMA_WARM_DAYS)?ce('div',{
+          title:'この銘柄の一番古いチャートから'+props.emaDayNo+'日目。EMA は一番古い日の始値から計算を始めるので、12日目までは本来の値とずれが残る（特に5分足 EMA200）',
+          style:{display:'inline-block',marginTop:3,padding:'1px 7px',borderRadius:4,fontSize:11,fontWeight:700,
+            color:'#fbbf24',background:'rgba(251,191,36,0.12)',border:'1px solid rgba(251,191,36,0.45)',whiteSpace:'nowrap'}},
+          '⚠ EMA誤差あり（'+props.emaDayNo+'日目）'):null
       ),
     ),
 
@@ -21672,6 +21687,7 @@ function DraftLibrary(props){
                   fbCfg:fbCfg,
                   /* 2026-11-09: カードのボラ表示は廃止 (ユーザー指定)。代わりに4本値と前日終値 (undefined=計算中) */
                   dayPx:caDayPxGet(m), prevPx:caPrevDayPx(m,meta),
+                  emaDayNo:caEmaDayNo(m,meta),   /* 2026-11-25: EMA誤差あり の判定 */
                   /* 2026-06-30: サムネカードからこの日をシミュレーション(非ブラインド) */
                   onStartSim:function(){startSimulation(m);},
                   /* 2026-11-04: 類似チャート検索 */
