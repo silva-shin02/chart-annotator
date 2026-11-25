@@ -11914,7 +11914,9 @@ function ImageAnnotator(props){
               lineHeight:1.3,padding:0,margin:0,color:ati.color||"#ff3b30",boxSizing:"border-box",
               whiteSpace:ctrlBoxW?"pre-wrap":"pre",wordBreak:ctrlBoxW?"break-word":"normal",overflowWrap:ctrlBoxW?"break-word":"normal"}},
             (function(){
-              var t=ati.text||'', a=caSpanArr(ati.spans,t.length), out=[], cur=null;
+              /* 2026-11-25: 文字は textarea の今の値から (ati.text は部分スタイルが無いと入力しても更新されない＝後から打った行が選択中に消えて見えた) */
+              var _taM=analysisTextareaRef.current;
+              var t=(_taM&&_taM.value!=null)?_taM.value:(ati.text||''), a=caSpanArr(ati.spans,t.length), out=[], cur=null;
               for(var i=0;i<t.length;i++){
                 var c=(a[i].c!=null)?a[i].c:null, b=(a[i].b!=null)?a[i].b:null;
                 if(cur&&cur.c===c&&cur.b===b){cur.t+=t[i];continue;}
