@@ -6248,7 +6248,7 @@ function computeEnhancedBars(bars, refBars){
    2026-04-21: 地図モデルズーム化 — dim.zoom で X/Y 同倍率
                barW = Z_BASE_BAR_PX * zoom, pxPerYen = (Z_BASE_PRICE_PX/10) * zoom
                uSpan は zoom と chartW から派生 (view.uE は setView で同期されている前提) */
-var CA_BIG_RN_COL='rgba(59,130,246,0.9)';   /* 2026-11-25: 大RN(100円の区切り)の青い点線 */
+var CA_BIG_RN_COL='rgba(59,130,246,0.55)';   /* 2026-11-25: 大RN(100円の区切り)の薄い青の直線 (点線→直線に変更・同日ユーザー指定) */
 function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,strokes,selectedIdx,editingTextIdx,refBars,refData,gapVis,refStrokes,hideHint,lassoSel,snippetsById,vpOpt,prevClose){
   // B完全版: EMA 前日連続化 (refData ありなら bars の EMA を上書き)
   bars=computeEnhancedBars(bars, refBars);
@@ -6469,10 +6469,10 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
        任意の暗背景でも 10円>5円>背景 の順で可視。5円=α0.11(黒でrgb約28=旧#1c1c1c相当)。 */
     else if(_isR10){   ctx.strokeStyle='rgba(255,255,255,0.15)'; ctx.lineWidth=0.8; }
     else {             ctx.strokeStyle='rgba(255,255,255,0.11)'; ctx.lineWidth=0.6; }
-    /* 2026-11-25: 大RN(100円の区切り)の線は青い点線に (ユーザー指定「はっきりわかるように」。1000円の区切りは少し太く)。
+    /* 2026-11-25: 大RN(100円の区切り)の線は薄い青の直線に (ユーザー指定「はっきりわかるように」→同日 点線より薄い直線。1000円の区切りは少し太く)。
        引く/引かないは従来どおり (ラベルの刻み pStep に乗る線だけ)。サムネは従来の線のまま (同日ユーザー指定) */
     var _bigRn=_isR100&&!isThumbnail;
-    if(_bigRn){ ctx.save(); ctx.strokeStyle=CA_BIG_RN_COL; ctx.lineWidth=_isR1000?1.8:1.2; ctx.setLineDash([6,4]); }
+    if(_bigRn){ ctx.save(); ctx.strokeStyle=CA_BIG_RN_COL; ctx.lineWidth=_isR1000?1.5:1; }
     ctx.beginPath(); ctx.moveTo(padL,Math.round(y)+0.5); ctx.lineTo(padL+chartW,Math.round(y)+0.5); ctx.stroke();
     if(_bigRn)ctx.restore();
     ctx.fillStyle=_isR1000?'#ccc':_isR100?'#aaa':_isR50?'#888':_isR10?'#666':'#555';
