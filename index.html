@@ -6469,8 +6469,12 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
        任意の暗背景でも 10円>5円>背景 の順で可視。5円=α0.11(黒でrgb約28=旧#1c1c1c相当)。 */
     else if(_isR10){   ctx.strokeStyle='rgba(255,255,255,0.15)'; ctx.lineWidth=0.8; }
     else {             ctx.strokeStyle='rgba(255,255,255,0.11)'; ctx.lineWidth=0.6; }
-    /* 2026-11-25: 大RN(100円の区切り)の線は下で青い点線に (ここでは引かない・ラベルだけ) */
-    if(!_isR100){ ctx.beginPath(); ctx.moveTo(padL,Math.round(y)+0.5); ctx.lineTo(padL+chartW,Math.round(y)+0.5); ctx.stroke(); }
+    /* 2026-11-25: 大RN(100円の区切り)の線は青い点線に (ユーザー指定「はっきりわかるように」。1000円の区切りは少し太く)。
+       引く/引かないは従来どおり (ラベルの刻み pStep に乗る線だけ)。サムネは従来の線のまま (同日ユーザー指定) */
+    var _bigRn=_isR100&&!isThumbnail;
+    if(_bigRn){ ctx.save(); ctx.strokeStyle=CA_BIG_RN_COL; ctx.lineWidth=_isR1000?1.8:1.2; ctx.setLineDash([6,4]); }
+    ctx.beginPath(); ctx.moveTo(padL,Math.round(y)+0.5); ctx.lineTo(padL+chartW,Math.round(y)+0.5); ctx.stroke();
+    if(_bigRn)ctx.restore();
     ctx.fillStyle=_isR1000?'#ccc':_isR100?'#aaa':_isR50?'#888':_isR10?'#666':'#555';
     ctx.font=_isR1000?'bold 11px -apple-system,Helvetica,sans-serif':_isR100?'bold 10px -apple-system,Helvetica,sans-serif':'10px -apple-system,Helvetica,sans-serif';
     // 右側ラベル (textAlign='right' 前提、末端より4px内側)
@@ -6478,20 +6482,6 @@ function drawDataChart(canvas,bars,data,dim,tf,view,pShift,priceRange,layoutRef,
     // 左側ラベル (左padLの右端より4px内側、textAlign='right' 継承)
     ctx.fillText(p.toFixed(0),padL-4,y);
   }
-  /* 2026-11-25: 大RN = 100円の区切りを青い点線で (ユーザー指定「はっきりわかるように」)。
-     ラベルの刻み(pStep)に関係なく、範囲内の100円の区切りは全部引く。1000円の区切りは少し太く */
-  (function(){
-    var r0=Math.ceil(pmin/100)*100, r1=Math.floor(pmax/100)*100;
-    if(r1<r0||(r1-r0)/100>200)return;
-    ctx.save();
-    ctx.strokeStyle=CA_BIG_RN_COL; ctx.setLineDash([6,4]);
-    for(var rp=r0;rp<=r1;rp+=100){
-      var ry=Math.round(pToY(rp))+0.5;
-      ctx.lineWidth=(rp%1000===0)?1.8:1.2;
-      ctx.beginPath(); ctx.moveTo(padL,ry); ctx.lineTo(padL+chartW,ry); ctx.stroke();
-    }
-    ctx.restore();
-  })();
   ctx.font='10px -apple-system,Helvetica,sans-serif';
 
   // 時間グリッド: uSpan 密度でステップ可変 — 両side描画
